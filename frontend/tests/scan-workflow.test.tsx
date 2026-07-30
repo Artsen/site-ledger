@@ -1,0 +1,300 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { CopyButton } from "../src/components/ui/CopyButton";
+import { StatusBadge } from "../src/components/ui/StatusBadge";
+import { displayError } from "../src/utils/errors";
+import { NewScanPage } from "../src/pages/NewScanPage";
+import { PageDetailPage } from "../src/pages/PageDetailPage";
+import { ScanDetailPage } from "../src/pages/ScanDetailPage";
+import type { PageList, Scan, Snapshot } from "../src/types/scans";
+
+const api = vi.hoisted(() => ({
+  createScan: vi.fn(),
+  getScan: vi.fn(),
+  listPages: vi.fn(),
+  listErrors: vi.fn(),
+  getSnapshot: vi.fn(),
+  getLinks: vi.fn(),
+  getHtml: vi.fn(),
+  cancelScan: vi.fn(),
+  listScans: vi.fn()
+}));
+
+vi.mock("../src/api/client", () => ({
+  ...api,
+  defaultScope: () => ({
+    allowed_host_patterns: [],
+    excluded_host_patterns: [],
+    included_path_prefixes: ["/"],
+    excluded_path_prefixes: ["/wp-admin/", "/wp-login.php"],
+    follow_subdomains: false,
+    max_pages: 100,
+    max_depth: 3,
+    respect_robots_txt: false,
+    request_timeout_seconds: 10,
+    max_html_response_bytes: 2000000,
+    concurrent_requests_per_host: 2,
+    delay_between_requests_ms: 0,
+    user_agent: "ArtsenDesignScanner/0.1",
+    drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
+    allow_private_networks: false,
+    max_redirects: 10
+  })
+}));
+
+beforeEach(() => {
+  window.localStorage.clear();
+  vi.useRealTimers();
+  Object.values(api).forEach((mock) => mock.mockReset());
+  api.createScan.mockResolvedValue({ id: 44 });
+  api.getScan.mockResolvedValue(scanFixture);
+  api.listPages.mockResolvedValue(emptyPageList);
+  api.listErrors.mockResolvedValue([]);
+  api.getSnapshot.mockResolvedValue(snapshotFixture);
+  api.getLinks.mockResolvedValue(linkFixtures);
+  api.getHtml.mockResolvedValue("<html><body><script>window.executed = true</script><h1>Source</h1></body></html>");
+  api.cancelScan.mockResolvedValue({ ...scanFixture, status: "cancelled" });
+});
+
+afterEach(() => cleanup());
+
+describe("new scan workflow", () => {
+  it("validates and normalizes a bare hostname while showing exact-host scope", async () => {
+    renderRoute(<NewScanPage />, "/scans/new");
+
+    fireEvent.change(screen.getByLabelText("Starting URL"), { target: { value: "example.com" } });
+    fireEvent.blur(screen.getByLabelText("Starting URL"));
+
+    expect(screen.getByLabelText("Starting URL")).toHaveValue("https://example.com/");
+    expect(screen.getByText(/Exact hostname: example.com/i)).toBeInTheDocument();
+    expect(screen.getByText(/Subdomains excluded/i)).toBeInTheDocument();
+  });
+
+  it("rejects unsupported schemes and invalid numeric values", () => {
+    renderRoute(<NewScanPage />, "/scans/new");
+
+    fireEvent.change(screen.getByLabelText("Starting URL"), { target: { value: "ftp://example.com" } });
+    fireEvent.change(screen.getByLabelText("Maximum pages"), { target: { value: "0" } });
+
+    expect(screen.getByText(/Only HTTP and HTTPS URLs can be scanned/i)).toBeInTheDocument();
+    expect(screen.getByText(/Maximum pages must be between/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start scan" })).toBeDisabled();
+  });
+
+  it("preserves list newlines while editing and parses one item per line on submission", async () => {
+    renderRoute(<NewScanPage />, "/scans/new");
+
+    fireEvent.change(screen.getByLabelText("Starting URL"), { target: { value: "https://example.com/" } });
+    fireEvent.click(screen.getByText("Advanced scope settings"));
+    fireEvent.change(screen.getByLabelText("Allowed hosts"), { target: { value: "example.com\nblog.example.com\n" } });
+
+    expect(screen.getByLabelText("Allowed hosts")).toHaveValue("example.com\nblog.example.com\n");
+    fireEvent.click(screen.getByRole("button", { name: "Start scan" }));
+
+    await waitFor(() => expect(api.createScan).toHaveBeenCalledTimes(1));
+    expect(api.createScan.mock.calls[0][1].allowed_host_patterns).toEqual(["example.com", "blog.example.com"]);
+  });
+
+  it("prevents duplicate submission while a scan is being created", async () => {
+    let resolveScan: (value: unknown) => void = () => undefined;
+    api.createScan.mockReturnValue(new Promise((resolve) => { resolveScan = resolve; }));
+    renderRoute(<NewScanPage />, "/scans/new");
+
+    fireEvent.change(screen.getByLabelText("Starting URL"), { target: { value: "https://example.com/" } });
+    const button = screen.getByRole("button", { name: "Start scan" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.createScan).toHaveBeenCalledTimes(1));
+    resolveScan({ id: 44 });
+  });
+});
+
+describe("scan results workflow", () => {
+  it("renders status badges, empty states, and URL-backed page filters", async () => {
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=pages");
+
+    await screen.findByText("No pages recorded");
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Search pages"), { target: { value: "pricing" } });
+
+    await waitFor(() => expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("search=pricing")));
+  });
+
+  it("renders a scan status badge with accessible text", () => {
+    render(<StatusBadge status="completed_with_errors" />);
+    expect(screen.getByText("Completed With Errors")).toBeInTheDocument();
+  });
+});
+
+describe("page detail workflow", () => {
+  it("renders redirect chains as ordered fields", async () => {
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+
+    expect(await screen.findByText("Redirect chain")).toBeInTheDocument();
+    expect(screen.getByText("Hop 1")).toBeInTheDocument();
+    expect(screen.getAllByText("https://example.com/new").length).toBeGreaterThan(0);
+  });
+
+  it("renders head metadata sections instead of only raw JSON", async () => {
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Head" }));
+
+    expect(screen.getByText("Basic metadata")).toBeInTheDocument();
+    expect(screen.getByText("Open Graph")).toBeInTheDocument();
+    expect(screen.getByText("Structured data")).toBeInTheDocument();
+  });
+
+  it("renders individual link occurrences with provenance fields", async () => {
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Links/i }));
+
+    expect((await screen.findAllByText("External")).length).toBeGreaterThan(0);
+    expect(screen.getByText("No visible text")).toBeInTheDocument();
+    expect(screen.getByText(/aria-label:/)).toBeInTheDocument();
+    expect(document.body.textContent).toContain("Download Snagit");
+  });
+
+  it("shows raw HTML as escaped text without executing it", async () => {
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+
+    fireEvent.click(await screen.findByRole("tab", { name: "HTML" }));
+
+    await screen.findByLabelText("Escaped HTML source");
+    expect(screen.getByLabelText("Escaped HTML source").textContent).toContain("window.executed = true");
+    expect((window as unknown as { executed?: boolean }).executed).toBeUndefined();
+  });
+});
+
+describe("shared UX utilities", () => {
+  it("formats API unavailable errors for users", () => {
+    expect(displayError(new TypeError("Failed to fetch")).message).toMatch(/scanner API could not be reached/i);
+  });
+
+  it("copies values with feedback", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<CopyButton value="https://example.com/" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://example.com/"));
+    expect(screen.getByRole("button", { name: "Copy copied" })).toBeInTheDocument();
+  });
+});
+
+function renderRoute(element: React.ReactElement, path: string, initialEntry = path) {
+  return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path={path} element={element} />
+          <Route path="*" element={<div />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
+const scanFixture: Scan = {
+  id: 1,
+  starting_url: "https://example.com/",
+  status: "completed",
+  scope_config: {
+    allowed_host_patterns: [],
+    excluded_host_patterns: [],
+    included_path_prefixes: ["/"],
+    excluded_path_prefixes: ["/wp-admin/", "/wp-login.php"],
+    follow_subdomains: false,
+    max_pages: 100,
+    max_depth: 3,
+    respect_robots_txt: false,
+    request_timeout_seconds: 10,
+    max_html_response_bytes: 2000000,
+    concurrent_requests_per_host: 2,
+    delay_between_requests_ms: 0,
+    user_agent: "ArtsenDesignScanner/0.1",
+    drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
+    allow_private_networks: false,
+    max_redirects: 10
+  },
+  created_at: "2026-07-30T01:00:00Z",
+  started_at: "2026-07-30T01:00:01Z",
+  finished_at: "2026-07-30T01:00:03Z",
+  discovered_count: 1,
+  fetched_count: 1,
+  failed_count: 0,
+  skipped_count: 0,
+  queued_count: 0,
+  stop_reason: "max_pages",
+  fatal_error_message: null
+};
+
+const emptyPageList: PageList = {
+  items: [],
+  total: 0,
+  limit: 50,
+  offset: 0
+};
+
+const snapshotFixture: Snapshot = {
+  id: 9,
+  scan_id: 1,
+  resource_id: 2,
+  requested_url: "https://example.com/old",
+  final_url: "https://example.com/new",
+  http_status: 200,
+  content_type: "text/html",
+  encoding: "utf-8",
+  crawl_depth: 1,
+  fetched_at: "2026-07-30T01:00:02Z",
+  response_time_ms: 123,
+  response_headers: {},
+  redirect_chain: [{ requested_url: "https://example.com/old", status_code: 301, location: "/new", resolved_url: "https://example.com/new" }],
+  html_raw_byte_size: 1200,
+  html_stored_byte_size: 500,
+  raw_html_sha256: "rawhash",
+  head_sha256: "headhash",
+  page_title: "Example page",
+  html_language: "en",
+  meta_description: "Description",
+  meta_robots: "index,follow",
+  canonical_url: "https://example.com/new",
+  parsed_head_json: {
+    encoding: "utf-8",
+    viewport: "width=device-width, initial-scale=1",
+    open_graph: { "og:title": "OG title" },
+    twitter: { "twitter:card": "summary" },
+    meta: [{ name: "description", content: "Description" }],
+    links: [{ rel: "canonical", href: "https://example.com/new" }],
+    json_ld: ['{"@context":"https://schema.org","@type":"WebPage"}']
+  },
+  fetch_state: "fetched",
+  error_type: null,
+  error_message: null
+};
+
+const linkFixtures = [
+  {
+    id: 1,
+    raw_href: "/download",
+    resolved_url: "https://example.com/download",
+    normalized_target_url: "https://example.com/download",
+    target_resource_id: null,
+    anchor_text: null,
+    title: "Download",
+    aria_label: "Download Snagit",
+    rel: "nofollow",
+    target: "_blank",
+    dom_path: "html > body > a",
+    in_scope: false,
+    scope_decision: "external",
+    exclusion_reason: "External host"
+  }
+];
