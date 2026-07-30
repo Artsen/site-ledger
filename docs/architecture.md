@@ -59,12 +59,32 @@ unique source-page counts without per-row SQL loops.
 `GET /api/snapshots/{snapshot_id}/inbound-links` returns a paginated, typed list of every inbound
 link occurrence for the target snapshot's scan and resource, plus summary counts for total
 occurrences, unique source pages, unique anchor texts, nofollow occurrences, and self-links.
+Inbound attribution is intentionally direct: a stored occurrence points to the selected resource's
+normalized URL identity. A link to URL A is not reported as inbound to URL B just because URL A later
+redirects to URL B. Redirect-mediated attribution requires final-resource identity and remains
+future work.
 
 `services.scan_deletion` owns scan deletion preview and execution. It allows deletion only for
 terminal scans, deletes source occurrences and snapshots explicitly, and removes unreferenced
 content blobs through the content-store abstraction. Blobs referenced by another scan are preserved.
 The local content store exposes `delete()` so later object-storage implementations can provide the
 same lifecycle operation.
+
+`GET /api/scans/history` is the complete scan-history query surface. It is server-side paginated and
+supports starting-URL search, status filtering, sort, direction, limit, and offset. The lightweight
+`GET /api/scans` recent-scans endpoint remains for the sidebar.
+
+Deletion summaries and deletion execution share the same impact calculation so the preview cannot
+drift from the actual cleanup rules. The service calculates candidate blob and resource IDs before
+deleting scan-owned rows, commits database cleanup before removing files, and returns warnings for
+missing or failed physical-file cleanup. A rollback cannot leave a live snapshot pointing at a file
+that was already removed because files are never deleted before the database commit succeeds.
+
+After scan-owned rows are removed, candidate `WebResource` rows are deleted only when no remaining
+snapshot references them and no remaining occurrence targets them. These query and lifecycle service
+boundaries are intended to be reused by future findings, broken-link aggregation, scan comparison,
+retention policies, alternate storage backends, and link visualizations without adding a speculative
+plugin architecture.
 
 ## Deferred
 

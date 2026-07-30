@@ -97,16 +97,29 @@ backend integration tests.
 
 ## Scan History, Inbound Links, and Deletion
 
-The sidebar shows recent scans, and `/scans` provides paginated scan history for older runs. Terminal
-scans can be deleted after reviewing a delete preview. Running or queued scans must be cancelled or
-finish before deletion is allowed.
+The sidebar shows recent scans, and `/scans` provides server-side paginated scan history for older
+runs. The All Scans page supports search by starting URL, status filtering, sorting, rerunning a scan
+with its previous scope, and deleting terminal scans after reviewing a confirmation summary.
 
-Page results now show scan-specific inbound link counts. Counts are limited to occurrences whose
-source page snapshot belongs to the same scan, so historical scans do not inflate each other. The
-page detail view includes an Inbound tab that lists every occurrence pointing to the current page,
-including duplicate links and self-links, with source page metadata and provenance.
+Page results show scan-specific inbound link counts. Counts are limited to occurrences whose source
+page snapshot belongs to the same scan, so historical scans do not inflate each other. Total inbound
+occurrences count duplicate links individually; unique source pages count distinct linking snapshots.
 
-Deleting a scan removes its snapshots and link occurrences. HTML blobs are deleted through the
-content-store abstraction only when no remaining scan references them; shared blobs stay available
-for other scans.
+The page detail view has separate Outgoing links and Inbound links tabs. Inbound links are direct
+occurrences whose normalized target resource matches the selected page resource in the same scan.
+Redirect-mediated attribution is not inferred in PR 3; redirect evidence remains available on the
+snapshot overview. The inbound table preserves duplicate occurrences and exposes source page,
+status, crawl depth, anchor context, raw href, rel, scope decision, DOM location, and discovery time.
+
+Deletion is allowed only for terminal scans: `completed`, `completed_with_errors`, `failed`,
+`cancelled`, and `interrupted`. Queued or running scans return `409 Conflict`; running worker tasks
+are checked before deletion. `GET /api/scans/{scan_id}/deletion-summary` and
+`GET /api/scans/{scan_id}/delete-preview` return the same typed summary. `DELETE /api/scans/{scan_id}`
+returns a typed result.
+
+Deleting a scan removes its snapshots, source link occurrences, unreferenced content blobs, and web
+resources no longer referenced by snapshots or remaining occurrences. HTML blobs are deleted through
+the content-store abstraction only after database cleanup commits. Shared blobs stay available for
+other scans. If a blob file is already missing or cannot be deleted after commit, the scan deletion
+still succeeds and returns a cleanup warning for later maintenance.
 
