@@ -41,7 +41,7 @@ export function AppShell() {
               }`
             }
           >
-            Scan History
+            All scans
           </NavLink>
         </div>
 

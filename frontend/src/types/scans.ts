@@ -102,10 +102,12 @@ export type LinkOccurrence = {
   in_scope: boolean;
   scope_decision: string;
   exclusion_reason: string | null;
+  discovered_at: string;
 };
 
 export type InboundLinkOccurrence = LinkOccurrence & {
   source_snapshot_id: number;
+  source_resource_id: number;
   source_requested_url: string;
   source_final_url: string | null;
   source_page_title: string | null;
@@ -138,23 +140,32 @@ export type ScanHistory = {
 
 export type ScanDeletePreview = {
   scan_id: number;
+  starting_url: string;
   can_delete: boolean;
   status: string;
   snapshots: number;
   link_occurrences: number;
+  unique_resources: number;
   html_blobs_referenced: number;
+  exclusive_html_blobs: number;
+  shared_html_blobs: number;
   html_blobs_deleted: number;
   raw_html_bytes_reclaimable: number;
   stored_html_bytes_reclaimable: number;
   reason: string | null;
+  warnings: string[];
 };
 
 export type ScanDeleteResult = {
   deleted_scan_id: number;
   snapshots_deleted: number;
   link_occurrences_deleted: number;
+  resources_deleted: number;
+  html_blob_records_deleted: number;
+  html_blob_files_deleted: number;
   html_blobs_deleted: number;
   raw_html_bytes_reclaimed: number;
   stored_html_bytes_reclaimed: number;
+  warnings: string[];
 };
 

@@ -33,8 +33,8 @@ export function PageDetailPage() {
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "head", label: "Head" },
-    { id: "links", label: "Links", count: links.data?.length },
-    { id: "inbound", label: "Inbound", count: inboundLinks.data?.summary.total_occurrences },
+    { id: "links", label: "Outgoing links", count: links.data?.length },
+    { id: "inbound", label: "Inbound links", count: inboundLinks.data?.summary.total_occurrences },
     { id: "html", label: "HTML" }
   ];
 
@@ -105,9 +105,12 @@ function InboundLinksView({
           <input aria-label="Inbound source status" type="number" value={searchParams.get("source_status") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "source_status", event.target.value || null)} placeholder="Source status" className={inputClass()} />
           <input aria-label="Inbound rel filter" value={searchParams.get("rel") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "rel", event.target.value || null)} placeholder="rel contains" className={inputClass()} />
         </div>
+        <div className="mt-3">
+          <Button type="button" variant="ghost" onClick={() => setSearchParams(tabOnly(searchParams, "inbound"))}>Clear filters</Button>
+        </div>
       </section>
-      {!inbound.items.length ? <EmptyState title="No inbound links" message={hasInboundFilters(searchParams) ? "No inbound links match these filters." : "No pages in this scan link to this page."} /> : <InboundTable items={inbound.items} scanId={scanId} />}
-      <div className="text-sm text-stone-600">{plural(inbound.total, "inbound occurrence")}</div>
+      {!inbound.items.length ? <EmptyState title={hasInboundFilters(searchParams) ? "No inbound links match" : "No inbound links"} message={hasInboundFilters(searchParams) ? "Clear filters or broaden the search." : "No pages in this scan link to this page."} /> : <InboundTable items={inbound.items} scanId={scanId} />}
+      <InboundPagination inbound={inbound} searchParams={searchParams} setSearchParams={setSearchParams} />
     </div>
   );
 }
@@ -126,7 +129,7 @@ function InboundTable({ items, scanId }: { items: InboundLinkOccurrence[]; scanI
     <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
-          <tr>{["Source page", "Anchor text", "Decision", "Raw href", "Attributes", "DOM path"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
+          <tr>{["Source page", "Status", "Depth", "Anchor text", "Raw href", "rel", "Decision", "Provenance"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
         </thead>
         <tbody>
           {items.map((link) => (
@@ -138,15 +141,48 @@ function InboundTable({ items, scanId }: { items: InboundLinkOccurrence[]; scanI
                 </Link>
                 {link.is_self_link ? <span className="mt-1 inline-block rounded-md bg-amber-50 px-2 py-0.5 text-xs text-amber-800">Self link</span> : null}
               </td>
-              <td className="max-w-xs px-3 py-2">{link.anchor_text || <span className="text-stone-500">No visible text</span>}</td>
-              <td className="px-3 py-2"><StatusBadge status={link.in_scope ? "completed" : "interrupted"} label={formatScopeDecision(link.scope_decision)} /></td>
+              <td className="px-3 py-2">{link.source_http_status ?? "Not available"}</td>
+              <td className="px-3 py-2">{link.source_crawl_depth}</td>
+              <td className="max-w-xs px-3 py-2">
+                {link.anchor_text || link.aria_label || link.title || <span className="text-stone-500">No visible anchor text</span>}
+                {link.rel?.toLowerCase().includes("nofollow") ? <span className="mt-1 block rounded-md bg-stone-100 px-2 py-0.5 text-xs text-stone-700">nofollow</span> : null}
+              </td>
               <td className="max-w-sm px-3 py-2"><UrlText value={link.raw_href} secondary /></td>
-              <td className="max-w-xs px-3 py-2 text-xs text-stone-600">{[link.rel ? `rel=${link.rel}` : "", link.target ? `target=${link.target}` : "", link.title ? `title=${link.title}` : "", link.aria_label ? `aria-label=${link.aria_label}` : ""].filter(Boolean).join(" | ") || "None"}</td>
-              <td className="max-w-sm truncate px-3 py-2 font-mono text-xs" title={link.dom_path ?? ""}>{link.dom_path}</td>
+              <td className="max-w-xs px-3 py-2 text-xs text-stone-600">{link.rel ?? "None"}</td>
+              <td className="px-3 py-2"><StatusBadge status={link.in_scope ? "completed" : "interrupted"} label={formatScopeDecision(link.scope_decision)} /></td>
+              <td className="max-w-sm px-3 py-2 text-xs">
+                <details>
+                  <summary className="cursor-pointer font-medium text-stone-700">Details</summary>
+                  <dl className="mt-2 space-y-1 text-stone-600">
+                    <dt className="font-medium">Resolved URL</dt>
+                    <dd><UrlText value={link.resolved_url} secondary /></dd>
+                    <dt className="font-medium">DOM location</dt>
+                    <dd className="break-all font-mono">{link.dom_path ?? "Not available"}</dd>
+                    <dt className="font-medium">Attributes</dt>
+                    <dd>{[link.target ? `target=${link.target}` : "", link.title ? `title=${link.title}` : "", link.aria_label ? `aria-label=${link.aria_label}` : ""].filter(Boolean).join(" | ") || "None"}</dd>
+                    <dt className="font-medium">Discovered</dt>
+                    <dd>{formatDate(link.discovered_at)}</dd>
+                  </dl>
+                </details>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function InboundPagination({ inbound, searchParams, setSearchParams }: { inbound: InboundLinkList; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {
+  const limit = inbound.limit;
+  const offset = inbound.offset;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
+      <span>{plural(inbound.total, "inbound occurrence")}</span>
+      <div className="flex gap-2">
+        <Button type="button" disabled={offset <= 0} onClick={() => setInboundOffset(setSearchParams, searchParams, Math.max(0, offset - limit))}>Previous</Button>
+        <Button type="button" disabled={offset + limit >= inbound.total} onClick={() => setInboundOffset(setSearchParams, searchParams, offset + limit)}>Next</Button>
+      </div>
     </div>
   );
 }
@@ -471,6 +507,24 @@ function updateInboundParam(setSearchParams: ReturnType<typeof useSearchParams>[
     next.delete("inbound_offset");
     return next;
   });
+}
+
+function setInboundOffset(setSearchParams: ReturnType<typeof useSearchParams>[1], searchParams: URLSearchParams, offset: number) {
+  setSearchParams(() => {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", "inbound");
+    next.set("inbound_offset", String(offset));
+    return next;
+  });
+}
+
+function tabOnly(searchParams: URLSearchParams, tab: string) {
+  const next = new URLSearchParams(searchParams);
+  for (const key of ["inbound_search", "scope_decision", "source_status", "rel", "inbound_offset"]) {
+    next.delete(key);
+  }
+  next.set("tab", tab);
+  return next;
 }
 
 function hasInboundFilters(searchParams: URLSearchParams) {

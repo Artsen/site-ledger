@@ -13,7 +13,7 @@ import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { inputClass } from "../components/ui/styles";
 import type { Page, Scan, Snapshot } from "../types/scans";
-import { compactUrl, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
+import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
 
 const pageSizes = [25, 50, 100];
 
@@ -191,10 +191,14 @@ function Overview({
     can_delete: boolean;
     snapshots: number;
     link_occurrences: number;
+    unique_resources: number;
     html_blobs_referenced: number;
+    exclusive_html_blobs: number;
+    shared_html_blobs: number;
     html_blobs_deleted: number;
     stored_html_bytes_reclaimable: number;
     reason: string | null;
+    warnings: string[];
   };
   deleteLoading: boolean;
   deleting: boolean;
@@ -244,7 +248,8 @@ function Overview({
               <div className="space-y-3 text-sm">
                 <p className="text-stone-700">
                   Deleting this scan removes {deletePreview.snapshots} page snapshots and {deletePreview.link_occurrences} link occurrences.
-                  {deletePreview.html_blobs_deleted} of {deletePreview.html_blobs_referenced} referenced HTML blobs will be deleted because no other scan uses them.
+                  {deletePreview.exclusive_html_blobs} of {deletePreview.html_blobs_referenced} referenced HTML captures will be deleted because no other scan uses them.
+                  {deletePreview.shared_html_blobs} shared captures will be retained. Estimated storage reclaimed: {formatBytes(deletePreview.stored_html_bytes_reclaimable)}.
                 </p>
                 {deletePreview.reason ? <p className="text-amber-700">{deletePreview.reason}</p> : null}
                 <Button type="button" variant="danger" disabled={!deletePreview.can_delete} loading={deleting} onClick={onDelete}>

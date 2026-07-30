@@ -1,48 +1,104 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { listScanHistory } from "../api/client";
+import { deleteScan, getScanDeletePreview, listScanHistory } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
 import { StatusBadge } from "../components/ui/StatusBadge";
-import { formatDate, hostnameFromUrl, plural } from "../utils/format";
+import { inputClass } from "../components/ui/styles";
+import type { Scan, ScanDeletePreview } from "../types/scans";
+import { formatBytes, formatDate, formatDuration, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
+
+const statusOptions = ["completed", "completed_with_errors", "failed", "cancelled", "interrupted", "queued", "running"];
 
 export function ScansPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
+  const [success, setSuccess] = useState<string | null>(null);
+  const [deleteState, setDeleteState] = useState<{ scan: Scan; preview?: ScanDeletePreview; error?: unknown } | null>(null);
   const limit = Number(searchParams.get("limit") ?? 25);
   const offset = Number(searchParams.get("offset") ?? 0);
-  const query = `?limit=${limit}&offset=${offset}`;
+  const query = useMemo(() => buildHistoryQuery(searchParams), [searchParams]);
   const scans = useQuery({ queryKey: ["scan-history", query], queryFn: () => listScanHistory(query) });
+  const preview = useMutation({
+    mutationFn: (scan: Scan) => getScanDeletePreview(String(scan.id)),
+    onSuccess: (data, scan) => setDeleteState({ scan, preview: data }),
+    onError: (error, scan) => setDeleteState({ scan, error })
+  });
+  const remove = useMutation({
+    mutationFn: (scan: Scan) => deleteScan(String(scan.id)),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["scans"] });
+      await queryClient.invalidateQueries({ queryKey: ["scan-history"] });
+      setDeleteState(null);
+      setSuccess("Scan deleted.");
+      const remainingOnPage = (scans.data?.items.length ?? 1) - 1;
+      if (remainingOnPage <= 0 && offset > 0) {
+        updateHistoryParam(setSearchParams, "offset", String(Math.max(0, offset - limit)));
+      }
+    }
+  });
+
+  useEffect(() => {
+    if (!success) return;
+    const timer = window.setTimeout(() => setSuccess(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [success]);
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-sm text-stone-500">Scans</div>
-          <h1 className="mt-1 text-2xl font-semibold text-stone-950">Scan history</h1>
+          <h1 className="mt-1 text-2xl font-semibold text-stone-950">All scans</h1>
         </div>
         <Link to="/scans/new" className="rounded-md border border-neutral-900 bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-700 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">
           New scan
         </Link>
       </div>
+      <section className="mb-4 rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+          <input aria-label="Search scans" value={searchParams.get("search") ?? ""} onChange={(event) => updateHistoryParam(setSearchParams, "search", event.target.value || null)} placeholder="Search starting URL" className={`${inputClass()} md:col-span-2`} />
+          <select aria-label="Scan status" value={searchParams.get("status") ?? ""} onChange={(event) => updateHistoryParam(setSearchParams, "status", event.target.value || null)} className={inputClass()}>
+            <option value="">Any status</option>
+            {statusOptions.map((status) => <option key={status} value={status}>{status.replace(/_/g, " ")}</option>)}
+          </select>
+          <select aria-label="Sort scans" value={searchParams.get("sort") ?? "created_at"} onChange={(event) => updateHistoryParam(setSearchParams, "sort", event.target.value)} className={inputClass()}>
+            <option value="created_at">Created</option>
+            <option value="started_at">Started</option>
+            <option value="finished_at">Finished</option>
+            <option value="status">Status</option>
+            <option value="starting_url">Starting URL</option>
+          </select>
+          <select aria-label="Sort direction" value={searchParams.get("direction") ?? "desc"} onChange={(event) => updateHistoryParam(setSearchParams, "direction", event.target.value)} className={inputClass()}>
+            <option value="desc">Descending</option>
+            <option value="asc">Ascending</option>
+          </select>
+        </div>
+        <div className="mt-3">
+          <Button type="button" variant="ghost" onClick={() => setSearchParams({ limit: String(limit), offset: "0" })}>Clear filters</Button>
+        </div>
+      </section>
+      {success ? <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{success}</div> : null}
       {scans.error ? <ErrorBanner error={scans.error} title="Could not load scan history" /> : null}
       {scans.isLoading ? <LoadingBlock label="Loading scan history..." /> : null}
-      {!scans.isLoading && !scans.data?.items.length ? <EmptyState title="No scans yet" message="Create a scan to start building history." /> : null}
+      {!scans.isLoading && !scans.data?.items.length ? <EmptyState title="No scans found" message={hasHistoryFilters(searchParams) ? "Clear filters or broaden the search." : "Create a scan to start building history."} /> : null}
       {scans.data?.items.length ? (
         <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-stone-100 text-xs uppercase text-stone-500">
               <tr>
-                {["Host", "Status", "Created", "Pages", "Errors", "Actions"].map((header) => (
+                {["Starting URL", "Status", "Created", "Started", "Finished", "Duration", "Counts", "Stop reason", "Actions"].map((header) => (
                   <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {scans.data.items.map((scan) => (
-                <tr key={scan.id} className="border-t border-stone-100">
+                <tr key={scan.id} className="border-t border-stone-100 align-top">
                   <td className="max-w-md px-3 py-2">
                     <Link to={`/scans/${scan.id}`} className="block truncate font-medium text-stone-950 underline" title={scan.starting_url}>
                       {hostnameFromUrl(scan.starting_url)}
@@ -51,10 +107,26 @@ export function ScansPage() {
                   </td>
                   <td className="px-3 py-2"><StatusBadge status={scan.status} /></td>
                   <td className="px-3 py-2">{formatDate(scan.created_at)}</td>
-                  <td className="px-3 py-2">{scan.fetched_count}/{scan.discovered_count}</td>
-                  <td className="px-3 py-2">{scan.failed_count}</td>
+                  <td className="px-3 py-2">{formatDate(scan.started_at)}</td>
+                  <td className="px-3 py-2">{formatDate(scan.finished_at)}</td>
+                  <td className="px-3 py-2">{formatDuration(scan.started_at, scan.finished_at)}</td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <span className="block">{scan.discovered_count} discovered</span>
+                    <span className="block">{scan.fetched_count} fetched</span>
+                    <span className="block">{scan.failed_count} failed</span>
+                    <span className="block">{scan.skipped_count} skipped</span>
+                  </td>
+                  <td className="max-w-xs px-3 py-2">{scan.stop_reason ?? "None"}</td>
                   <td className="px-3 py-2">
-                    <Link to={`/scans/${scan.id}`} className="text-sm font-medium underline">Open</Link>
+                    <div className="flex flex-wrap gap-2">
+                      <Link to={`/scans/${scan.id}`} className="text-sm font-medium underline">Open</Link>
+                      <Link to={rerunUrl(scan)} className="text-sm font-medium underline">Run again</Link>
+                      {isTerminalStatus(scan.status) ? (
+                        <button type="button" className="text-sm font-medium text-red-700 underline" onClick={() => preview.mutate(scan)}>
+                          Delete
+                        </button>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -66,11 +138,113 @@ export function ScansPage() {
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
           <span>{plural(scans.data.total, "scan")}</span>
           <div className="flex gap-2">
-            <Button type="button" disabled={offset <= 0} onClick={() => setSearchParams({ limit: String(limit), offset: String(Math.max(0, offset - limit)) })}>Previous</Button>
-            <Button type="button" disabled={offset + limit >= scans.data.total} onClick={() => setSearchParams({ limit: String(limit), offset: String(offset + limit) })}>Next</Button>
+            <Button type="button" disabled={offset <= 0} onClick={() => updateHistoryParam(setSearchParams, "offset", String(Math.max(0, offset - limit)), false)}>Previous</Button>
+            <Button type="button" disabled={offset + limit >= scans.data.total} onClick={() => updateHistoryParam(setSearchParams, "offset", String(offset + limit), false)}>Next</Button>
           </div>
         </div>
       ) : null}
+      {deleteState ? (
+        <DeleteDialog
+          state={deleteState}
+          loading={preview.isPending}
+          deleting={remove.isPending}
+          error={deleteState.error ?? remove.error}
+          onCancel={() => {
+            if (!remove.isPending) setDeleteState(null);
+          }}
+          onConfirm={() => remove.mutate(deleteState.scan)}
+        />
+      ) : null}
     </section>
   );
+}
+
+function DeleteDialog({ state, loading, deleting, error, onCancel, onConfirm }: { state: { scan: Scan; preview?: ScanDeletePreview }; loading: boolean; deleting: boolean; error: unknown; onCancel: () => void; onConfirm: () => void }) {
+  const preview = state.preview;
+  return (
+    <div role="dialog" aria-modal="true" aria-labelledby="delete-scan-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+      <div className="w-full max-w-lg rounded-md border border-stone-200 bg-white p-5 shadow-xl">
+        <h2 id="delete-scan-title" className="text-lg font-semibold text-stone-950">Delete this scan?</h2>
+        <p className="mt-2 break-all font-mono text-xs text-stone-600">{state.scan.starting_url}</p>
+        {loading ? <div className="mt-4"><LoadingBlock label="Loading deletion summary..." /></div> : null}
+        {preview ? (
+          <div className="mt-4 space-y-3 text-sm text-stone-700">
+            <p>
+              This will permanently delete {preview.snapshots} page snapshots and {preview.link_occurrences} link occurrences.
+              Estimated storage reclaimed: {formatBytes(preview.stored_html_bytes_reclaimable)}.
+            </p>
+            <dl className="grid grid-cols-2 gap-3">
+              <SummaryTerm label="Status" value={preview.status.replace(/_/g, " ")} />
+              <SummaryTerm label="Unique resources" value={String(preview.unique_resources)} />
+              <SummaryTerm label="Exclusive captures" value={String(preview.exclusive_html_blobs)} />
+              <SummaryTerm label="Shared captures retained" value={String(preview.shared_html_blobs)} />
+            </dl>
+            <p className="font-medium text-red-800">This action cannot be undone.</p>
+            {preview.reason ? <p className="text-amber-700">{preview.reason}</p> : null}
+            {preview.warnings.length ? <Warnings warnings={preview.warnings} /> : null}
+          </div>
+        ) : null}
+        {error ? <div className="mt-4"><ErrorBanner error={error} title="Could not delete scan" /></div> : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" onClick={onCancel} disabled={deleting}>Cancel</Button>
+          <Button type="button" variant="danger" loading={deleting} disabled={!preview?.can_delete} onClick={onConfirm}>
+            {deleting ? "Deleting..." : "Delete scan"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SummaryTerm({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2">
+      <dt className="text-xs font-medium uppercase text-stone-500">{label}</dt>
+      <dd className="mt-1">{value}</dd>
+    </div>
+  );
+}
+
+function Warnings({ warnings }: { warnings: string[] }) {
+  return (
+    <details className="rounded-md border border-amber-200 bg-amber-50 p-3">
+      <summary className="cursor-pointer font-medium text-amber-900">Cleanup warnings</summary>
+      <ul className="mt-2 list-disc pl-5 text-amber-800">
+        {warnings.map((warning) => <li key={warning}>{warning}</li>)}
+      </ul>
+    </details>
+  );
+}
+
+function buildHistoryQuery(searchParams: URLSearchParams) {
+  const params = new URLSearchParams();
+  for (const key of ["search", "status", "sort", "direction", "limit", "offset"]) {
+    const value = searchParams.get(key);
+    if (value) params.set(key, value);
+  }
+  if (!params.has("limit")) params.set("limit", "25");
+  if (!params.has("offset")) params.set("offset", "0");
+  return `?${params.toString()}`;
+}
+
+function updateHistoryParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string | null, resetOffset = true) {
+  setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    if (resetOffset) next.set("offset", "0");
+    return next;
+  });
+}
+
+function hasHistoryFilters(searchParams: URLSearchParams) {
+  return ["search", "status"].some((key) => searchParams.has(key));
+}
+
+function rerunUrl(scan: Scan) {
+  const params = new URLSearchParams({
+    starting_url: scan.starting_url,
+    scope: JSON.stringify(scan.scope_config)
+  });
+  return `/scans/new?${params.toString()}`;
 }
