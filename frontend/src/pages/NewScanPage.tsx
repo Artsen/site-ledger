@@ -9,13 +9,20 @@ export function NewScanPage() {
   const navigate = useNavigate();
   const [startingUrl, setStartingUrl] = useState("");
   const [scope, setScope] = useState<ScopeConfig>(defaultScope());
+  const [listFields, setListFields] = useState(() => ({
+    allowed_host_patterns: scope.allowed_host_patterns.join("\n"),
+    excluded_host_patterns: scope.excluded_host_patterns.join("\n"),
+    included_path_prefixes: scope.included_path_prefixes.join("\n"),
+    excluded_path_prefixes: scope.excluded_path_prefixes.join("\n"),
+    drop_query_parameters: scope.drop_query_parameters.join("\n")
+  }));
   const mutation = useMutation({
-    mutationFn: () => createScan(startingUrl, scope),
+    mutationFn: () => createScan(startingUrl, scopeFromForm(scope, listFields)),
     onSuccess: (scan) => navigate(`/scans/${scan.id}`)
   });
 
-  function updateList(key: keyof ScopeConfig, value: string) {
-    setScope((current) => ({ ...current, [key]: value.split("\n").map((item) => item.trim()).filter(Boolean) }));
+  function updateList(key: keyof typeof listFields, value: string) {
+    setListFields((current) => ({ ...current, [key]: value }));
   }
 
   function submit(event: FormEvent) {
@@ -55,11 +62,11 @@ export function NewScanPage() {
         <details className="border-t border-stone-200 pt-4">
           <summary className="cursor-pointer text-sm font-medium">Advanced scope settings</summary>
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-            <TextArea label="Allowed hosts" value={scope.allowed_host_patterns.join("\n")} onChange={(value) => updateList("allowed_host_patterns", value)} />
-            <TextArea label="Excluded hosts" value={scope.excluded_host_patterns.join("\n")} onChange={(value) => updateList("excluded_host_patterns", value)} />
-            <TextArea label="Included path prefixes" value={scope.included_path_prefixes.join("\n")} onChange={(value) => updateList("included_path_prefixes", value)} />
-            <TextArea label="Excluded path prefixes" value={scope.excluded_path_prefixes.join("\n")} onChange={(value) => updateList("excluded_path_prefixes", value)} />
-            <TextArea label="Dropped query parameters" value={scope.drop_query_parameters.join("\n")} onChange={(value) => updateList("drop_query_parameters", value)} />
+            <TextArea label="Allowed hosts" value={listFields.allowed_host_patterns} onChange={(value) => updateList("allowed_host_patterns", value)} />
+            <TextArea label="Excluded hosts" value={listFields.excluded_host_patterns} onChange={(value) => updateList("excluded_host_patterns", value)} />
+            <TextArea label="Included path prefixes" value={listFields.included_path_prefixes} onChange={(value) => updateList("included_path_prefixes", value)} />
+            <TextArea label="Excluded path prefixes" value={listFields.excluded_path_prefixes} onChange={(value) => updateList("excluded_path_prefixes", value)} />
+            <TextArea label="Dropped query parameters" value={listFields.drop_query_parameters} onChange={(value) => updateList("drop_query_parameters", value)} />
             <label className="flex items-center gap-2 text-sm" htmlFor="follow-subdomains">
               <input id="follow-subdomains" type="checkbox" checked={scope.follow_subdomains} onChange={(event) => setScope({ ...scope, follow_subdomains: event.target.checked })} />
               Include subdomains for explicit allowed hosts
@@ -85,6 +92,33 @@ export function NewScanPage() {
       </form>
     </section>
   );
+}
+
+function scopeFromForm(
+  scope: ScopeConfig,
+  listFields: {
+    allowed_host_patterns: string;
+    excluded_host_patterns: string;
+    included_path_prefixes: string;
+    excluded_path_prefixes: string;
+    drop_query_parameters: string;
+  }
+): ScopeConfig {
+  return {
+    ...scope,
+    allowed_host_patterns: parseList(listFields.allowed_host_patterns),
+    excluded_host_patterns: parseList(listFields.excluded_host_patterns),
+    included_path_prefixes: parseList(listFields.included_path_prefixes),
+    excluded_path_prefixes: parseList(listFields.excluded_path_prefixes),
+    drop_query_parameters: parseList(listFields.drop_query_parameters)
+  };
+}
+
+function parseList(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function TextArea(props: { label: string; value: string; onChange: (value: string) => void }) {
