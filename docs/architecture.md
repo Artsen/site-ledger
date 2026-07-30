@@ -10,5 +10,37 @@ The scanner is split into explicit boundaries:
 - `services.scan_runner` keeps in-process scan execution replaceable by a later worker queue.
 - `api.routes` exposes scan, page, snapshot, link, HTML, and occurrence endpoints.
 
+## Scope Defaults
+
+When a scan has no explicit `allowed_host_patterns`, the scope engine derives the exact starting
+hostname and does not include sibling hosts or subdomains. Subdomains require either an explicit
+wildcard pattern or `follow_subdomains` with an allowed base host.
+
+No TechSmith-specific host set is hardcoded. Site-specific configuration is deferred to future
+saved-site records.
+
+## Redirects and Response Limits
+
+Redirects are not followed automatically by HTTPX. The crawler validates each redirect target
+against scope and SSRF network rules before issuing the next GET, and stores the redirect-chain
+evidence with requested URL, status, raw `Location`, and resolved destination URL.
+
+Final response bodies are read through HTTPX streaming. `Content-Length` is checked before reading
+when present, and streamed chunks are counted so oversized responses are stopped and categorized as
+`response_too_large` without storing a partial content blob.
+
+Unsafe redirect destinations blocked by network safety checks are categorized as
+`unsafe_destination`; configured scope rejections are categorized as `scope_excluded`.
+
+## Deferred
+
+Robots.txt enforcement and concurrent crawling remain internal configuration placeholders for a
+future PR. PR 1 executes a sequential static crawl and may apply a configured delay between
+requests.
+
+The Playwright coverage currently exercises the frontend scan form route. Complete deterministic
+crawl behavior, including redirect and response-size handling, is covered in backend integration
+tests through mocked HTTP transports.
+
 PR 1 deliberately excludes asset inventory, rendered crawling, sitemap ingestion, analytics integrations, scheduled scans, AI features, and multi-user permissions.
 
