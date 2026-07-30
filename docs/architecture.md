@@ -9,6 +9,8 @@ The scanner is split into explicit boundaries:
 - `crawler.static_crawler` performs breadth-first HTTP GET crawling and persists partial results.
 - `services.scan_runner` keeps in-process scan execution replaceable by a later worker queue.
 - `api.routes` exposes scan, page, snapshot, link, HTML, and occurrence endpoints.
+- `frontend/src/components/ui` contains small shared UI primitives used by the current scanner
+  workflow only. It is not intended as a speculative design system.
 
 ## Scope Defaults
 
@@ -31,6 +33,21 @@ when present, and streamed chunks are counted so oversized responses are stopped
 
 Unsafe redirect destinations blocked by network safety checks are categorized as
 `unsafe_destination`; configured scope rejections are categorized as `scope_excluded`.
+
+## PR 2 UI and API Additions
+
+The scan workflow UI now keeps scan tabs and page filters in URL search parameters so refreshes,
+browser navigation, and shared links preserve context. Page search is debounced before requesting
+server-side results.
+
+The page-list API remains backward compatible and adds optional `min_depth` and `max_depth`
+parameters alongside the existing exact `depth` filter. Snapshot reads include additive
+`html_raw_byte_size` and `html_stored_byte_size` fields derived from the related content blob when
+available. No persistence migration is required.
+
+The page detail view presents snapshot overview data, redirect chains, head metadata, link
+occurrences, and raw HTML without using raw JSON as the primary interface. Raw HTML remains escaped
+and non-executable in the dashboard; the HTML endpoint remains `text/plain`.
 
 ## Deferred
 
