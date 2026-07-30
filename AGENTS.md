@@ -258,28 +258,10 @@ Every discovered URL must receive one explicit scope decision, such as:
 - `invalid_url`
 - `robots_disallowed`
 
-### TechSmith starter preset
+### Default scope values
 
-Provide a UI preset, not crawler-specific code, that can cover:
-
-Allowed host families:
-
-- `techsmith.com`
-- `*.techsmith.com`
-- `techsmith.de`
-- `*.techsmith.de`
-- `techsmith.fr`
-- `*.techsmith.fr`
-- `techsmith.es`
-- `*.techsmith.es`
-- `techsmith.co.jp`
-- `*.techsmith.co.jp`
-- `techsmith.pt`
-- `*.techsmith.pt`
-
-Excluded host pattern:
-
-- `support.*`
+When no allowed hosts are supplied, derive the exact starting URL hostname. Do not include sibling
+hosts or subdomains unless the user explicitly configures them.
 
 Default excluded paths:
 
@@ -361,6 +343,7 @@ Include at least:
 - `parse_error`
 - `robots_disallowed`
 - `scope_excluded`
+- `unsafe_destination`
 - `unsupported_scheme`
 - `unsupported_content_type`
 
@@ -426,7 +409,6 @@ Do not fill the sidebar with nonfunctional future modules.
 The new-scan form should show:
 
 - Starting URL
-- Scope preset
 - Maximum pages
 - Maximum depth
 - Expandable advanced scope settings
