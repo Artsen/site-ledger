@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from posixpath import normpath
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
@@ -34,10 +35,15 @@ def normalize_url(
     if parts.scheme.lower() not in {"http", "https"}:
         raise UrlNormalizationError("unsupported scheme")
 
-    host = (parts.hostname or "").encode("idna").decode("ascii").lower()
+    try:
+        host = (parts.hostname or "").encode("idna").decode("ascii").lower()
+        port = parts.port
+    except (UnicodeError, ValueError) as exc:
+        raise UrlNormalizationError(str(exc)) from exc
     if not host:
         raise UrlNormalizationError("URL host is missing")
-    port = parts.port
+    if not re.fullmatch(r"[a-z0-9.-]+", host):
+        raise UrlNormalizationError("URL host contains invalid characters")
     if (parts.scheme.lower(), port) in {("http", 80), ("https", 443)}:
         port = None
 

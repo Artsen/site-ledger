@@ -31,3 +31,8 @@ def test_unicode_host_is_idna_encoded() -> None:
 def test_unsupported_scheme_raises() -> None:
     with pytest.raises(UrlNormalizationError):
         normalize_url("javascript:alert(1)")
+
+
+def test_invalid_host_raises() -> None:
+    with pytest.raises(UrlNormalizationError):
+        normalize_url("https://%/")

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 from sqlalchemy.orm import Session
@@ -24,10 +25,19 @@ class CrawlItem:
     depth: int
 
 
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
 class StaticPageCrawler:
-    def __init__(self, db: Session, store: LocalContentStore):
+    def __init__(
+        self,
+        db: Session,
+        store: LocalContentStore,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
         self.db = db
         self.store = store
+        self.transport = transport
 
     async def run(self, scan: Scan) -> None:
         config = ScopeConfig.from_dict(scan.scope_config)
@@ -52,10 +62,11 @@ class StaticPageCrawler:
         self.db.commit()
 
         async with httpx.AsyncClient(
-            follow_redirects=True,
+            follow_redirects=False,
             max_redirects=config.max_redirects,
             timeout=config.request_timeout_seconds,
             headers={"User-Agent": config.user_agent},
+            transport=self.transport,
         ) as client:
             while queue and scan.status != "cancelled" and len(fetched) < config.max_pages:
                 item = queue.popleft()
@@ -146,32 +157,12 @@ class StaticPageCrawler:
         started = monotonic()
         try:
             await validate_public_destination(item.requested_url, config.allow_private_networks)
-            response = await client.get(item.requested_url)
-            await validate_public_destination(str(response.url), config.allow_private_networks)
-            final_scope = scope.evaluate(str(response.url))
-            if final_scope.decision not in {"crawlable", "already_seen"}:
-                return self._record_failure(
-                    scan,
-                    item,
-                    "scope_excluded",
-                    final_scope.exclusion_reason or "Redirect left configured scope",
-                ), []
-            content = await response.aread()
-            if len(content) > config.max_html_response_bytes:
-                return self._record_failure(
-                    scan, item, "response_too_large", "Response exceeded configured limit"
-                ), []
+            response, content, redirect_chain = await self._get_with_validated_redirects(
+                client, item.requested_url, config, scope
+            )
             response_time_ms = int((monotonic() - started) * 1000)
             content_type = response.headers.get("content-type")
             is_html = "text/html" in (content_type or "").lower() or not content_type
-            redirect_chain = [
-                {
-                    "url": str(history.url),
-                    "status_code": history.status_code,
-                    "location": history.headers.get("location"),
-                }
-                for history in response.history
-            ]
             parsed = parse_html(content, str(response.url)) if is_html else None
             blob = (
                 self.store.put_html(self.db, content, content_type, response.encoding)
@@ -211,6 +202,21 @@ class StaticPageCrawler:
             return snapshot, parsed.anchors if parsed else []
         except httpx.TooManyRedirects as exc:
             return self._record_failure(scan, item, "too_many_redirects", str(exc)), []
+        except ResponseTooLargeError as exc:
+            return self._record_failure(
+                scan, item, "response_too_large", str(exc), redirect_chain=exc.redirect_chain
+            ), []
+        except RedirectFailureError as exc:
+            return self._record_failure(
+                scan,
+                item,
+                exc.error_type,
+                str(exc),
+                final_url=exc.final_url,
+                http_status=exc.http_status,
+                response_headers=exc.response_headers,
+                redirect_chain=exc.redirect_chain,
+            ), []
         except httpx.ConnectTimeout as exc:
             return self._record_failure(scan, item, "connection_timeout", str(exc)), []
         except httpx.ReadTimeout as exc:
@@ -218,25 +224,176 @@ class StaticPageCrawler:
         except httpx.ConnectError as exc:
             return self._record_failure(scan, item, _connect_error_type(exc), str(exc)), []
         except UnsafeDestinationError as exc:
-            return self._record_failure(scan, item, "scope_excluded", str(exc)), []
+            return self._record_failure(scan, item, "unsafe_destination", str(exc)), []
+        except httpx.InvalidURL as exc:
+            return self._record_failure(scan, item, "invalid_url", str(exc)), []
+        except ValueError as exc:
+            return self._record_failure(scan, item, "invalid_url", str(exc)), []
+
+    async def _get_with_validated_redirects(
+        self,
+        client: httpx.AsyncClient,
+        start_url: str,
+        config: ScopeConfig,
+        scope: ScopeEngine,
+    ) -> tuple[httpx.Response, bytes, list[dict[str, Any]]]:
+        current_url = start_url
+        initial = scope.evaluate(start_url)
+        seen_redirects: set[str] = (
+            {initial.normalized.normalized_url} if initial.normalized else set()
+        )
+        redirect_chain: list[dict[str, Any]] = []
+
+        for _hop in range(config.max_redirects + 1):
+            await validate_public_destination(current_url, config.allow_private_networks)
+            async with client.stream("GET", current_url) as response:
+                if response.status_code not in REDIRECT_STATUSES:
+                    content = await self._read_limited_response(response, config, redirect_chain)
+                    return response, content, redirect_chain
+
+                location = response.headers.get("location")
+                try:
+                    resolved_url = urljoin(str(response.url), location) if location else None
+                except ValueError as exc:
+                    redirect_chain.append(
+                        {
+                            "requested_url": current_url,
+                            "status_code": response.status_code,
+                            "location": location,
+                            "resolved_url": None,
+                        }
+                    )
+                    raise RedirectFailureError(
+                        "invalid_url",
+                        str(exc),
+                        str(response.url),
+                        response.status_code,
+                        dict(response.headers),
+                        redirect_chain,
+                    ) from exc
+                redirect_chain.append(
+                    {
+                        "requested_url": current_url,
+                        "status_code": response.status_code,
+                        "location": location,
+                        "resolved_url": resolved_url,
+                    }
+                )
+                if not location or not resolved_url:
+                    raise RedirectFailureError(
+                        "invalid_url",
+                        "Redirect response did not include a valid Location header",
+                        str(response.url),
+                        response.status_code,
+                        dict(response.headers),
+                        redirect_chain,
+                    )
+                try:
+                    httpx.URL(resolved_url)
+                except httpx.InvalidURL as exc:
+                    raise RedirectFailureError(
+                        "invalid_url",
+                        str(exc),
+                        str(response.url),
+                        response.status_code,
+                        dict(response.headers),
+                        redirect_chain,
+                    ) from exc
+                destination = scope.evaluate(resolved_url)
+                if destination.normalized is None:
+                    raise RedirectFailureError(
+                        destination.decision,
+                        destination.exclusion_reason or "Redirect location is invalid",
+                        str(response.url),
+                        response.status_code,
+                        dict(response.headers),
+                        redirect_chain,
+                    )
+                if destination.decision != "crawlable":
+                    raise RedirectFailureError(
+                        "scope_excluded",
+                        destination.exclusion_reason or "Redirect left configured scope",
+                        str(response.url),
+                        response.status_code,
+                        dict(response.headers),
+                        redirect_chain,
+                    )
+                if destination.normalized.normalized_url in seen_redirects:
+                    raise RedirectFailureError(
+                        "redirect_loop",
+                        "Redirect loop detected",
+                        str(response.url),
+                        response.status_code,
+                        dict(response.headers),
+                        redirect_chain,
+                    )
+                await validate_public_destination(
+                    destination.normalized.normalized_url, config.allow_private_networks
+                )
+                seen_redirects.add(destination.normalized.normalized_url)
+                current_url = destination.normalized.normalized_url
+
+        raise RedirectFailureError(
+            "too_many_redirects",
+            "Redirect limit exceeded",
+            current_url,
+            None,
+            None,
+            redirect_chain,
+        )
+
+    @staticmethod
+    async def _read_limited_response(
+        response: httpx.Response,
+        config: ScopeConfig,
+        redirect_chain: list[dict[str, Any]],
+    ) -> bytes:
+        content_length = response.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > config.max_html_response_bytes:
+                    raise ResponseTooLargeError(
+                        "Content-Length exceeded configured response limit", redirect_chain
+                    )
+            except ValueError:
+                pass
+
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > config.max_html_response_bytes:
+                raise ResponseTooLargeError(
+                    "Streamed response exceeded configured response limit", redirect_chain
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     def _record_failure(
-        self, scan: Scan, item: CrawlItem, error_type: str, message: str
+        self,
+        scan: Scan,
+        item: CrawlItem,
+        error_type: str,
+        message: str,
+        final_url: str | None = None,
+        http_status: int | None = None,
+        response_headers: dict[str, Any] | None = None,
+        redirect_chain: list[dict[str, Any]] | None = None,
     ) -> ResourceSnapshot:
         resource = get_or_create_resource(self.db, item.normalized)
         snapshot = ResourceSnapshot(
             scan_id=scan.id,
             resource_id=resource.id,
             requested_url=item.requested_url,
-            final_url=None,
-            http_status=None,
+            final_url=final_url,
+            http_status=http_status,
             content_type=None,
             encoding=None,
             crawl_depth=item.depth,
             fetched_at=datetime.now(UTC),
             response_time_ms=None,
-            response_headers=None,
-            redirect_chain=[],
+            response_headers=response_headers,
+            redirect_chain=redirect_chain or [],
             html_blob_id=None,
             raw_html_sha256=None,
             head_sha256=None,
@@ -269,3 +426,27 @@ def _connect_error_type(exc: httpx.ConnectError) -> str:
     if "ssl" in text or "tls" in text:
         return "tls_error"
     return "connection_error"
+
+
+class RedirectFailureError(Exception):
+    def __init__(
+        self,
+        error_type: str,
+        message: str,
+        final_url: str | None,
+        http_status: int | None,
+        response_headers: dict[str, Any] | None,
+        redirect_chain: list[dict[str, Any]],
+    ):
+        super().__init__(message)
+        self.error_type = error_type
+        self.final_url = final_url
+        self.http_status = http_status
+        self.response_headers = response_headers
+        self.redirect_chain = redirect_chain
+
+
+class ResponseTooLargeError(Exception):
+    def __init__(self, message: str, redirect_chain: list[dict[str, Any]]):
+        super().__init__(message)
+        self.redirect_chain = redirect_chain

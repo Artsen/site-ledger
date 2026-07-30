@@ -1,7 +1,5 @@
-from collections.abc import AsyncIterator
-
+import httpx
 import pytest
-from httpx import ASGITransport, AsyncClient, Response
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from starlette.routing import Route
@@ -44,8 +42,7 @@ async def text(_request):
     return PlainTextResponse("not html")
 
 
-@pytest.fixture
-async def fixture_client() -> AsyncIterator[AsyncClient]:
+def fixture_transport() -> httpx.ASGITransport:
     app = Starlette(
         routes=[
             Route("/", home),
@@ -53,41 +50,28 @@ async def fixture_client() -> AsyncIterator[AsyncClient]:
             Route("/missing", missing),
             Route("/error", error),
             Route("/file.txt", text),
-            Route("/redirect", lambda request: RedirectResponse("/about")),
+            Route("/relative-redirect", lambda request: RedirectResponse("/about")),
         ]
     )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://fixture.test"
-    ) as client:
-        yield client
+    return httpx.ASGITransport(app=app)
 
 
 @pytest.mark.asyncio
-async def test_complete_fixture_crawl(monkeypatch, db_session, tmp_path, fixture_client) -> None:
-    async def fake_get(self, url, *args, **kwargs) -> Response:
-        request = fixture_client.build_request("GET", url)
-        return await fixture_client.send(request, follow_redirects=True)
-
-    async def fake_validate(url: str, allow_private_networks: bool = False) -> None:
-        return None
-
-    monkeypatch.setattr("httpx.AsyncClient.get", fake_get)
-    monkeypatch.setattr("app.crawler.static_crawler.validate_public_destination", fake_validate)
-    scan = Scan(
-        starting_url="http://fixture.test/",
-        status="queued",
-        scope_config=ScopeConfig(
+async def test_complete_fixture_crawl(db_session, tmp_path) -> None:
+    scan = _scan(
+        db_session,
+        ScopeConfig(
             allowed_host_patterns=["fixture.test"],
             excluded_path_prefixes=["/private/"],
             drop_query_parameters=["utm_*"],
             max_pages=10,
             max_depth=2,
             allow_private_networks=True,
-        ).to_dict(),
+        ),
     )
-    db_session.add(scan)
-    db_session.commit()
-    await StaticPageCrawler(db_session, LocalContentStore(tmp_path)).run(scan)
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=fixture_transport()
+    ).run(scan)
 
     snapshots = db_session.query(ResourceSnapshot).all()
     occurrences = db_session.query(ResourceOccurrence).all()
@@ -106,3 +90,198 @@ async def test_complete_fixture_crawl(monkeypatch, db_session, tmp_path, fixture
     )
     assert any(occ.scope_decision == "excluded_path" for occ in occurrences)
     assert any(occ.scope_decision == "external" for occ in occurrences)
+
+
+@pytest.mark.asyncio
+async def test_same_host_relative_redirect_succeeds_and_chain_is_saved(
+    db_session, tmp_path
+) -> None:
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            max_pages=1,
+            allow_private_networks=True,
+        ),
+        starting_url="http://fixture.test/relative-redirect",
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=fixture_transport()
+    ).run(scan)
+
+    snapshot = db_session.query(ResourceSnapshot).one()
+    assert snapshot.fetch_state == "fetched"
+    assert snapshot.final_url == "http://fixture.test/about"
+    assert snapshot.redirect_chain == [
+        {
+            "requested_url": "http://fixture.test/relative-redirect",
+            "status_code": 307,
+            "location": "/about",
+            "resolved_url": "http://fixture.test/about",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_redirect_leaving_scope_is_not_requested(db_session, tmp_path) -> None:
+    requested: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.host == "fixture.test":
+            return httpx.Response(302, headers={"location": "https://outside.test/"})
+        return httpx.Response(200, text="should not be requested")
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(allowed_host_patterns=["fixture.test"], allow_private_networks=True),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(handler)
+    ).run(scan)
+
+    snapshot = db_session.query(ResourceSnapshot).one()
+    assert requested == ["http://fixture.test/"]
+    assert snapshot.error_type == "scope_excluded"
+    assert snapshot.redirect_chain[0]["resolved_url"] == "https://outside.test/"
+
+
+@pytest.mark.asyncio
+async def test_redirect_to_loopback_is_not_requested(monkeypatch, db_session, tmp_path) -> None:
+    requested: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(302, headers={"location": "http://127.0.0.1/admin"})
+
+    async def validate(url: str, allow_private_networks: bool = False) -> None:
+        if "127.0.0.1" in url:
+            from app.crawler.security import UnsafeDestinationError
+
+            raise UnsafeDestinationError("Destination IP is not public: 127.0.0.1")
+
+    monkeypatch.setattr("app.crawler.static_crawler.validate_public_destination", validate)
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test", "127.0.0.1"],
+            allow_private_networks=False,
+        ),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(handler)
+    ).run(scan)
+
+    snapshot = db_session.query(ResourceSnapshot).one()
+    assert requested == ["http://fixture.test/"]
+    assert snapshot.error_type == "unsafe_destination"
+
+
+@pytest.mark.asyncio
+async def test_redirect_loop_and_limit_are_categorized(db_session, tmp_path) -> None:
+    async def loop_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "/"})
+
+    loop_scan = _scan(
+        db_session,
+        ScopeConfig(allowed_host_patterns=["fixture.test"], allow_private_networks=True),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(loop_handler)
+    ).run(loop_scan)
+    assert db_session.query(ResourceSnapshot).filter_by(scan_id=loop_scan.id).one().error_type == (
+        "redirect_loop"
+    )
+
+    async def chain_handler(request: httpx.Request) -> httpx.Response:
+        next_id = int(request.url.path.strip("/") or "0") + 1
+        return httpx.Response(302, headers={"location": f"/{next_id}"})
+
+    limit_scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_redirects=1,
+        ),
+        starting_url="http://fixture.test/0",
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(chain_handler)
+    ).run(limit_scan)
+    assert db_session.query(ResourceSnapshot).filter_by(scan_id=limit_scan.id).one().error_type == (
+        "too_many_redirects"
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_redirect_location_is_handled(db_session, tmp_path) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://%/"})
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(allowed_host_patterns=["fixture.test"], allow_private_networks=True),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(handler)
+    ).run(scan)
+    assert db_session.query(ResourceSnapshot).one().error_type == "invalid_url"
+
+
+@pytest.mark.asyncio
+async def test_response_size_limits_are_enforced_while_streaming(db_session, tmp_path) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                content=(
+                    b"<html><head><title>Home</title></head>"
+                    b"<a href='/declared-large'>D</a><a href='/chunked-large'>C</a>"
+                ),
+                headers={"content-type": "text/html"},
+            )
+        if request.url.path == "/declared-large":
+            return httpx.Response(200, headers={"content-length": "121"}, content=b"")
+        return httpx.Response(
+            200, headers={"content-type": "text/html"}, content=b"<html>" + b"x" * 140
+        )
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_html_response_bytes=120,
+            max_pages=3,
+            max_depth=1,
+        ),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(handler)
+    ).run(scan)
+
+    oversized = (
+        db_session.query(ResourceSnapshot)
+        .filter(ResourceSnapshot.error_type == "response_too_large")
+        .all()
+    )
+    assert scan.status == "completed_with_errors"
+    assert len(oversized) == 2
+    assert all(snapshot.html_blob_id is None for snapshot in oversized)
+    assert db_session.query(ContentBlob).count() == 1
+
+
+def _scan(
+    db_session,
+    config: ScopeConfig,
+    starting_url: str = "http://fixture.test/",
+) -> Scan:
+    scan = Scan(
+        starting_url=starting_url,
+        status="queued",
+        scope_config=config.to_dict(),
+    )
+    db_session.add(scan)
+    db_session.commit()
+    return scan
