@@ -18,8 +18,12 @@ const api = vi.hoisted(() => ({
   listErrors: vi.fn(),
   getSnapshot: vi.fn(),
   getLinks: vi.fn(),
+  getInboundLinks: vi.fn(),
   getHtml: vi.fn(),
   cancelScan: vi.fn(),
+  getScanDeletePreview: vi.fn(),
+  deleteScan: vi.fn(),
+  listScanHistory: vi.fn(),
   listScans: vi.fn()
 }));
 
@@ -55,8 +59,22 @@ beforeEach(() => {
   api.listErrors.mockResolvedValue([]);
   api.getSnapshot.mockResolvedValue(snapshotFixture);
   api.getLinks.mockResolvedValue(linkFixtures);
+  api.getInboundLinks.mockResolvedValue(inboundFixture);
   api.getHtml.mockResolvedValue("<html><body><script>window.executed = true</script><h1>Source</h1></body></html>");
   api.cancelScan.mockResolvedValue({ ...scanFixture, status: "cancelled" });
+  api.getScanDeletePreview.mockResolvedValue({
+    scan_id: 1,
+    can_delete: true,
+    status: "completed",
+    snapshots: 2,
+    link_occurrences: 3,
+    html_blobs_referenced: 2,
+    html_blobs_deleted: 1,
+    raw_html_bytes_reclaimable: 1200,
+    stored_html_bytes_reclaimable: 500,
+    reason: null
+  });
+  api.deleteScan.mockResolvedValue({ deleted_scan_id: 1 });
 });
 
 afterEach(() => cleanup());
@@ -159,6 +177,17 @@ describe("page detail workflow", () => {
     expect(screen.getByText("No visible text")).toBeInTheDocument();
     expect(screen.getByText(/aria-label:/)).toBeInTheDocument();
     expect(document.body.textContent).toContain("Download Snagit");
+  });
+
+  it("renders inbound link occurrences with scan-specific summary", async () => {
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Inbound/i }));
+
+    expect(await screen.findByText("Inbound link summary")).toBeInTheDocument();
+    expect(screen.getByText("Unique source pages")).toBeInTheDocument();
+    expect(screen.getByText("Self link")).toBeInTheDocument();
+    expect(document.body.textContent).toContain("Source page");
   });
 
   it("shows raw HTML as escaped text without executing it", async () => {
@@ -298,3 +327,29 @@ const linkFixtures = [
     exclusion_reason: "External host"
   }
 ];
+
+const inboundFixture = {
+  items: [
+    {
+      ...linkFixtures[0],
+      source_snapshot_id: 8,
+      source_requested_url: "https://example.com/source",
+      source_final_url: "https://example.com/source",
+      source_page_title: "Source page",
+      source_http_status: 200,
+      source_fetch_state: "fetched",
+      source_crawl_depth: 0,
+      is_self_link: true
+    }
+  ],
+  total: 1,
+  limit: 50,
+  offset: 0,
+  summary: {
+    total_occurrences: 1,
+    unique_source_pages: 1,
+    unique_anchor_texts: 0,
+    nofollow_occurrences: 1,
+    self_link_occurrences: 1
+  }
+};

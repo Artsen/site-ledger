@@ -76,6 +76,24 @@ async function mockApi(page: Page) {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
   });
 
+  await page.route("**/api/scans/1/delete-preview", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        scan_id: 1,
+        can_delete: true,
+        status: "completed",
+        snapshots: 1,
+        link_occurrences: 1,
+        html_blobs_referenced: 1,
+        html_blobs_deleted: 1,
+        raw_html_bytes_reclaimable: 1200,
+        stored_html_bytes_reclaimable: 480,
+        reason: null
+      })
+    });
+  });
+
   await page.route("**/api/snapshots/9", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(snapshot) });
   });
@@ -136,6 +154,7 @@ const pageRow = {
   content_type: "text/html",
   discovery_source: "https://example.com/",
   inbound_occurrence_count: 1,
+  inbound_source_page_count: 1,
   response_time_ms: 87,
   fetch_state: "fetched",
   error_type: null
