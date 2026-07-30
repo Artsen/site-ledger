@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { cancelScan, getScan, listErrors, listPages } from "../api/client";
+import { cancelScan, deleteScan, getScan, getScanDeletePreview, listErrors, listPages } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
 import { DefinitionList } from "../components/ui/DefinitionList";
@@ -13,7 +13,7 @@ import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { inputClass } from "../components/ui/styles";
 import type { Page, Scan, Snapshot } from "../types/scans";
-import { compactUrl, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
+import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
 
 const pageSizes = [25, 50, 100];
 
@@ -33,9 +33,10 @@ export function ScanDetailPage() {
   const isActiveScan = Boolean(scan.data && !isTerminalStatus(scan.data.status));
 
   useEffect(() => {
+    if (searchDraft === (searchParams.get("search") ?? "")) return;
     const timer = window.setTimeout(() => updateParam(setSearchParams, "search", searchDraft || null, { offset: null }), 350);
     return () => window.clearTimeout(timer);
-  }, [searchDraft, setSearchParams]);
+  }, [searchDraft, searchParams, setSearchParams]);
 
   const pageQuery = useMemo(() => buildPageQuery(searchParams), [searchParams]);
   const pages = useQuery({
@@ -55,6 +56,19 @@ export function ScanDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["scan", scanId] });
       await queryClient.invalidateQueries({ queryKey: ["scans"] });
+    }
+  });
+  const deletePreview = useQuery({
+    queryKey: ["scan-delete-preview", scanId],
+    queryFn: () => getScanDeletePreview(scanId),
+    enabled: Boolean(scan.data && isTerminalStatus(scan.data.status))
+  });
+  const remove = useMutation({
+    mutationFn: () => deleteScan(scanId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["scans"] });
+      await queryClient.invalidateQueries({ queryKey: ["scan-history"] });
+      navigate("/scans");
     }
   });
 
@@ -108,11 +122,25 @@ export function ScanDetailPage() {
       </div>
 
       {cancel.error ? <div className="mb-4"><ErrorBanner error={cancel.error} title="Could not cancel scan" /></div> : null}
+      {remove.error ? <div className="mb-4"><ErrorBanner error={remove.error} title="Could not delete scan" /></div> : null}
 
       <Tabs tabs={tabs} active={tab} onChange={(next) => updateParam(setSearchParams, "tab", next === "overview" ? null : next)} />
 
       <div className="mt-5">
-        {tab === "overview" ? <Overview scan={scan.data} pages={pages.data?.items ?? []} errors={errors.data ?? []} scanId={scanId} /> : null}
+        {tab === "overview" ? (
+          <Overview
+            scan={scan.data}
+            pages={pages.data?.items ?? []}
+            errors={errors.data ?? []}
+            scanId={scanId}
+            deletePreview={deletePreview.data}
+            deleteLoading={deletePreview.isLoading}
+            deleting={remove.isPending}
+            onDelete={() => {
+              if (window.confirm("Permanently delete this scan? This cannot be undone.")) remove.mutate();
+            }}
+          />
+        ) : null}
         {tab === "pages" ? (
           <PagesView
             scanId={scanId}
@@ -146,7 +174,37 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function Overview({ scan, pages, errors, scanId }: { scan: Scan; pages: Page[]; errors: Snapshot[]; scanId: string }) {
+function Overview({
+  scan,
+  pages,
+  errors,
+  scanId,
+  deletePreview,
+  deleteLoading,
+  deleting,
+  onDelete
+}: {
+  scan: Scan;
+  pages: Page[];
+  errors: Snapshot[];
+  scanId: string;
+  deletePreview?: {
+    can_delete: boolean;
+    snapshots: number;
+    link_occurrences: number;
+    unique_resources: number;
+    html_blobs_referenced: number;
+    exclusive_html_blobs: number;
+    shared_html_blobs: number;
+    html_blobs_deleted: number;
+    stored_html_bytes_reclaimable: number;
+    reason: string | null;
+    warnings: string[];
+  };
+  deleteLoading: boolean;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
   const httpErrors = pages.filter((page) => page.http_status != null && page.http_status >= 400).length;
   const crawlerFailures = errors.filter((error) => error.error_type).length;
   const active = !isTerminalStatus(scan.status);
@@ -183,6 +241,25 @@ function Overview({ scan, pages, errors, scanId }: { scan: Scan; pages: Page[]; 
             <pre className="mt-3 max-h-80 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-3 text-xs">{JSON.stringify(scan.scope_config, null, 2)}</pre>
           </details>
         </section>
+        {isTerminalStatus(scan.status) ? (
+          <section className="rounded-md border border-red-200 bg-white p-4 shadow-sm">
+            <h2 className="mb-3 text-base font-semibold text-red-900">Delete scan</h2>
+            {deleteLoading ? <LoadingBlock label="Loading delete preview..." /> : null}
+            {deletePreview ? (
+              <div className="space-y-3 text-sm">
+                <p className="text-stone-700">
+                  Deleting this scan removes {deletePreview.snapshots} page snapshots and {deletePreview.link_occurrences} link occurrences.
+                  {deletePreview.exclusive_html_blobs} of {deletePreview.html_blobs_referenced} referenced HTML captures will be deleted because no other scan uses them.
+                  {deletePreview.shared_html_blobs} shared captures will be retained. Estimated storage reclaimed: {formatBytes(deletePreview.stored_html_bytes_reclaimable)}.
+                </p>
+                {deletePreview.reason ? <p className="text-amber-700">{deletePreview.reason}</p> : null}
+                <Button type="button" variant="danger" disabled={!deletePreview.can_delete} loading={deleting} onClick={onDelete}>
+                  Delete scan permanently
+                </Button>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
       </div>
       <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-base font-semibold">{active ? "Recent scan activity" : "Recent pages"}</h2>
@@ -327,7 +404,10 @@ function PageTable({ pages, scanId }: { pages: Page[]; scanId: string }) {
                 <td className="px-3 py-2">{page.depth}</td>
                 <td className="max-w-xs truncate px-3 py-2">{page.content_type ?? "Not available"}</td>
                 <td className="whitespace-nowrap px-3 py-2">{page.response_time_ms != null ? `${page.response_time_ms} ms` : "Not available"}</td>
-                <td className="px-3 py-2">{page.inbound_occurrence_count}</td>
+                <td className="px-3 py-2">
+                  <span className="block">{page.inbound_occurrence_count}</span>
+                  <span className="block text-xs text-stone-500">{page.inbound_source_page_count} sources</span>
+                </td>
                 <td className="max-w-xs truncate px-3 py-2">{page.error_type ? formatStatus(page.error_type) : "None"}</td>
               </tr>
             );

@@ -9,6 +9,7 @@ import { displayError } from "../src/utils/errors";
 import { NewScanPage } from "../src/pages/NewScanPage";
 import { PageDetailPage } from "../src/pages/PageDetailPage";
 import { ScanDetailPage } from "../src/pages/ScanDetailPage";
+import { ScansPage } from "../src/pages/ScansPage";
 import type { PageList, Scan, Snapshot } from "../src/types/scans";
 
 const api = vi.hoisted(() => ({
@@ -18,8 +19,12 @@ const api = vi.hoisted(() => ({
   listErrors: vi.fn(),
   getSnapshot: vi.fn(),
   getLinks: vi.fn(),
+  getInboundLinks: vi.fn(),
   getHtml: vi.fn(),
   cancelScan: vi.fn(),
+  getScanDeletePreview: vi.fn(),
+  deleteScan: vi.fn(),
+  listScanHistory: vi.fn(),
   listScans: vi.fn()
 }));
 
@@ -55,8 +60,39 @@ beforeEach(() => {
   api.listErrors.mockResolvedValue([]);
   api.getSnapshot.mockResolvedValue(snapshotFixture);
   api.getLinks.mockResolvedValue(linkFixtures);
+  api.getInboundLinks.mockResolvedValue(inboundFixture);
   api.getHtml.mockResolvedValue("<html><body><script>window.executed = true</script><h1>Source</h1></body></html>");
   api.cancelScan.mockResolvedValue({ ...scanFixture, status: "cancelled" });
+  api.getScanDeletePreview.mockResolvedValue({
+    scan_id: 1,
+    starting_url: "https://example.com/",
+    can_delete: true,
+    status: "completed",
+    snapshots: 2,
+    link_occurrences: 3,
+    unique_resources: 2,
+    html_blobs_referenced: 2,
+    exclusive_html_blobs: 1,
+    shared_html_blobs: 1,
+    html_blobs_deleted: 1,
+    raw_html_bytes_reclaimable: 1200,
+    stored_html_bytes_reclaimable: 500,
+    reason: null,
+    warnings: []
+  });
+  api.deleteScan.mockResolvedValue({
+    deleted_scan_id: 1,
+    snapshots_deleted: 2,
+    link_occurrences_deleted: 3,
+    resources_deleted: 1,
+    html_blob_records_deleted: 1,
+    html_blob_files_deleted: 1,
+    html_blobs_deleted: 1,
+    raw_html_bytes_reclaimed: 1200,
+    stored_html_bytes_reclaimed: 500,
+    warnings: []
+  });
+  api.listScanHistory.mockResolvedValue({ items: [scanFixture], total: 1, limit: 25, offset: 0 });
 });
 
 afterEach(() => cleanup());
@@ -125,9 +161,43 @@ describe("scan results workflow", () => {
     await waitFor(() => expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("search=pricing")));
   });
 
+  it("keeps page-list pagination offset when search text has not changed", async () => {
+    api.listPages.mockResolvedValue({
+      items: [pageFixture],
+      total: 75,
+      limit: 50,
+      offset: 0
+    });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=pages");
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "Next" }))[0]);
+
+    await waitFor(() => expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("offset=50")));
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
+    expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("offset=50"));
+  });
+
   it("renders a scan status badge with accessible text", () => {
     render(<StatusBadge status="completed_with_errors" />);
     expect(screen.getByText("Completed With Errors")).toBeInTheDocument();
+  });
+});
+
+describe("scan history workflow", () => {
+  it("renders all scans, preserves filters in the URL, and opens delete confirmation", async () => {
+    renderRoute(<ScansPage />, "/scans", "/scans");
+
+    expect(await screen.findByRole("heading", { name: "All scans" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search scans"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Scan status"), { target: { value: "completed" } });
+
+    await waitFor(() => expect(api.listScanHistory).toHaveBeenLastCalledWith(expect.stringContaining("search=example")));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(await screen.findByRole("dialog", { name: "Delete this scan?" })).toBeInTheDocument();
+    expect(screen.getByText(/Estimated storage reclaimed/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete scan" }));
+    await waitFor(() => expect(api.deleteScan).toHaveBeenCalledWith("1"));
   });
 });
 
@@ -153,12 +223,25 @@ describe("page detail workflow", () => {
   it("renders individual link occurrences with provenance fields", async () => {
     renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
 
-    fireEvent.click(await screen.findByRole("tab", { name: /Links/i }));
+    fireEvent.click(await screen.findByRole("tab", { name: /Outgoing links/i }));
 
     expect((await screen.findAllByText("External")).length).toBeGreaterThan(0);
     expect(screen.getByText("No visible text")).toBeInTheDocument();
     expect(screen.getByText(/aria-label:/)).toBeInTheDocument();
     expect(document.body.textContent).toContain("Download Snagit");
+  });
+
+  it("renders inbound link occurrences with scan-specific summary", async () => {
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Inbound links/i }));
+
+    expect(await screen.findByText("Inbound link summary")).toBeInTheDocument();
+    expect(screen.getByText("Unique source pages")).toBeInTheDocument();
+    expect(screen.getByText("Self link")).toBeInTheDocument();
+    expect(document.body.textContent).toContain("Source page");
+    fireEvent.change(screen.getByLabelText("Search inbound links"), { target: { value: "source" } });
+    await waitFor(() => expect(api.getInboundLinks).toHaveBeenLastCalledWith("9", expect.stringContaining("search=source")));
   });
 
   it("shows raw HTML as escaped text without executing it", async () => {
@@ -243,6 +326,23 @@ const emptyPageList: PageList = {
   offset: 0
 };
 
+const pageFixture = {
+  id: 9,
+  resource_id: 2,
+  requested_url: "https://example.com/page",
+  final_url: "https://example.com/page",
+  http_status: 200,
+  title: "Example page",
+  depth: 1,
+  content_type: "text/html",
+  discovery_source: "https://example.com/",
+  inbound_occurrence_count: 1,
+  inbound_source_page_count: 1,
+  response_time_ms: 50,
+  fetch_state: "fetched",
+  error_type: null
+};
+
 const snapshotFixture: Snapshot = {
   id: 9,
   scan_id: 1,
@@ -295,6 +395,34 @@ const linkFixtures = [
     dom_path: "html > body > a",
     in_scope: false,
     scope_decision: "external",
-    exclusion_reason: "External host"
+    exclusion_reason: "External host",
+    discovered_at: "2026-07-30T01:00:02Z"
   }
 ];
+
+const inboundFixture = {
+  items: [
+    {
+      ...linkFixtures[0],
+      source_snapshot_id: 8,
+      source_resource_id: 3,
+      source_requested_url: "https://example.com/source",
+      source_final_url: "https://example.com/source",
+      source_page_title: "Source page",
+      source_http_status: 200,
+      source_fetch_state: "fetched",
+      source_crawl_depth: 0,
+      is_self_link: true
+    }
+  ],
+  total: 1,
+  limit: 50,
+  offset: 0,
+  summary: {
+    total_occurrences: 1,
+    unique_source_pages: 1,
+    unique_anchor_texts: 0,
+    nofollow_occurrences: 1,
+    self_link_occurrences: 1
+  }
+};

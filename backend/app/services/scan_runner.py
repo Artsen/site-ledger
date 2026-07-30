@@ -31,6 +31,10 @@ class ScanRunner:
         if task:
             task.cancel()
 
+    def is_active(self, scan_id: int) -> bool:
+        task = self.tasks.get(scan_id)
+        return task is not None and not task.done()
+
     def mark_interrupted(self) -> None:
         with self.session_factory() as db:
             db.execute(

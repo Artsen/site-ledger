@@ -32,6 +32,17 @@ export function AppShell() {
           >
             New Scan
           </NavLink>
+          <NavLink
+            to="/scans"
+            end
+            className={({ isActive }) =>
+              `rounded-md px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2 lg:mt-2 lg:block ${
+                isActive ? "bg-white text-stone-950 shadow-sm" : "text-stone-700 hover:bg-stone-200"
+              }`
+            }
+          >
+            All scans
+          </NavLink>
         </div>
 
         <div className="mt-4 hidden lg:block">

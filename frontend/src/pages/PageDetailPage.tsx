@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { getHtml, getLinks, getSnapshot } from "../api/client";
+import { getHtml, getInboundLinks, getLinks, getSnapshot } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
 import { DefinitionList } from "../components/ui/DefinitionList";
@@ -13,8 +13,8 @@ import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { UrlText } from "../components/ui/UrlText";
 import { inputClass } from "../components/ui/styles";
-import type { LinkOccurrence, Snapshot } from "../types/scans";
-import { formatBytes, formatDate, formatScopeDecision, formatStatus } from "../utils/format";
+import type { InboundLinkList, InboundLinkOccurrence, LinkOccurrence, Snapshot } from "../types/scans";
+import { formatBytes, formatDate, formatScopeDecision, formatStatus, plural } from "../utils/format";
 
 export function PageDetailPage() {
   const { scanId = "", snapshotId = "" } = useParams();
@@ -22,6 +22,8 @@ export function PageDetailPage() {
   const tab = searchParams.get("tab") ?? "overview";
   const snapshot = useQuery({ queryKey: ["snapshot", snapshotId], queryFn: () => getSnapshot(snapshotId) });
   const links = useQuery({ queryKey: ["links", snapshotId], queryFn: () => getLinks(snapshotId), enabled: tab === "links" });
+  const inboundQuery = useMemo(() => buildInboundQuery(searchParams), [searchParams]);
+  const inboundLinks = useQuery({ queryKey: ["inbound-links", snapshotId, inboundQuery], queryFn: () => getInboundLinks(snapshotId, inboundQuery), enabled: tab === "inbound" });
   const html = useQuery({ queryKey: ["html", snapshotId], queryFn: () => getHtml(snapshotId), enabled: tab === "html" });
 
   if (snapshot.isLoading) return <PageFrame><LoadingBlock label="Loading page..." /></PageFrame>;
@@ -31,7 +33,8 @@ export function PageDetailPage() {
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "head", label: "Head" },
-    { id: "links", label: "Links", count: links.data?.length },
+    { id: "links", label: "Outgoing links", count: links.data?.length },
+    { id: "inbound", label: "Inbound links", count: inboundLinks.data?.summary.total_occurrences },
     { id: "html", label: "HTML" }
   ];
 
@@ -58,9 +61,129 @@ export function PageDetailPage() {
         {tab === "overview" ? <Overview snapshot={snapshot.data} /> : null}
         {tab === "head" ? <HeadView snapshot={snapshot.data} /> : null}
         {tab === "links" ? <LinksView links={links.data ?? []} loading={links.isLoading} error={links.error} /> : null}
+        {tab === "inbound" ? <InboundLinksView inbound={inboundLinks.data} loading={inboundLinks.isLoading} error={inboundLinks.error} searchParams={searchParams} setSearchParams={setSearchParams} scanId={scanId} /> : null}
         {tab === "html" ? <HtmlView html={html.data ?? ""} loading={html.isLoading} error={html.error} /> : null}
       </div>
     </PageFrame>
+  );
+}
+
+function InboundLinksView({
+  inbound,
+  loading,
+  error,
+  searchParams,
+  setSearchParams,
+  scanId
+}: {
+  inbound?: InboundLinkList;
+  loading: boolean;
+  error: unknown;
+  searchParams: URLSearchParams;
+  setSearchParams: ReturnType<typeof useSearchParams>[1];
+  scanId: string;
+}) {
+  if (error) return <ErrorBanner error={error} title="Could not load inbound links" />;
+  if (loading) return <LoadingBlock label="Loading inbound links..." />;
+  if (!inbound) return null;
+  return (
+    <div className="space-y-4">
+      <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-3 text-base font-semibold">Inbound link summary</h2>
+        <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
+          <Metric label="Occurrences" value={inbound.summary.total_occurrences} />
+          <Metric label="Unique source pages" value={inbound.summary.unique_source_pages} />
+          <Metric label="Anchor texts" value={inbound.summary.unique_anchor_texts} />
+          <Metric label="Nofollow" value={inbound.summary.nofollow_occurrences} />
+          <Metric label="Self links" value={inbound.summary.self_link_occurrences} />
+        </div>
+      </section>
+      <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+          <input aria-label="Search inbound links" value={searchParams.get("inbound_search") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "inbound_search", event.target.value || null)} placeholder="Search source, href, or anchor" className={`${inputClass()} md:col-span-2`} />
+          <input aria-label="Inbound scope decision" value={searchParams.get("scope_decision") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "scope_decision", event.target.value || null)} placeholder="Scope decision" className={inputClass()} />
+          <input aria-label="Inbound source status" type="number" value={searchParams.get("source_status") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "source_status", event.target.value || null)} placeholder="Source status" className={inputClass()} />
+          <input aria-label="Inbound rel filter" value={searchParams.get("rel") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "rel", event.target.value || null)} placeholder="rel contains" className={inputClass()} />
+        </div>
+        <div className="mt-3">
+          <Button type="button" variant="ghost" onClick={() => setSearchParams(tabOnly(searchParams, "inbound"))}>Clear filters</Button>
+        </div>
+      </section>
+      {!inbound.items.length ? <EmptyState title={hasInboundFilters(searchParams) ? "No inbound links match" : "No inbound links"} message={hasInboundFilters(searchParams) ? "Clear filters or broaden the search." : "No pages in this scan link to this page."} /> : <InboundTable items={inbound.items} scanId={scanId} />}
+      <InboundPagination inbound={inbound} searchParams={searchParams} setSearchParams={setSearchParams} />
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2">
+      <div className="text-xs font-medium uppercase text-stone-500">{label}</div>
+      <div className="mt-1 text-xl font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function InboundTable({ items, scanId }: { items: InboundLinkOccurrence[]; scanId: string }) {
+  return (
+    <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
+      <table className="min-w-full text-left text-sm">
+        <thead className="bg-stone-100 text-xs uppercase text-stone-500">
+          <tr>{["Source page", "Status", "Depth", "Anchor text", "Raw href", "rel", "Decision", "Provenance"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
+        </thead>
+        <tbody>
+          {items.map((link) => (
+            <tr key={link.id} className="border-t border-stone-100 align-top">
+              <td className="max-w-sm px-3 py-2">
+                <Link to={`/scans/${scanId}/pages/${link.source_snapshot_id}`} className="block min-w-0 underline">
+                  <span className="block truncate">{link.source_page_title || "Untitled source page"}</span>
+                  <span className="block truncate font-mono text-xs text-stone-500">{link.source_final_url ?? link.source_requested_url}</span>
+                </Link>
+                {link.is_self_link ? <span className="mt-1 inline-block rounded-md bg-amber-50 px-2 py-0.5 text-xs text-amber-800">Self link</span> : null}
+              </td>
+              <td className="px-3 py-2">{link.source_http_status ?? "Not available"}</td>
+              <td className="px-3 py-2">{link.source_crawl_depth}</td>
+              <td className="max-w-xs px-3 py-2">
+                {link.anchor_text || link.aria_label || link.title || <span className="text-stone-500">No visible anchor text</span>}
+                {link.rel?.toLowerCase().includes("nofollow") ? <span className="mt-1 block rounded-md bg-stone-100 px-2 py-0.5 text-xs text-stone-700">nofollow</span> : null}
+              </td>
+              <td className="max-w-sm px-3 py-2"><UrlText value={link.raw_href} secondary /></td>
+              <td className="max-w-xs px-3 py-2 text-xs text-stone-600">{link.rel ?? "None"}</td>
+              <td className="px-3 py-2"><StatusBadge status={link.in_scope ? "completed" : "interrupted"} label={formatScopeDecision(link.scope_decision)} /></td>
+              <td className="max-w-sm px-3 py-2 text-xs">
+                <details>
+                  <summary className="cursor-pointer font-medium text-stone-700">Details</summary>
+                  <dl className="mt-2 space-y-1 text-stone-600">
+                    <dt className="font-medium">Resolved URL</dt>
+                    <dd><UrlText value={link.resolved_url} secondary /></dd>
+                    <dt className="font-medium">DOM location</dt>
+                    <dd className="break-all font-mono">{link.dom_path ?? "Not available"}</dd>
+                    <dt className="font-medium">Attributes</dt>
+                    <dd>{[link.target ? `target=${link.target}` : "", link.title ? `title=${link.title}` : "", link.aria_label ? `aria-label=${link.aria_label}` : ""].filter(Boolean).join(" | ") || "None"}</dd>
+                    <dt className="font-medium">Discovered</dt>
+                    <dd>{formatDate(link.discovered_at)}</dd>
+                  </dl>
+                </details>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function InboundPagination({ inbound, searchParams, setSearchParams }: { inbound: InboundLinkList; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {
+  const limit = inbound.limit;
+  const offset = inbound.offset;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
+      <span>{plural(inbound.total, "inbound occurrence")}</span>
+      <div className="flex gap-2">
+        <Button type="button" disabled={offset <= 0} onClick={() => setInboundOffset(setSearchParams, searchParams, Math.max(0, offset - limit))}>Previous</Button>
+        <Button type="button" disabled={offset + limit >= inbound.total} onClick={() => setInboundOffset(setSearchParams, searchParams, offset + limit)}>Next</Button>
+      </div>
+    </div>
   );
 }
 
@@ -356,4 +479,54 @@ function tryPrettyJson(value: string) {
   } catch {
     return { valid: false, value };
   }
+}
+
+function buildInboundQuery(searchParams: URLSearchParams) {
+  const params = new URLSearchParams();
+  const mappings: Array<[string, string]> = [
+    ["inbound_search", "search"],
+    ["scope_decision", "scope_decision"],
+    ["source_status", "source_status"],
+    ["rel", "rel"],
+    ["inbound_limit", "limit"],
+    ["inbound_offset", "offset"]
+  ];
+  for (const [from, to] of mappings) {
+    const value = searchParams.get(from);
+    if (value) params.set(to, value);
+  }
+  return `?${params.toString()}`;
+}
+
+function updateInboundParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string | null) {
+  setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    next.set("tab", "inbound");
+    if (value) next.set(key, value);
+    else next.delete(key);
+    next.delete("inbound_offset");
+    return next;
+  });
+}
+
+function setInboundOffset(setSearchParams: ReturnType<typeof useSearchParams>[1], searchParams: URLSearchParams, offset: number) {
+  setSearchParams(() => {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", "inbound");
+    next.set("inbound_offset", String(offset));
+    return next;
+  });
+}
+
+function tabOnly(searchParams: URLSearchParams, tab: string) {
+  const next = new URLSearchParams(searchParams);
+  for (const key of ["inbound_search", "scope_decision", "source_status", "rel", "inbound_offset"]) {
+    next.delete(key);
+  }
+  next.set("tab", tab);
+  return next;
+}
+
+function hasInboundFilters(searchParams: URLSearchParams) {
+  return ["inbound_search", "scope_decision", "source_status", "rel"].some((key) => searchParams.has(key));
 }

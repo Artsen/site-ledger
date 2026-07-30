@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-test("mocked scan workflow supports creation, filtering, details, and safe HTML", async ({ page }) => {
+test("mocked scan workflow supports creation, filtering, details, inbound links, and deletion", async ({ page }) => {
   await mockApi(page);
 
   await page.goto("/scans/new");
@@ -16,7 +16,7 @@ test("mocked scan workflow supports creation, filtering, details, and safe HTML"
   await page.getByRole("button", { name: "Start scan" }).click();
 
   await expect(page).toHaveURL(/\/scans\/1$/);
-  await expect(page.getByText("Running")).toBeVisible();
+  await expect(page.getByText("Running").first()).toBeVisible();
   await expect(page.getByText("Fetched 1 of 3 discovered pages")).toBeVisible();
 
   await page.reload();
@@ -36,9 +36,15 @@ test("mocked scan workflow supports creation, filtering, details, and safe HTML"
   await expect(page.getByText("Basic metadata")).toBeVisible();
   await expect(page.getByText("Open Graph")).toBeVisible();
 
-  await page.getByRole("tab", { name: /Links/i }).click();
+  await page.getByRole("tab", { name: /Outgoing links/i }).click();
   await expect(page.getByRole("table").getByText("External", { exact: true })).toBeVisible();
   await expect(page.getByText("No visible text")).toBeVisible();
+
+  await page.getByRole("tab", { name: /Inbound links/i }).click();
+  await expect(page.getByText("Inbound link summary")).toBeVisible();
+  await expect(page.getByRole("link", { name: /Source page/ })).toBeVisible();
+  await page.getByLabel("Search inbound links").fill("source");
+  await expect(page).toHaveURL(/inbound_search=source/);
 
   await page.getByRole("tab", { name: "HTML" }).click();
   await expect(page.getByLabel("Escaped HTML source")).toContainText("<script>window.executed = true</script>");
@@ -46,6 +52,15 @@ test("mocked scan workflow supports creation, filtering, details, and safe HTML"
 
   await page.getByRole("link", { name: "Back to page results" }).click();
   await expect(page).toHaveURL(/\/scans\/1\?tab=pages/);
+
+  await page.getByRole("link", { name: "All scans" }).click();
+  await page.getByLabel("Search scans").fill("example");
+  await page.getByLabel("Scan status").selectOption("completed");
+  await expect(page).toHaveURL(/search=example/);
+  await page.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("dialog", { name: "Delete this scan?" })).toBeVisible();
+  await page.getByRole("button", { name: "Delete scan" }).click();
+  await expect(page.getByText("Scan deleted.")).toBeVisible();
 });
 
 async function mockApi(page: Page) {
@@ -59,7 +74,29 @@ async function mockApi(page: Page) {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([{ ...scan, status: scanStatus }]) });
   });
 
+  await page.route("**/api/scans/history**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ ...scan, status: "completed", finished_at: "2026-07-30T01:00:03Z" }], total: 1, limit: 25, offset: 0 }) });
+  });
+
   await page.route("**/api/scans/1", async (route) => {
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          deleted_scan_id: 1,
+          snapshots_deleted: 1,
+          link_occurrences_deleted: 1,
+          resources_deleted: 1,
+          html_blob_records_deleted: 1,
+          html_blob_files_deleted: 1,
+          html_blobs_deleted: 1,
+          raw_html_bytes_reclaimed: 1200,
+          stored_html_bytes_reclaimed: 480,
+          warnings: []
+        })
+      });
+      return;
+    }
     const body = { ...scan, status: scanStatus };
     scanStatus = "completed";
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
@@ -76,12 +113,67 @@ async function mockApi(page: Page) {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
   });
 
+  await page.route("**/api/scans/1/delete-preview", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        scan_id: 1,
+        starting_url: "https://example.com/",
+        can_delete: true,
+        status: "completed",
+        snapshots: 1,
+        link_occurrences: 1,
+        unique_resources: 1,
+        html_blobs_referenced: 1,
+        exclusive_html_blobs: 1,
+        shared_html_blobs: 0,
+        html_blobs_deleted: 1,
+        raw_html_bytes_reclaimable: 1200,
+        stored_html_bytes_reclaimable: 480,
+        reason: null,
+        warnings: []
+      })
+    });
+  });
+
   await page.route("**/api/snapshots/9", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(snapshot) });
   });
 
   await page.route("**/api/snapshots/9/links", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(links) });
+  });
+
+  await page.route("**/api/snapshots/9/inbound-links**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          {
+            ...links[0],
+            source_snapshot_id: 9,
+            source_resource_id: 2,
+            source_requested_url: "https://example.com/pricing",
+            source_final_url: "https://example.com/pricing",
+            source_page_title: "Source page",
+            source_http_status: 200,
+            source_fetch_state: "fetched",
+            source_crawl_depth: 1,
+            is_self_link: true
+          }
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+        summary: {
+          total_occurrences: 1,
+          unique_source_pages: 1,
+          unique_anchor_texts: 0,
+          nofollow_occurrences: 1,
+          self_link_occurrences: 1
+        }
+      })
+    });
   });
 
   await page.route("**/api/snapshots/9/html", async (route) => {
@@ -136,6 +228,7 @@ const pageRow = {
   content_type: "text/html",
   discovery_source: "https://example.com/",
   inbound_occurrence_count: 1,
+  inbound_source_page_count: 1,
   response_time_ms: 87,
   fetch_state: "fetched",
   error_type: null
@@ -193,6 +286,7 @@ const links = [
     dom_path: "html > body > a",
     in_scope: false,
     scope_decision: "external",
-    exclusion_reason: "External host"
+    exclusion_reason: "External host",
+    discovered_at: "2026-07-30T01:00:02Z"
   }
 ];

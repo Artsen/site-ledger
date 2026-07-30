@@ -1,12 +1,29 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import ResourceOccurrence, ResourceSnapshot, Scan, WebResource
-from app.schemas.scans import LinkRead, PageList, PageRead, ScanCreate, ScanRead, SnapshotRead
+from app.models import ResourceOccurrence, ResourceSnapshot, Scan
+from app.schemas.scans import (
+    InboundLinkList,
+    LinkRead,
+    PageList,
+    ScanCreate,
+    ScanDeletePreview,
+    ScanDeleteResult,
+    ScanHistory,
+    ScanRead,
+    SnapshotRead,
+)
+from app.services.scan_deletion import delete_scan as delete_scan_service
+from app.services.scan_deletion import preview_scan_deletion
+from app.services.scan_queries import (
+    list_scan_history,
+    list_scan_pages,
+    list_snapshot_inbound_links,
+)
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
 router = APIRouter(prefix="/api")
@@ -40,6 +57,29 @@ def list_scans(db: DbSession, limit: ScanListLimit = 25) -> list[Scan]:
     return list(db.scalars(select(Scan).order_by(Scan.created_at.desc()).limit(limit)))
 
 
+@router.get("/scans/history", response_model=ScanHistory)
+def get_scan_history(
+    db: DbSession,
+    search: str | None = None,
+    status: str | None = None,
+    sort: Literal[
+        "created_at", "started_at", "finished_at", "status", "starting_url"
+    ] = "created_at",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: ScanListLimit = 50,
+    offset: PageOffset = 0,
+) -> ScanHistory:
+    return list_scan_history(
+        db,
+        search=search,
+        status=status,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.get("/scans/{scan_id}", response_model=ScanRead)
 def get_scan(scan_id: int, db: DbSession) -> Scan:
     scan = db.get(Scan, scan_id)
@@ -56,6 +96,33 @@ async def cancel_scan(scan_id: int, request: Request, db: DbSession) -> Scan:
         raise HTTPException(404, "Scan not found")
     db.refresh(scan)
     return scan
+
+
+@router.get("/scans/{scan_id}/delete-preview", response_model=ScanDeletePreview)
+def get_delete_preview(scan_id: int, db: DbSession) -> ScanDeletePreview:
+    preview = preview_scan_deletion(db, scan_id)
+    if preview is None:
+        raise HTTPException(404, "Scan not found")
+    return preview
+
+
+@router.get("/scans/{scan_id}/deletion-summary", response_model=ScanDeletePreview)
+def get_deletion_summary(scan_id: int, db: DbSession) -> ScanDeletePreview:
+    return get_delete_preview(scan_id, db)
+
+
+@router.delete("/scans/{scan_id}", response_model=ScanDeleteResult)
+def delete_scan(scan_id: int, request: Request, db: DbSession) -> ScanDeleteResult:
+    if request.app.state.scan_runner.is_active(scan_id):
+        raise HTTPException(409, "The scan must finish or be cancelled before it can be deleted.")
+    store: LocalContentStore = request.app.state.content_store
+    try:
+        result = delete_scan_service(db, scan_id, store)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Scan not found")
+    return result
 
 
 @router.get("/scans/{scan_id}/pages", response_model=PageList)
@@ -75,63 +142,22 @@ def list_pages(
     limit: PageLimit = 50,
     offset: PageOffset = 0,
 ) -> PageList:
-    base = (
-        select(ResourceSnapshot, WebResource)
-        .join(WebResource)
-        .where(ResourceSnapshot.scan_id == scan_id)
+    return list_scan_pages(
+        db,
+        scan_id,
+        search,
+        status,
+        host,
+        path_prefix,
+        depth,
+        min_depth,
+        max_depth,
+        error_state,
+        sort,
+        direction,
+        limit,
+        offset,
     )
-    base = _apply_page_filters(
-        base, search, status, host, path_prefix, depth, min_depth, max_depth, error_state
-    )
-    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
-    sort_map = {
-        "requested_url": ResourceSnapshot.requested_url,
-        "status": ResourceSnapshot.http_status,
-        "title": ResourceSnapshot.page_title,
-        "depth": ResourceSnapshot.crawl_depth,
-        "duration": ResourceSnapshot.response_time_ms,
-    }
-    order_col = sort_map[sort]
-    base = (
-        base.order_by(order_col.desc() if direction == "desc" else order_col.asc())
-        .limit(limit)
-        .offset(offset)
-    )
-    rows = db.execute(base).all()
-    items: list[PageRead] = []
-    for snapshot, resource in rows:
-        inbound = (
-            db.scalar(
-                select(func.count(ResourceOccurrence.id)).where(
-                    ResourceOccurrence.target_resource_id == resource.id
-                )
-            )
-            or 0
-        )
-        source = db.scalar(
-            select(ResourceSnapshot.final_url)
-            .join(ResourceOccurrence, ResourceOccurrence.source_snapshot_id == ResourceSnapshot.id)
-            .where(ResourceOccurrence.target_resource_id == resource.id)
-            .limit(1)
-        )
-        items.append(
-            PageRead(
-                id=snapshot.id,
-                resource_id=resource.id,
-                requested_url=snapshot.requested_url,
-                final_url=snapshot.final_url,
-                http_status=snapshot.http_status,
-                title=snapshot.page_title,
-                depth=snapshot.crawl_depth,
-                content_type=snapshot.content_type,
-                discovery_source=source,
-                inbound_occurrence_count=inbound,
-                response_time_ms=snapshot.response_time_ms,
-                fetch_state=snapshot.fetch_state,
-                error_type=snapshot.error_type,
-            )
-        )
-    return PageList(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/scans/{scan_id}/errors", response_model=list[SnapshotRead])
@@ -165,6 +191,36 @@ def get_snapshot_links(snapshot_id: int, db: DbSession) -> list[ResourceOccurren
     )
 
 
+@router.get("/snapshots/{snapshot_id}/inbound-links", response_model=InboundLinkList)
+def get_snapshot_inbound_links(
+    snapshot_id: int,
+    db: DbSession,
+    search: str | None = None,
+    scope_decision: str | None = None,
+    source_status: int | None = None,
+    rel: str | None = None,
+    sort: Literal["source_url", "anchor_text", "scope_decision", "source_status"] = "source_url",
+    direction: Literal["asc", "desc"] = "asc",
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> InboundLinkList:
+    links = list_snapshot_inbound_links(
+        db,
+        snapshot_id=snapshot_id,
+        search=search,
+        scope_decision=scope_decision,
+        source_status=source_status,
+        rel=rel,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+    if links is None:
+        raise HTTPException(404, "Snapshot not found")
+    return links
+
+
 @router.get("/snapshots/{snapshot_id}/html")
 def get_snapshot_html(snapshot_id: int, request: Request, db: DbSession) -> Response:
     snapshot = db.get(ResourceSnapshot, snapshot_id)
@@ -190,42 +246,3 @@ def get_resource_occurrences(resource_id: int, db: DbSession) -> list[ResourceOc
             select(ResourceOccurrence).where(ResourceOccurrence.target_resource_id == resource_id)
         )
     )
-
-
-def _apply_page_filters(
-    query: Select[tuple[ResourceSnapshot, WebResource]],
-    search: str | None,
-    status: int | None,
-    host: str | None,
-    path_prefix: str | None,
-    depth: int | None,
-    min_depth: int | None,
-    max_depth: int | None,
-    error_state: str,
-) -> Select[tuple[ResourceSnapshot, WebResource]]:
-    if search:
-        pattern = f"%{search}%"
-        query = query.where(
-            or_(
-                ResourceSnapshot.requested_url.ilike(pattern),
-                ResourceSnapshot.final_url.ilike(pattern),
-                ResourceSnapshot.page_title.ilike(pattern),
-            )
-        )
-    if status is not None:
-        query = query.where(ResourceSnapshot.http_status == status)
-    if host:
-        query = query.where(WebResource.host == host.lower())
-    if path_prefix:
-        query = query.where(WebResource.path.startswith(path_prefix))
-    if depth is not None:
-        query = query.where(ResourceSnapshot.crawl_depth == depth)
-    if min_depth is not None:
-        query = query.where(ResourceSnapshot.crawl_depth >= min_depth)
-    if max_depth is not None:
-        query = query.where(ResourceSnapshot.crawl_depth <= max_depth)
-    if error_state == "with_errors":
-        query = query.where(ResourceSnapshot.error_type.is_not(None))
-    elif error_state == "without_errors":
-        query = query.where(ResourceSnapshot.error_type.is_(None))
-    return query

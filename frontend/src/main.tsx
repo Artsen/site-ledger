@@ -6,6 +6,7 @@ import { Navigate, RouterProvider, createBrowserRouter } from "react-router-dom"
 import { AppShell } from "./components/AppShell";
 import { PageDetailPage } from "./pages/PageDetailPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
+import { ScansPage } from "./pages/ScansPage";
 import { NewScanPage } from "./pages/NewScanPage";
 import "./styles/index.css";
 
@@ -15,6 +16,7 @@ const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { index: true, element: <Navigate to="/scans/new" replace /> },
+      { path: "scans", element: <ScansPage /> },
       { path: "scans/new", element: <NewScanPage /> },
       { path: "scans/:scanId", element: <ScanDetailPage /> },
       { path: "scans/:scanId/pages/:snapshotId", element: <PageDetailPage /> }

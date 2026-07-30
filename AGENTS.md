@@ -437,6 +437,22 @@ Page detail tabs:
 - Links
 - HTML
 
+PR 3 extends this to:
+
+- `/scans` as the complete, server-paginated All Scans history route.
+- Page detail tabs named Outgoing links and Inbound links.
+- `GET /api/scans/history` for full scan history.
+- `GET /api/snapshots/{snapshot_id}/inbound-links` for same-scan direct inbound occurrences.
+- `GET /api/scans/{scan_id}/deletion-summary` and `DELETE /api/scans/{scan_id}` for terminal-only scan deletion.
+
+Inbound links are direct stored occurrences whose target resource matches the selected page resource
+inside the same scan. Do not infer inbound attribution through redirects unless a future PR adds a
+dependable final-resource identity model.
+
+Scan deletion must remain reference-aware: preserve shared HTML blobs, delete only unreferenced
+blob records and files after database cleanup commits, and remove `WebResource` rows only when no
+remaining snapshot or occurrence references them.
+
 The page table should include requested URL, final URL, status, title, depth, content type, discovery source, inbound occurrence count, fetch duration, and error state.
 
 Favor clarity and density over decorative dashboard cards. The graph visualization is not part of PR 1.
