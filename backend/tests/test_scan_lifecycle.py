@@ -5,7 +5,11 @@ from sqlalchemy.orm import Session
 
 from app.models import ContentBlob, ResourceOccurrence, ResourceSnapshot, Scan, WebResource
 from app.services.scan_deletion import delete_scan, preview_scan_deletion
-from app.services.scan_queries import list_scan_pages, list_snapshot_inbound_links
+from app.services.scan_queries import (
+    list_scan_history,
+    list_scan_pages,
+    list_snapshot_inbound_links,
+)
 from app.storage.content_store import LocalContentStore
 
 
@@ -113,6 +117,11 @@ def test_deleting_scan_preserves_other_scan_counts_and_shared_blobs(
     db_session: Session, tmp_path: Path
 ) -> None:
     scan_a, scan_b, target_resource = _two_scan_graph(db_session)
+    scan_a_only_resource = (
+        db_session.query(WebResource)
+        .filter_by(normalized_url="https://example.com/scan-a-source")
+        .one()
+    )
     store = LocalContentStore(tmp_path)
     shared_blob = store.put_html(db_session, b"<html>shared</html>", "text/html", "utf-8")
     unique_blob = store.put_html(db_session, b"<html>unique</html>", "text/html", "utf-8")
@@ -142,14 +151,23 @@ def test_deleting_scan_preserves_other_scan_counts_and_shared_blobs(
     assert preview.can_delete is True
     assert preview.html_blobs_referenced == 2
     assert preview.html_blobs_deleted == 1
+    assert preview.exclusive_html_blobs == 1
+    assert preview.shared_html_blobs == 1
+    assert preview.unique_resources == 3
 
     result = delete_scan(db_session, scan_a.id, store)
     assert result is not None
     assert result.html_blobs_deleted == 1
+    assert result.html_blob_records_deleted == 1
+    assert result.html_blob_files_deleted == 1
+    assert result.resources_deleted == 1
+    assert result.warnings == []
     assert db_session.get(ContentBlob, shared_blob.id) is not None
     assert db_session.get(ContentBlob, unique_blob.id) is None
     assert (tmp_path / shared_blob.storage_key).exists()
     assert not (tmp_path / unique_blob.storage_key).exists()
+    assert db_session.get(WebResource, scan_a_only_resource.id) is None
+    assert db_session.get(WebResource, target_resource.id) is not None
 
     scan_b_result = list_scan_pages(
         db_session,
@@ -186,9 +204,106 @@ def test_running_scan_cannot_be_deleted(db_session: Session, tmp_path: Path) -> 
     try:
         delete_scan(db_session, scan.id, LocalContentStore(tmp_path))
     except ValueError as exc:
-        assert "terminal scans" in str(exc)
+        assert "must finish or be cancelled" in str(exc)
     else:
         raise AssertionError("running scan delete should fail")
+
+
+def test_scan_history_filters_and_sorts_server_side(db_session: Session) -> None:
+    completed = _scan(db_session, "https://alpha.example/")
+    failed = _scan(db_session, "https://beta.example/")
+    failed.status = "failed"
+    db_session.commit()
+
+    result = list_scan_history(
+        db_session,
+        search="beta",
+        status="failed",
+        sort="starting_url",
+        direction="asc",
+        limit=10,
+        offset=0,
+    )
+
+    assert result.total == 1
+    assert result.items[0].id == failed.id
+    assert completed.id != failed.id
+
+
+def test_inbound_links_filters_pagination_empty_and_missing_snapshot(db_session: Session) -> None:
+    scan_a, _, target_resource = _two_scan_graph(db_session)
+    target = (
+        db_session.query(ResourceSnapshot)
+        .filter_by(scan_id=scan_a.id, resource_id=target_resource.id)
+        .one()
+    )
+
+    filtered = list_snapshot_inbound_links(
+        db_session,
+        snapshot_id=target.id,
+        search=None,
+        scope_decision="crawlable",
+        source_status=200,
+        rel="nofollow",
+        limit=1,
+        offset=0,
+    )
+    assert filtered is not None
+    assert filtered.total == 1
+    assert filtered.items[0].rel == "nofollow"
+    assert filtered.items[0].source_resource_id is not None
+    assert filtered.items[0].discovered_at is not None
+
+    empty = list_snapshot_inbound_links(
+        db_session,
+        snapshot_id=target.id,
+        search="does-not-match",
+        scope_decision=None,
+        source_status=None,
+        rel=None,
+        limit=10,
+        offset=0,
+    )
+    assert empty is not None
+    assert empty.total == 0
+    assert empty.items == []
+
+    assert (
+        list_snapshot_inbound_links(
+            db_session,
+            snapshot_id=999999,
+            search=None,
+            scope_decision=None,
+            source_status=None,
+            rel=None,
+            limit=10,
+            offset=0,
+        )
+        is None
+    )
+
+
+def test_terminal_statuses_can_be_deleted_and_missing_blob_warns(
+    db_session: Session, tmp_path: Path
+) -> None:
+    for status in ["completed_with_errors", "failed", "cancelled", "interrupted"]:
+        scan = _scan(db_session, f"https://{status}.example/")
+        scan.status = status
+        resource = _resource(db_session, f"https://{status}.example/page", "/page")
+        snapshot = _snapshot(db_session, scan, resource, f"https://{status}.example/page", status)
+        store = LocalContentStore(tmp_path / status)
+        blob = store.put_html(db_session, f"<html>{status}</html>".encode(), "text/html", "utf-8")
+        snapshot.html_blob_id = blob.id
+        db_session.commit()
+        (tmp_path / status / blob.storage_key).unlink()
+
+        result = delete_scan(db_session, scan.id, store)
+
+        assert result is not None
+        assert result.deleted_scan_id == scan.id
+        assert result.html_blob_files_deleted == 0
+        assert result.warnings
+        assert db_session.get(Scan, scan.id) is None
 
 
 def _two_scan_graph(db_session: Session) -> tuple[Scan, Scan, WebResource]:
