@@ -95,3 +95,18 @@ The Playwright workflow test uses mocked scanner API responses to cover frontend
 not a complete real-crawler integration test; deterministic crawler behavior remains covered by the
 backend integration tests.
 
+## Scan History, Inbound Links, and Deletion
+
+The sidebar shows recent scans, and `/scans` provides paginated scan history for older runs. Terminal
+scans can be deleted after reviewing a delete preview. Running or queued scans must be cancelled or
+finish before deletion is allowed.
+
+Page results now show scan-specific inbound link counts. Counts are limited to occurrences whose
+source page snapshot belongs to the same scan, so historical scans do not inflate each other. The
+page detail view includes an Inbound tab that lists every occurrence pointing to the current page,
+including duplicate links and self-links, with source page metadata and provenance.
+
+Deleting a scan removes its snapshots and link occurrences. HTML blobs are deleted through the
+content-store abstraction only when no remaining scan references them; shared blobs stay available
+for other scans.
+

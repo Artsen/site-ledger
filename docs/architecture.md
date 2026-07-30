@@ -49,6 +49,23 @@ The page detail view presents snapshot overview data, redirect chains, head meta
 occurrences, and raw HTML without using raw JSON as the primary interface. Raw HTML remains escaped
 and non-executable in the dashboard; the HTML endpoint remains `text/plain`.
 
+## PR 3 Inbound Links and Scan Lifecycle
+
+Inbound link counts and discovery sources are computed with set-based scan-specific queries in
+`services.scan_queries`. Occurrences are counted only when their source snapshot belongs to the same
+scan as the target page snapshot. Page-list aggregation returns both total inbound occurrences and
+unique source-page counts without per-row SQL loops.
+
+`GET /api/snapshots/{snapshot_id}/inbound-links` returns a paginated, typed list of every inbound
+link occurrence for the target snapshot's scan and resource, plus summary counts for total
+occurrences, unique source pages, unique anchor texts, nofollow occurrences, and self-links.
+
+`services.scan_deletion` owns scan deletion preview and execution. It allows deletion only for
+terminal scans, deletes source occurrences and snapshots explicitly, and removes unreferenced
+content blobs through the content-store abstraction. Blobs referenced by another scan are preserved.
+The local content store exposes `delete()` so later object-storage implementations can provide the
+same lifecycle operation.
+
 ## Deferred
 
 Robots.txt enforcement and concurrent crawling remain internal configuration placeholders for a
