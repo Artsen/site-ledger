@@ -15,7 +15,8 @@ describe("NewScanPage", () => {
       </QueryClientProvider>
     );
     expect(screen.getByLabelText("Starting URL")).toBeInTheDocument();
-    expect(screen.getByLabelText("Scope preset")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByText(/limited to the starting URL's hostname/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start scan" })).toBeInTheDocument();
   });
 });

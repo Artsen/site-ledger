@@ -9,7 +9,7 @@ class ScopeConfigPayload(BaseModel):
     excluded_host_patterns: list[str] = Field(default_factory=list)
     included_path_prefixes: list[str] = Field(default_factory=lambda: ["/"])
     excluded_path_prefixes: list[str] = Field(default_factory=list)
-    follow_subdomains: bool = True
+    follow_subdomains: bool = False
     max_pages: int = 100
     max_depth: int = 3
     respect_robots_txt: bool = False

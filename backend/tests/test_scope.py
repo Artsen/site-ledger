@@ -1,4 +1,4 @@
-from app.crawler.scope import ScopeConfig, ScopeEngine, techsmith_scope_preset
+from app.crawler.scope import ScopeConfig, ScopeEngine
 
 
 def test_exact_wildcard_and_excluded_hosts() -> None:
@@ -36,8 +36,24 @@ def test_already_seen_decision() -> None:
     )
 
 
-def test_techsmith_preset_is_configuration() -> None:
-    preset = techsmith_scope_preset()
-    assert "techsmith.com" in preset.allowed_host_patterns
-    assert "support.*" in preset.excluded_host_patterns
-    assert "utm_*" in preset.drop_query_parameters
+def test_empty_allowed_hosts_derive_exact_starting_hostname() -> None:
+    engine = ScopeEngine(ScopeConfig(), "https://www.example.com/")
+    assert engine.evaluate("https://www.example.com/about").decision == "crawlable"
+    assert engine.evaluate("https://example.com/").decision == "external"
+    assert engine.evaluate("https://blog.example.com/").decision == "external"
+
+
+def test_subdomain_allowed_when_follow_subdomains_enabled() -> None:
+    engine = ScopeEngine(
+        ScopeConfig(allowed_host_patterns=["example.com"], follow_subdomains=True),
+        "https://example.com/",
+    )
+    assert engine.evaluate("https://blog.example.com/").decision == "crawlable"
+
+
+def test_explicit_wildcard_host_patterns_still_work() -> None:
+    engine = ScopeEngine(
+        ScopeConfig(allowed_host_patterns=["*.example.com"], follow_subdomains=False),
+        "https://www.example.com/",
+    )
+    assert engine.evaluate("https://blog.example.com/").decision == "crawlable"

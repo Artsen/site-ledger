@@ -18,7 +18,7 @@ export const defaultScope = (): ScopeConfig => ({
   excluded_host_patterns: [],
   included_path_prefixes: ["/"],
   excluded_path_prefixes: ["/wp-admin/", "/wp-login.php"],
-  follow_subdomains: true,
+  follow_subdomains: false,
   max_pages: 100,
   max_depth: 3,
   respect_robots_txt: false,
@@ -30,25 +30,6 @@ export const defaultScope = (): ScopeConfig => ({
   drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
   allow_private_networks: false,
   max_redirects: 10
-});
-
-export const techSmithScope = (): ScopeConfig => ({
-  ...defaultScope(),
-  allowed_host_patterns: [
-    "techsmith.com",
-    "*.techsmith.com",
-    "techsmith.de",
-    "*.techsmith.de",
-    "techsmith.fr",
-    "*.techsmith.fr",
-    "techsmith.es",
-    "*.techsmith.es",
-    "techsmith.co.jp",
-    "*.techsmith.co.jp",
-    "techsmith.pt",
-    "*.techsmith.pt"
-  ],
-  excluded_host_patterns: ["support.*"]
 });
 
 export function createScan(startingUrl: string, scopeConfig: ScopeConfig) {

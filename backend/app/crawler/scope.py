@@ -13,7 +13,7 @@ class ScopeConfig:
     excluded_host_patterns: list[str] = field(default_factory=list)
     included_path_prefixes: list[str] = field(default_factory=lambda: ["/"])
     excluded_path_prefixes: list[str] = field(default_factory=list)
-    follow_subdomains: bool = True
+    follow_subdomains: bool = False
     max_pages: int = 100
     max_depth: int = 3
     respect_robots_txt: bool = False
@@ -77,7 +77,7 @@ class ScopeEngine:
     ) -> ScopeResult:
         try:
             normalized = normalize_url(raw_url, base_url, self.config.drop_query_parameters)
-        except UrlNormalizationError as exc:
+        except (UrlNormalizationError, ValueError) as exc:
             message = str(exc)
             decision = "unsupported_scheme" if "unsupported scheme" in message else "invalid_url"
             return ScopeResult(decision, False, None, message)
@@ -109,28 +109,6 @@ class ScopeEngine:
                 "already_seen", False, normalized, "URL was already queued or fetched"
             )
         return ScopeResult("crawlable", True, normalized)
-
-
-def techsmith_scope_preset() -> ScopeConfig:
-    return ScopeConfig(
-        allowed_host_patterns=[
-            "techsmith.com",
-            "*.techsmith.com",
-            "techsmith.de",
-            "*.techsmith.de",
-            "techsmith.fr",
-            "*.techsmith.fr",
-            "techsmith.es",
-            "*.techsmith.es",
-            "techsmith.co.jp",
-            "*.techsmith.co.jp",
-            "techsmith.pt",
-            "*.techsmith.pt",
-        ],
-        excluded_host_patterns=["support.*"],
-        excluded_path_prefixes=["/wp-admin/", "/wp-login.php"],
-        drop_query_parameters=["utm_*", "gclid", "fbclid", "msclkid"],
-    )
 
 
 def _host_matches_any(host: str, patterns: list[str], follow_subdomains: bool) -> bool:
