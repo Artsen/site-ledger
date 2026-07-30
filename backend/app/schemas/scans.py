@@ -83,6 +83,8 @@ class SnapshotRead(BaseModel):
     response_time_ms: int | None
     response_headers: dict[str, Any] | None
     redirect_chain: list[dict[str, Any]] | None
+    html_raw_byte_size: int | None = None
+    html_stored_byte_size: int | None = None
     raw_html_sha256: str | None
     head_sha256: str | None
     page_title: str | None

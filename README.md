@@ -70,3 +70,28 @@ frontend/backend/fixture orchestration remains a follow-up for PR 1 hardening.
 
 Runtime databases and captured HTML are written under `data/` and ignored by Git.
 
+## Scan Workflow UI
+
+The new scan form accepts a bare hostname such as `example.com` and converts it to
+`https://example.com/` before submission. Client-side validation rejects missing URLs, invalid
+URLs, unsupported schemes, hostless URLs, and invalid numeric limits before the API request is sent.
+Backend validation remains the source of truth.
+
+Advanced scope lists are edited as raw textarea content and parsed only when the scan is created.
+Use one value per line; blank lines are ignored. Non-sensitive preferences are remembered in local
+storage for maximum pages, maximum depth, and whether the advanced settings section was expanded.
+Host/path/query scope values are not reused automatically across unrelated scans.
+
+The scan detail route uses URL state for tabs and page filters. Supported page filter parameters
+include `tab`, `search`, `status`, `host`, `path_prefix`, `min_depth`, `max_depth`, `error_state`,
+`sort`, `direction`, `limit`, and `offset`. Search is debounced and sent to the existing server-side
+page API rather than filtering an incomplete client-side result set.
+
+Stored HTML is always displayed as escaped text in a monospace source viewer. The dashboard does not
+execute stored HTML and does not use `dangerouslySetInnerHTML`; the raw HTML API continues to return
+`text/plain`.
+
+The Playwright workflow test uses mocked scanner API responses to cover frontend UX behavior. It is
+not a complete real-crawler integration test; deterministic crawler behavior remains covered by the
+backend integration tests.
+

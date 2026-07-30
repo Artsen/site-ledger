@@ -1,78 +1,359 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { getHtml, getLinks, getSnapshot } from "../api/client";
+import { Button } from "../components/ui/Button";
+import { CopyButton } from "../components/ui/CopyButton";
+import { DefinitionList } from "../components/ui/DefinitionList";
+import { EmptyState } from "../components/ui/EmptyState";
+import { ErrorBanner } from "../components/ui/ErrorBanner";
+import { LoadingBlock } from "../components/ui/Loading";
+import { StatusBadge } from "../components/ui/StatusBadge";
+import { Tabs } from "../components/ui/Tabs";
+import { UrlText } from "../components/ui/UrlText";
+import { inputClass } from "../components/ui/styles";
+import type { LinkOccurrence, Snapshot } from "../types/scans";
+import { formatBytes, formatDate, formatScopeDecision, formatStatus } from "../utils/format";
 
 export function PageDetailPage() {
   const { scanId = "", snapshotId = "" } = useParams();
-  const [tab, setTab] = useState("overview");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get("tab") ?? "overview";
   const snapshot = useQuery({ queryKey: ["snapshot", snapshotId], queryFn: () => getSnapshot(snapshotId) });
   const links = useQuery({ queryKey: ["links", snapshotId], queryFn: () => getLinks(snapshotId), enabled: tab === "links" });
   const html = useQuery({ queryKey: ["html", snapshotId], queryFn: () => getHtml(snapshotId), enabled: tab === "html" });
 
-  if (snapshot.isLoading) return <div className="p-8">Loading page...</div>;
-  if (!snapshot.data) return <div className="p-8">Page not found.</div>;
+  if (snapshot.isLoading) return <PageFrame><LoadingBlock label="Loading page..." /></PageFrame>;
+  if (snapshot.error) return <PageFrame><ErrorBanner error={snapshot.error} title="Could not load page snapshot" /></PageFrame>;
+  if (!snapshot.data) return <PageFrame><EmptyState title="Page not found" message="The snapshot may have been deleted or is unavailable." /></PageFrame>;
+
+  const tabs = [
+    { id: "overview", label: "Overview" },
+    { id: "head", label: "Head" },
+    { id: "links", label: "Links", count: links.data?.length },
+    { id: "html", label: "HTML" }
+  ];
 
   return (
-    <section className="px-8 py-7">
-      <Link to={`/scans/${scanId}`} className="mb-4 inline-block text-sm text-stone-600 underline">Back to scan</Link>
-      <h1 className="mb-1 truncate text-xl font-semibold">{snapshot.data.page_title ?? snapshot.data.requested_url}</h1>
-      <div className="mb-5 truncate text-sm text-stone-600">{snapshot.data.final_url ?? snapshot.data.requested_url}</div>
-      <div className="mb-4 flex gap-2 border-b border-stone-200">
-        {["overview", "head", "links", "html"].map((item) => (
-          <button key={item} onClick={() => setTab(item)} className={`px-3 py-2 text-sm ${tab === item ? "border-b-2 border-neutral-900 font-medium" : "text-stone-600"}`}>
-            {item[0].toUpperCase() + item.slice(1)}
-          </button>
-        ))}
-      </div>
-      {tab === "overview" ? (
-        <dl className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
-          <Field label="Requested URL" value={snapshot.data.requested_url} />
-          <Field label="Final URL" value={snapshot.data.final_url} />
-          <Field label="HTTP status" value={snapshot.data.http_status} />
-          <Field label="Content type" value={snapshot.data.content_type} />
-          <Field label="Depth" value={snapshot.data.crawl_depth} />
-          <Field label="Fetch duration" value={snapshot.data.response_time_ms ? `${snapshot.data.response_time_ms} ms` : null} />
-          <Field label="HTML SHA-256" value={snapshot.data.raw_html_sha256} />
-          <Field label="Error" value={snapshot.data.error_type} />
-        </dl>
-      ) : null}
-      {tab === "head" ? (
-        <pre className="overflow-auto rounded-md border border-stone-200 bg-white p-4 text-xs">{JSON.stringify(snapshot.data.parsed_head_json, null, 2)}</pre>
-      ) : null}
-      {tab === "links" ? (
-        <div className="overflow-auto rounded-md border border-stone-200 bg-white">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-stone-100 text-xs uppercase text-stone-500">
-              <tr><th className="px-3 py-2">Href</th><th className="px-3 py-2">Decision</th><th className="px-3 py-2">Text</th><th className="px-3 py-2">DOM path</th></tr>
-            </thead>
-            <tbody>
-              {links.data?.map((link) => (
-                <tr key={link.id} className="border-t border-stone-100">
-                  <td className="max-w-md truncate px-3 py-2">{link.raw_href}</td>
-                  <td className="px-3 py-2">{link.scope_decision}</td>
-                  <td className="max-w-xs truncate px-3 py-2">{link.anchor_text}</td>
-                  <td className="max-w-sm truncate px-3 py-2">{link.dom_path}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <PageFrame>
+      <div className="mb-5">
+        <div className="mb-2 text-sm text-stone-500">
+          <Link to={`/scans/${scanId}`} className="underline">Scans</Link> / <Link to={`/scans/${scanId}?tab=pages`} className="underline">Pages</Link> / Page details
         </div>
-      ) : null}
-      {tab === "html" ? (
-        <pre className="max-h-[70vh] overflow-auto rounded-md border border-stone-200 bg-white p-4 text-xs">{html.data}</pre>
-      ) : null}
-    </section>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-semibold text-stone-950">{snapshot.data.page_title ?? snapshot.data.requested_url}</h1>
+            <div className="mt-2 min-w-0"><UrlText value={snapshot.data.final_url ?? snapshot.data.requested_url} secondary /></div>
+          </div>
+          <Link to={`/scans/${scanId}?tab=pages`} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">
+            Back to page results
+          </Link>
+        </div>
+      </div>
+
+      <Tabs tabs={tabs} active={tab} onChange={(next) => setSearchParams(next === "overview" ? {} : { tab: next })} />
+
+      <div className="mt-5">
+        {tab === "overview" ? <Overview snapshot={snapshot.data} /> : null}
+        {tab === "head" ? <HeadView snapshot={snapshot.data} /> : null}
+        {tab === "links" ? <LinksView links={links.data ?? []} loading={links.isLoading} error={links.error} /> : null}
+        {tab === "html" ? <HtmlView html={html.data ?? ""} loading={html.isLoading} error={html.error} /> : null}
+      </div>
+    </PageFrame>
   );
 }
 
-function Field({ label, value }: { label: string; value: unknown }) {
+function PageFrame({ children }: { children: React.ReactNode }) {
+  return <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</section>;
+}
+
+function Overview({ snapshot }: { snapshot: Snapshot }) {
   return (
-    <div className="rounded-md border border-stone-200 bg-white px-3 py-2">
-      <dt className="text-xs uppercase tracking-wide text-stone-500">{label}</dt>
-      <dd className="mt-1 break-words">{value == null ? "" : String(value)}</dd>
+    <div className="space-y-5">
+      <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-4 text-base font-semibold">Page overview</h2>
+        <DefinitionList
+          items={[
+            { label: "Requested URL", value: snapshot.requested_url, copyValue: snapshot.requested_url },
+            { label: "Final URL", value: snapshot.final_url ?? "Same as requested", copyValue: snapshot.final_url },
+            { label: "HTTP status", value: snapshot.http_status ? <StatusBadge status={String(snapshot.http_status)} label={String(snapshot.http_status)} /> : "Not available" },
+            { label: "Fetch state", value: <StatusBadge status={snapshot.fetch_state} /> },
+            { label: "Page title", value: snapshot.page_title ?? "Untitled" },
+            { label: "Canonical URL", value: snapshot.canonical_url ?? "Not available", copyValue: snapshot.canonical_url },
+            { label: "HTML language", value: snapshot.html_language },
+            { label: "Meta robots", value: snapshot.meta_robots },
+            { label: "Content type", value: snapshot.content_type },
+            { label: "Encoding", value: snapshot.encoding },
+            { label: "Crawl depth", value: snapshot.crawl_depth },
+            { label: "Fetched", value: formatDate(snapshot.fetched_at) },
+            { label: "Response time", value: snapshot.response_time_ms != null ? `${snapshot.response_time_ms} ms` : null },
+            { label: "Raw HTML size", value: formatBytes(snapshot.html_raw_byte_size) },
+            { label: "Compressed HTML size", value: formatBytes(snapshot.html_stored_byte_size) },
+            { label: "Raw HTML SHA-256", value: snapshot.raw_html_sha256, copyValue: snapshot.raw_html_sha256 },
+            { label: "Head SHA-256", value: snapshot.head_sha256, copyValue: snapshot.head_sha256 },
+            { label: "Error type", value: snapshot.error_type ? formatStatus(snapshot.error_type) : "None" },
+            { label: "Error message", value: snapshot.error_message ?? "None" }
+          ]}
+        />
+      </section>
+      <RedirectChain chain={snapshot.redirect_chain ?? []} />
     </div>
   );
 }
 
+function RedirectChain({ chain }: { chain: Array<Record<string, unknown>> }) {
+  if (!chain.length) return <EmptyState title="No redirects recorded" message="The requested URL did not redirect before the final response." />;
+  return (
+    <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+      <h2 className="mb-4 text-base font-semibold">Redirect chain</h2>
+      <ol className="space-y-3">
+        {chain.map((hop, index) => (
+          <li key={`${String(hop.requested_url)}-${index}`} className="rounded-md border border-stone-200 p-3 text-sm">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-xs font-medium text-stone-500">Hop {index + 1}</span>
+              <StatusBadge status={String(hop.status_code ?? "")} label={String(hop.status_code ?? "Redirect")} />
+            </div>
+            <DefinitionList
+              items={[
+                { label: "Source URL", value: String(hop.requested_url ?? "Not available"), copyValue: typeof hop.requested_url === "string" ? hop.requested_url : null },
+                { label: "Raw Location", value: String(hop.location ?? "Not available"), copyValue: typeof hop.location === "string" ? hop.location : null },
+                { label: "Resolved destination", value: String(hop.resolved_url ?? "Not available"), copyValue: typeof hop.resolved_url === "string" ? hop.resolved_url : null }
+              ]}
+            />
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function HeadView({ snapshot }: { snapshot: Snapshot }) {
+  const head = snapshot.parsed_head_json ?? {};
+  const meta = getArrayRecords(head.meta);
+  const links = getArrayRecords(head.links);
+  const jsonLd = getStringArray(head.json_ld);
+  const openGraph = getRecord(head.open_graph);
+  const twitter = getRecord(head.twitter);
+  return (
+    <div className="space-y-5">
+      <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-4 text-base font-semibold">Basic metadata</h2>
+        <DefinitionList
+          items={[
+            { label: "Title", value: snapshot.page_title ?? "Untitled" },
+            { label: "Meta description", value: snapshot.meta_description },
+            { label: "HTML language", value: snapshot.html_language },
+            { label: "Character encoding", value: snapshot.encoding ?? String(head.encoding ?? "Not available") },
+            { label: "Viewport", value: String(head.viewport ?? "Not available") },
+            { label: "Meta robots", value: snapshot.meta_robots },
+            { label: "Canonical URL", value: snapshot.canonical_url, copyValue: snapshot.canonical_url }
+          ]}
+        />
+      </section>
+      <KeyValueSection title="Open Graph" values={openGraph} />
+      <KeyValueSection title="Twitter metadata" values={twitter} />
+      <RecordTable title="Head links" records={links} columns={["rel", "href", "hreflang", "media", "type", "sizes"]} />
+      <RecordTable title="Other meta elements" records={meta} columns={["name", "property", "content", "http-equiv"]} />
+      <JsonLdSection blocks={jsonLd} />
+      <details className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <summary className="cursor-pointer text-sm font-medium">Raw parsed head JSON</summary>
+        <pre className="mt-3 max-h-96 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-3 text-xs">{JSON.stringify(head, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
+function KeyValueSection({ title, values }: { title: string; values: Record<string, unknown> }) {
+  const entries = Object.entries(values);
+  if (!entries.length) return <EmptyState title={`No ${title}`} message="This page did not include these fields." />;
+  return (
+    <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+      <h2 className="mb-4 text-base font-semibold">{title}</h2>
+      <DefinitionList items={entries.map(([key, value]) => ({ label: key, value: String(value ?? "") }))} />
+    </section>
+  );
+}
+
+function RecordTable({ title, records, columns }: { title: string; records: Array<Record<string, unknown>>; columns: string[] }) {
+  if (!records.length) return <EmptyState title={`No ${title.toLowerCase()}`} message="No matching elements were preserved in the parsed head." />;
+  return (
+    <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+      <h2 className="mb-4 text-base font-semibold">{title}</h2>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-left text-sm">
+          <thead className="text-xs uppercase text-stone-500">
+            <tr>{columns.map((column) => <th key={column} scope="col" className="px-3 py-2 font-medium">{column}</th>)}</tr>
+          </thead>
+          <tbody>
+            {records.map((record, index) => (
+              <tr key={index} className="border-t border-stone-100">
+                {columns.map((column) => <td key={column} className="max-w-md break-words px-3 py-2">{String(record[column] ?? "")}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function JsonLdSection({ blocks }: { blocks: string[] }) {
+  if (!blocks.length) return <EmptyState title="No structured data" message="No JSON-LD blocks were found in the page head." />;
+  return (
+    <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+      <h2 className="mb-4 text-base font-semibold">Structured data</h2>
+      <div className="space-y-3">
+        {blocks.map((block, index) => {
+          const parsed = tryPrettyJson(block);
+          return (
+            <div key={index} className="rounded-md border border-stone-200 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">JSON-LD block {index + 1}</span>
+                <CopyButton value={block} label="Copy JSON-LD" />
+              </div>
+              {parsed.valid ? null : <div className="mb-2 text-sm text-amber-700">Invalid JSON preserved as source text.</div>}
+              <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-stone-50 p-3 text-xs">{parsed.value}</pre>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function LinksView({ links, loading, error }: { links: LinkOccurrence[]; loading: boolean; error: unknown }) {
+  const [search, setSearch] = useState("");
+  const [decision, setDecision] = useState("all");
+  const [inScopeOnly, setInScopeOnly] = useState(false);
+  const filtered = links.filter((link) => {
+    const haystack = [link.resolved_url, link.normalized_target_url, link.raw_href, link.anchor_text, link.scope_decision].join(" ").toLowerCase();
+    return (!search || haystack.includes(search.toLowerCase())) && (decision === "all" || link.scope_decision === decision) && (!inScopeOnly || link.in_scope);
+  });
+  const decisions = Array.from(new Set(links.map((link) => link.scope_decision))).sort();
+  if (error) return <ErrorBanner error={error} title="Could not load links" />;
+  if (loading) return <LoadingBlock label="Loading links..." />;
+  if (!links.length) return <EmptyState title="No link occurrences" message="No anchor links were preserved for this page snapshot." />;
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <input aria-label="Search links" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search destination, href, or anchor text" className={inputClass()} />
+          <select aria-label="Scope decision filter" value={decision} onChange={(event) => setDecision(event.target.value)} className={inputClass()}>
+            <option value="all">All decisions</option>
+            {decisions.map((item) => <option key={item} value={item}>{formatScopeDecision(item)}</option>)}
+          </select>
+          <label className="flex items-center gap-2 rounded-md border border-stone-200 bg-white px-3 py-2 text-sm">
+            <input type="checkbox" checked={inScopeOnly} onChange={(event) => setInScopeOnly(event.target.checked)} className="size-4 rounded border-stone-300 focus:ring-neutral-900" />
+            In-scope only
+          </label>
+        </div>
+      </div>
+      {!filtered.length ? <EmptyState title="No links match these filters" message="Clear filters or broaden the search." /> : null}
+      <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
+        <table className="min-w-full text-left text-sm">
+          <thead className="bg-stone-100 text-xs uppercase text-stone-500">
+            <tr>{["Destination", "Anchor text", "Decision", "Raw href", "Attributes", "DOM path"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
+          </thead>
+          <tbody>
+            {filtered.map((link) => (
+              <tr key={link.id} className="border-t border-stone-100 align-top">
+                <td className="max-w-sm px-3 py-2"><UrlText value={link.resolved_url ?? link.normalized_target_url} /></td>
+                <td className="max-w-xs px-3 py-2">
+                  {link.anchor_text ? <span>{link.anchor_text}</span> : <span className="text-stone-500">No visible text</span>}
+                  {!link.anchor_text && link.aria_label ? <span className="mt-1 block text-xs text-stone-600">aria-label: {link.aria_label}</span> : null}
+                </td>
+                <td className="px-3 py-2"><StatusBadge status={link.in_scope ? "completed" : "interrupted"} label={formatScopeDecision(link.scope_decision)} /></td>
+                <td className="max-w-sm px-3 py-2"><UrlText value={link.raw_href} secondary /></td>
+                <td className="max-w-xs px-3 py-2 text-xs text-stone-600">
+                  {[link.rel ? `rel=${link.rel}` : "", link.target ? `target=${link.target}` : "", link.title ? `title=${link.title}` : "", link.exclusion_reason ? `reason=${link.exclusion_reason}` : ""].filter(Boolean).join(" | ") || "None"}
+                </td>
+                <td className="max-w-sm truncate px-3 py-2 font-mono text-xs" title={link.dom_path ?? ""}>{link.dom_path}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function HtmlView({ html, loading, error }: { html: string; loading: boolean; error: unknown }) {
+  const [search, setSearch] = useState("");
+  const [currentMatch, setCurrentMatch] = useState(0);
+  const [wrap, setWrap] = useState(true);
+  const lineRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  const matches = useMemo(() => {
+    if (!search) return [];
+    const lower = html.toLowerCase();
+    const needle = search.toLowerCase();
+    const found: number[] = [];
+    let index = lower.indexOf(needle);
+    while (index >= 0 && found.length < 1000) {
+      found.push(index);
+      index = lower.indexOf(needle, index + Math.max(needle.length, 1));
+    }
+    return found;
+  }, [html, search]);
+  const currentLine = useMemo(() => {
+    const match = matches[currentMatch];
+    if (match == null) return null;
+    return html.slice(0, match).split(/\r?\n/).length - 1;
+  }, [currentMatch, html, matches]);
+  useEffect(() => {
+    if (currentLine == null) return;
+    lineRefs.current[currentLine]?.scrollIntoView({ block: "center" });
+  }, [currentLine]);
+  if (error) return <ErrorBanner error={error} title="Could not load HTML" />;
+  if (loading) return <LoadingBlock label="Loading HTML source..." />;
+  if (!html) return <EmptyState title="No HTML source" message="This snapshot does not have stored HTML." />;
+  const lines = html.split(/\r?\n/);
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <input aria-label="Search HTML source" value={search} onChange={(event) => { setSearch(event.target.value); setCurrentMatch(0); }} placeholder="Search source" className={`${inputClass()} max-w-md`} />
+          <span className="text-sm text-stone-600">{matches.length ? `${currentMatch + 1} of ${matches.length} matches` : search ? "No matches" : "No search"}</span>
+          <Button type="button" disabled={!matches.length} onClick={() => setCurrentMatch((current) => Math.max(0, current - 1))}>Previous</Button>
+          <Button type="button" disabled={!matches.length} onClick={() => setCurrentMatch((current) => Math.min(matches.length - 1, current + 1))}>Next</Button>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={wrap} onChange={(event) => setWrap(event.target.checked)} className="size-4 rounded border-stone-300 focus:ring-neutral-900" />
+            Wrap lines
+          </label>
+          <CopyButton value={html} label="Copy source" />
+        </div>
+      </div>
+      <pre
+        aria-label="Escaped HTML source"
+        className={`max-h-[70vh] overflow-auto rounded-md border border-stone-200 bg-white p-4 text-xs leading-5 shadow-sm ${wrap ? "whitespace-pre-wrap" : "whitespace-pre"}`}
+      >
+        {lines.map((line, index) => (
+          <span key={index} ref={(element) => { lineRefs.current[index] = element; }} className={`block ${index === currentLine ? "bg-amber-50" : ""}`}>
+            <span className="mr-4 inline-block w-10 select-none text-right text-stone-400">{index + 1}</span>
+            <code>{line || " "}</code>
+          </span>
+        ))}
+      </pre>
+    </div>
+  );
+}
+
+function getRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function getArrayRecords(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [];
+}
+
+function getStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function tryPrettyJson(value: string) {
+  try {
+    return { valid: true, value: JSON.stringify(JSON.parse(value), null, 2) };
+  } catch {
+    return { valid: false, value };
+  }
+}

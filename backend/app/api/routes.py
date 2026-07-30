@@ -67,6 +67,8 @@ def list_pages(
     host: str | None = None,
     path_prefix: str | None = None,
     depth: int | None = None,
+    min_depth: int | None = Query(default=None, ge=0),
+    max_depth: int | None = Query(default=None, ge=0),
     error_state: Literal["any", "with_errors", "without_errors"] = "any",
     sort: Literal["requested_url", "status", "title", "depth", "duration"] = "requested_url",
     direction: Literal["asc", "desc"] = "asc",
@@ -78,7 +80,9 @@ def list_pages(
         .join(WebResource)
         .where(ResourceSnapshot.scan_id == scan_id)
     )
-    base = _apply_page_filters(base, search, status, host, path_prefix, depth, error_state)
+    base = _apply_page_filters(
+        base, search, status, host, path_prefix, depth, min_depth, max_depth, error_state
+    )
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     sort_map = {
         "requested_url": ResourceSnapshot.requested_url,
@@ -142,11 +146,14 @@ def list_errors(scan_id: int, db: DbSession) -> list[ResourceSnapshot]:
 
 
 @router.get("/snapshots/{snapshot_id}", response_model=SnapshotRead)
-def get_snapshot(snapshot_id: int, db: DbSession) -> ResourceSnapshot:
+def get_snapshot(snapshot_id: int, db: DbSession) -> SnapshotRead:
     snapshot = db.get(ResourceSnapshot, snapshot_id)
     if not snapshot:
         raise HTTPException(404, "Snapshot not found")
-    return snapshot
+    result = SnapshotRead.model_validate(snapshot, from_attributes=True)
+    result.html_raw_byte_size = snapshot.blob.raw_byte_size if snapshot.blob else None
+    result.html_stored_byte_size = snapshot.blob.stored_byte_size if snapshot.blob else None
+    return result
 
 
 @router.get("/snapshots/{snapshot_id}/links", response_model=list[LinkRead])
@@ -192,6 +199,8 @@ def _apply_page_filters(
     host: str | None,
     path_prefix: str | None,
     depth: int | None,
+    min_depth: int | None,
+    max_depth: int | None,
     error_state: str,
 ) -> Select[tuple[ResourceSnapshot, WebResource]]:
     if search:
@@ -211,6 +220,10 @@ def _apply_page_filters(
         query = query.where(WebResource.path.startswith(path_prefix))
     if depth is not None:
         query = query.where(ResourceSnapshot.crawl_depth == depth)
+    if min_depth is not None:
+        query = query.where(ResourceSnapshot.crawl_depth >= min_depth)
+    if max_depth is not None:
+        query = query.where(ResourceSnapshot.crawl_depth <= max_depth)
     if error_state == "with_errors":
         query = query.where(ResourceSnapshot.error_type.is_not(None))
     elif error_state == "without_errors":
