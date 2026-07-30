@@ -1,4 +1,5 @@
 import type { LinkOccurrence, PageList, Scan, ScopeConfig, Snapshot } from "../types/scans";
+import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -8,7 +9,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw errorFromResponse(response.status, await response.text());
   }
   return response.json() as Promise<T>;
 }
@@ -50,7 +51,7 @@ export const getLinks = (snapshotId: string) => request<LinkOccurrence[]>(`/api/
 export async function getHtml(snapshotId: string): Promise<string> {
   const response = await fetch(`${API_BASE}/api/snapshots/${snapshotId}/html`);
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw errorFromResponse(response.status, await response.text());
   }
   return response.text();
 }

@@ -67,9 +67,12 @@ export type Snapshot = {
   content_type: string | null;
   encoding: string | null;
   crawl_depth: number;
+  fetched_at: string | null;
   response_time_ms: number | null;
   response_headers: Record<string, unknown> | null;
   redirect_chain: Array<Record<string, unknown>> | null;
+  html_raw_byte_size: number | null;
+  html_stored_byte_size: number | null;
   raw_html_sha256: string | null;
   head_sha256: string | null;
   page_title: string | null;
