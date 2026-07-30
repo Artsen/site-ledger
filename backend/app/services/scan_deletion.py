@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.models import ContentBlob, ResourceOccurrence, ResourceSnapshot, Scan
+from app.models import ContentBlob, ResourceOccurrence, ResourceSnapshot, Scan, WebResource
 from app.schemas.scans import ScanDeletePreview, ScanDeleteResult
 from app.storage.content_store import LocalContentStore
 
@@ -15,8 +15,10 @@ class DeletionImpact:
     scan: Scan
     snapshots: int
     link_occurrences: int
+    resource_ids: list[int]
     referenced_blobs: list[ContentBlob]
     deletable_blobs: list[ContentBlob]
+    shared_blob_count: int
 
     @property
     def raw_bytes(self) -> int:
@@ -34,24 +36,32 @@ def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None
     if scan.status not in TERMINAL_STATUSES:
         return ScanDeletePreview(
             scan_id=scan.id,
+            starting_url=scan.starting_url,
             can_delete=False,
             status=scan.status,
             snapshots=0,
             link_occurrences=0,
+            unique_resources=0,
             html_blobs_referenced=0,
+            exclusive_html_blobs=0,
+            shared_html_blobs=0,
             html_blobs_deleted=0,
             raw_html_bytes_reclaimable=0,
             stored_html_bytes_reclaimable=0,
-            reason="Only terminal scans can be deleted.",
+            reason="The scan must finish or be cancelled before it can be deleted.",
         )
     impact = _deletion_impact(db, scan)
     return ScanDeletePreview(
         scan_id=scan.id,
+        starting_url=scan.starting_url,
         can_delete=True,
         status=scan.status,
         snapshots=impact.snapshots,
         link_occurrences=impact.link_occurrences,
+        unique_resources=len(impact.resource_ids),
         html_blobs_referenced=len(impact.referenced_blobs),
+        exclusive_html_blobs=len(impact.deletable_blobs),
+        shared_html_blobs=impact.shared_blob_count,
         html_blobs_deleted=len(impact.deletable_blobs),
         raw_html_bytes_reclaimable=impact.raw_bytes,
         stored_html_bytes_reclaimable=impact.stored_bytes,
@@ -63,9 +73,10 @@ def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDele
     if scan is None:
         return None
     if scan.status not in TERMINAL_STATUSES:
-        raise ValueError("Only terminal scans can be deleted.")
+        raise ValueError("The scan must finish or be cancelled before it can be deleted.")
     impact = _deletion_impact(db, scan)
     deleted_blob_ids = [blob.id for blob in impact.deletable_blobs]
+    candidate_resource_ids = impact.resource_ids
     snapshot_ids = select(ResourceSnapshot.id).where(ResourceSnapshot.scan_id == scan.id)
     db.execute(
         delete(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id.in_(snapshot_ids))
@@ -74,16 +85,29 @@ def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDele
     db.execute(delete(Scan).where(Scan.id == scan.id))
     if deleted_blob_ids:
         db.execute(delete(ContentBlob).where(ContentBlob.id.in_(deleted_blob_ids)))
+    deleted_resource_ids = _delete_unreferenced_resources(db, candidate_resource_ids)
     db.commit()
+    warnings: list[str] = []
+    files_deleted = 0
     for blob in impact.deletable_blobs:
-        store.delete(blob)
+        try:
+            if store.delete(blob):
+                files_deleted += 1
+            else:
+                warnings.append(f"HTML blob file was already missing: {blob.storage_key}")
+        except OSError as exc:
+            warnings.append(f"Could not delete HTML blob file {blob.storage_key}: {exc}")
     return ScanDeleteResult(
         deleted_scan_id=scan_id,
         snapshots_deleted=impact.snapshots,
         link_occurrences_deleted=impact.link_occurrences,
+        resources_deleted=len(deleted_resource_ids),
+        html_blob_records_deleted=len(impact.deletable_blobs),
+        html_blob_files_deleted=files_deleted,
         html_blobs_deleted=len(impact.deletable_blobs),
         raw_html_bytes_reclaimed=impact.raw_bytes,
         stored_html_bytes_reclaimed=impact.stored_bytes,
+        warnings=warnings,
     )
 
 
@@ -111,6 +135,13 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
             )
         )
     )
+    resource_ids = list(
+        db.scalars(
+            select(distinct(ResourceSnapshot.resource_id)).where(
+                ResourceSnapshot.scan_id == scan.id
+            )
+        )
+    )
     referenced_blobs = (
         list(db.scalars(select(ContentBlob).where(ContentBlob.id.in_(referenced_blob_ids))))
         if referenced_blob_ids
@@ -133,6 +164,31 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         scan=scan,
         snapshots=snapshots,
         link_occurrences=link_occurrences,
+        resource_ids=resource_ids,
         referenced_blobs=referenced_blobs,
         deletable_blobs=deletable_blobs,
+        shared_blob_count=len(referenced_blobs) - len(deletable_blobs),
     )
+
+
+def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int]) -> list[int]:
+    if not candidate_resource_ids:
+        return []
+    still_snapshotted = set(
+        db.scalars(
+            select(distinct(ResourceSnapshot.resource_id)).where(
+                ResourceSnapshot.resource_id.in_(candidate_resource_ids)
+            )
+        )
+    )
+    still_targeted = set(
+        db.scalars(
+            select(distinct(ResourceOccurrence.target_resource_id)).where(
+                ResourceOccurrence.target_resource_id.in_(candidate_resource_ids)
+            )
+        )
+    )
+    deletable = sorted(set(candidate_resource_ids) - still_snapshotted - still_targeted)
+    if deletable:
+        db.execute(delete(WebResource).where(WebResource.id.in_(deletable)))
+    return deletable

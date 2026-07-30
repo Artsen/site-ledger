@@ -48,10 +48,14 @@ class LocalContentStore:
             raise BlobNotFoundError(blob.storage_key)
         return gzip.decompress(path.read_bytes())
 
-    def delete(self, blob: ContentBlob) -> None:
+    def exists(self, blob: ContentBlob) -> bool:
+        return (self.root / blob.storage_key).exists()
+
+    def delete(self, blob: ContentBlob) -> bool:
         path = self.root / blob.storage_key
-        if path.exists():
-            path.unlink()
+        if not path.exists():
+            return False
+        path.unlink()
         current = path.parent
         while current != self.root and current.exists():
             try:
@@ -59,3 +63,4 @@ class LocalContentStore:
             except OSError:
                 break
             current = current.parent
+        return True

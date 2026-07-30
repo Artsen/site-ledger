@@ -14,10 +14,35 @@ from app.schemas.scans import (
 )
 
 
-def list_scan_history(db: Session, limit: int, offset: int) -> ScanHistory:
-    total = db.scalar(select(func.count(Scan.id))) or 0
+def list_scan_history(
+    db: Session,
+    search: str | None,
+    status: str | None,
+    sort: Literal["created_at", "started_at", "finished_at", "status", "starting_url"],
+    direction: Literal["asc", "desc"],
+    limit: int,
+    offset: int,
+) -> ScanHistory:
+    query = select(Scan)
+    if search:
+        query = query.where(Scan.starting_url.ilike(f"%{search}%"))
+    if status:
+        query = query.where(Scan.status == status)
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    sort_map = {
+        "created_at": Scan.created_at,
+        "started_at": Scan.started_at,
+        "finished_at": Scan.finished_at,
+        "status": Scan.status,
+        "starting_url": Scan.starting_url,
+    }
+    order_col = sort_map[sort]
     scans = list(
-        db.scalars(select(Scan).order_by(Scan.created_at.desc()).limit(limit).offset(offset))
+        db.scalars(
+            query.order_by(order_col.desc() if direction == "desc" else order_col.asc())
+            .limit(limit)
+            .offset(offset)
+        )
     )
     return ScanHistory(items=scans, total=total, limit=limit, offset=offset)
 
@@ -165,6 +190,7 @@ def list_snapshot_inbound_links(
             InboundLinkRead(
                 id=occurrence.id,
                 source_snapshot_id=source.id,
+                source_resource_id=source.resource_id,
                 source_requested_url=source.requested_url,
                 source_final_url=source.final_url,
                 source_page_title=source.page_title,
@@ -183,6 +209,7 @@ def list_snapshot_inbound_links(
                 in_scope=occurrence.in_scope,
                 scope_decision=occurrence.scope_decision,
                 exclusion_reason=occurrence.exclusion_reason,
+                discovered_at=occurrence.discovered_at,
                 is_self_link=source.id == target.id,
             )
             for occurrence, source in rows

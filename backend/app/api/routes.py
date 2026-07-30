@@ -60,10 +60,24 @@ def list_scans(db: DbSession, limit: ScanListLimit = 25) -> list[Scan]:
 @router.get("/scans/history", response_model=ScanHistory)
 def get_scan_history(
     db: DbSession,
+    search: str | None = None,
+    status: str | None = None,
+    sort: Literal[
+        "created_at", "started_at", "finished_at", "status", "starting_url"
+    ] = "created_at",
+    direction: Literal["asc", "desc"] = "desc",
     limit: ScanListLimit = 50,
     offset: PageOffset = 0,
 ) -> ScanHistory:
-    return list_scan_history(db, limit=limit, offset=offset)
+    return list_scan_history(
+        db,
+        search=search,
+        status=status,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/scans/{scan_id}", response_model=ScanRead)
@@ -92,8 +106,15 @@ def get_delete_preview(scan_id: int, db: DbSession) -> ScanDeletePreview:
     return preview
 
 
+@router.get("/scans/{scan_id}/deletion-summary", response_model=ScanDeletePreview)
+def get_deletion_summary(scan_id: int, db: DbSession) -> ScanDeletePreview:
+    return get_delete_preview(scan_id, db)
+
+
 @router.delete("/scans/{scan_id}", response_model=ScanDeleteResult)
 def delete_scan(scan_id: int, request: Request, db: DbSession) -> ScanDeleteResult:
+    if request.app.state.scan_runner.is_active(scan_id):
+        raise HTTPException(409, "The scan must finish or be cancelled before it can be deleted.")
     store: LocalContentStore = request.app.state.content_store
     try:
         result = delete_scan_service(db, scan_id, store)
