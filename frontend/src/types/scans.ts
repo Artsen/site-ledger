@@ -45,6 +45,7 @@ export type Page = {
   content_type: string | null;
   discovery_source: string | null;
   inbound_occurrence_count: number;
+  inbound_source_page_count: number;
   response_time_ms: number | null;
   fetch_state: string;
   error_type: string | null;
@@ -101,5 +102,59 @@ export type LinkOccurrence = {
   in_scope: boolean;
   scope_decision: string;
   exclusion_reason: string | null;
+};
+
+export type InboundLinkOccurrence = LinkOccurrence & {
+  source_snapshot_id: number;
+  source_requested_url: string;
+  source_final_url: string | null;
+  source_page_title: string | null;
+  source_http_status: number | null;
+  source_fetch_state: string;
+  source_crawl_depth: number;
+  is_self_link: boolean;
+};
+
+export type InboundLinkList = {
+  items: InboundLinkOccurrence[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: {
+    total_occurrences: number;
+    unique_source_pages: number;
+    unique_anchor_texts: number;
+    nofollow_occurrences: number;
+    self_link_occurrences: number;
+  };
+};
+
+export type ScanHistory = {
+  items: Scan[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ScanDeletePreview = {
+  scan_id: number;
+  can_delete: boolean;
+  status: string;
+  snapshots: number;
+  link_occurrences: number;
+  html_blobs_referenced: number;
+  html_blobs_deleted: number;
+  raw_html_bytes_reclaimable: number;
+  stored_html_bytes_reclaimable: number;
+  reason: string | null;
+};
+
+export type ScanDeleteResult = {
+  deleted_scan_id: number;
+  snapshots_deleted: number;
+  link_occurrences_deleted: number;
+  html_blobs_deleted: number;
+  raw_html_bytes_reclaimed: number;
+  stored_html_bytes_reclaimed: number;
 };
 
