@@ -33,9 +33,10 @@ export function ScanDetailPage() {
   const isActiveScan = Boolean(scan.data && !isTerminalStatus(scan.data.status));
 
   useEffect(() => {
+    if (searchDraft === (searchParams.get("search") ?? "")) return;
     const timer = window.setTimeout(() => updateParam(setSearchParams, "search", searchDraft || null, { offset: null }), 350);
     return () => window.clearTimeout(timer);
-  }, [searchDraft, setSearchParams]);
+  }, [searchDraft, searchParams, setSearchParams]);
 
   const pageQuery = useMemo(() => buildPageQuery(searchParams), [searchParams]);
   const pages = useQuery({

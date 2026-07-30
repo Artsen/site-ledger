@@ -16,7 +16,7 @@ test("mocked scan workflow supports creation, filtering, details, inbound links,
   await page.getByRole("button", { name: "Start scan" }).click();
 
   await expect(page).toHaveURL(/\/scans\/1$/);
-  await expect(page.getByText("Running")).toBeVisible();
+  await expect(page.getByText("Running").first()).toBeVisible();
   await expect(page.getByText("Fetched 1 of 3 discovered pages")).toBeVisible();
 
   await page.reload();

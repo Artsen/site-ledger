@@ -161,6 +161,22 @@ describe("scan results workflow", () => {
     await waitFor(() => expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("search=pricing")));
   });
 
+  it("keeps page-list pagination offset when search text has not changed", async () => {
+    api.listPages.mockResolvedValue({
+      items: [pageFixture],
+      total: 75,
+      limit: 50,
+      offset: 0
+    });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=pages");
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "Next" }))[0]);
+
+    await waitFor(() => expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("offset=50")));
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
+    expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("offset=50"));
+  });
+
   it("renders a scan status badge with accessible text", () => {
     render(<StatusBadge status="completed_with_errors" />);
     expect(screen.getByText("Completed With Errors")).toBeInTheDocument();
@@ -308,6 +324,23 @@ const emptyPageList: PageList = {
   total: 0,
   limit: 50,
   offset: 0
+};
+
+const pageFixture = {
+  id: 9,
+  resource_id: 2,
+  requested_url: "https://example.com/page",
+  final_url: "https://example.com/page",
+  http_status: 200,
+  title: "Example page",
+  depth: 1,
+  content_type: "text/html",
+  discovery_source: "https://example.com/",
+  inbound_occurrence_count: 1,
+  inbound_source_page_count: 1,
+  response_time_ms: 50,
+  fetch_state: "fetched",
+  error_type: null
 };
 
 const snapshotFixture: Snapshot = {
