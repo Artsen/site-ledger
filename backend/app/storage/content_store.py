@@ -47,3 +47,15 @@ class LocalContentStore:
         if not path.exists():
             raise BlobNotFoundError(blob.storage_key)
         return gzip.decompress(path.read_bytes())
+
+    def delete(self, blob: ContentBlob) -> None:
+        path = self.root / blob.storage_key
+        if path.exists():
+            path.unlink()
+        current = path.parent
+        while current != self.root and current.exists():
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
