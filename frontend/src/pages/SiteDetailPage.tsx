@@ -128,10 +128,13 @@ function ScansTab({ site, compact = false }: { site: Site; compact?: boolean }) 
       {site.recent_scans.length ? (
         <div className={compact ? "space-y-2" : "grid grid-cols-1 gap-2 md:grid-cols-2"}>
           {site.recent_scans.map((scan) => (
-            <Link key={scan.id} to={`/scans/${scan.id}`} className="block rounded-md border border-stone-200 px-3 py-2 text-sm hover:bg-stone-50">
-              <StatusBadge status={scan.status} />
-              <span className="mt-1 block text-xs text-stone-500">{formatDate(scan.created_at)} - {scan.discovered_count} discovered - {scan.failed_count} failed</span>
-            </Link>
+            <div key={scan.id} className="rounded-md border border-stone-200 px-3 py-2 text-sm">
+              <Link to={`/scans/${scan.id}`} className="block hover:bg-stone-50">
+                <StatusBadge status={scan.status} />
+                <span className="mt-1 block text-xs text-stone-500">{formatDate(scan.created_at)} - {scan.discovered_count} discovered - {scan.failed_count} failed</span>
+              </Link>
+              <Link to={`/scans/${scan.id}?tab=graph`} className="mt-2 inline-block text-xs font-medium underline">View graph</Link>
+            </div>
           ))}
         </div>
       ) : <EmptyState title="No scans yet" message="Run a scan from this site to build history." />}

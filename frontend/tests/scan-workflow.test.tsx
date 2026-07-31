@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { forwardRef, useImperativeHandle } from "react";
 
 import { CopyButton } from "../src/components/ui/CopyButton";
 import { StatusBadge } from "../src/components/ui/StatusBadge";
@@ -44,7 +45,9 @@ const api = vi.hoisted(() => ({
   listSourceEntries: vi.fn(),
   addManualUrls: vi.fn(),
   listInventory: vi.fn(),
-  listScanSeeds: vi.fn()
+  listScanSeeds: vi.fn(),
+  getScanGraph: vi.fn(),
+  getGraphEdgeOccurrences: vi.fn()
 }));
 
 vi.mock("../src/api/client", () => ({
@@ -66,6 +69,28 @@ vi.mock("../src/api/client", () => ({
     drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
     allow_private_networks: false,
     max_redirects: 10
+  })
+}));
+
+vi.mock("../src/features/graph/TwoDimensionalGraphRenderer", () => ({
+  TwoDimensionalGraphRenderer: forwardRef(function MockTwoDimensionalGraphRenderer(props: {
+    data: { nodes: Array<{ id: string; label: string }>; links: Array<{ id: string; label: string }> };
+    onNodeSelect: (node: { id: string; label: string }) => void;
+    onEdgeSelect: (edge: { id: string; label: string }) => void;
+  }, ref) {
+    useImperativeHandle(ref, () => ({ fit: vi.fn(), resetCamera: vi.fn(), focusNode: vi.fn(), freeze: vi.fn(), reheat: vi.fn(), resetLayout: vi.fn(), exportPng: vi.fn().mockResolvedValue("data:image/png;base64,abc") }));
+    return <div aria-label="mock 2D graph">{props.data.nodes.map((node) => <button key={node.id} onClick={() => props.onNodeSelect(node)}>{node.label}</button>)}{props.data.links.map((edge) => <button key={edge.id} onClick={() => props.onEdgeSelect(edge)}>{edge.label}</button>)}</div>;
+  })
+}));
+
+vi.mock("../src/features/graph/ThreeDimensionalGraphRenderer", () => ({
+  ThreeDimensionalGraphRenderer: forwardRef(function MockThreeDimensionalGraphRenderer(props: {
+    data: { nodes: Array<{ id: string; label: string }>; links: Array<{ id: string; label: string }> };
+    onNodeSelect: (node: { id: string; label: string }) => void;
+    onEdgeSelect: (edge: { id: string; label: string }) => void;
+  }, ref) {
+    useImperativeHandle(ref, () => ({ fit: vi.fn(), resetCamera: vi.fn(), focusNode: vi.fn(), freeze: vi.fn(), reheat: vi.fn(), resetLayout: vi.fn(), exportPng: vi.fn().mockResolvedValue("data:image/png;base64,abc") }));
+    return <div aria-label="mock 3D graph">{props.data.nodes.map((node) => <button key={node.id} onClick={() => props.onNodeSelect(node)}>{node.label}</button>)}{props.data.links.map((edge) => <button key={edge.id} onClick={() => props.onEdgeSelect(edge)}>{edge.label}</button>)}</div>;
   })
 }));
 
@@ -128,6 +153,8 @@ beforeEach(() => {
   api.addManualUrls.mockResolvedValue({ source: sourceFixture, items: [], accepted_count: 1, rejected_count: 1, duplicate_count: 0 });
   api.listInventory.mockResolvedValue({ items: [inventoryFixture], total: 1, limit: 50, offset: 0 });
   api.listScanSeeds.mockResolvedValue({ items: [seedFixture], total: 1, limit: 50, offset: 0 });
+  api.getScanGraph.mockResolvedValue(graphFixture);
+  api.getGraphEdgeOccurrences.mockResolvedValue(edgeOccurrenceFixture);
 });
 
 afterEach(() => cleanup());
@@ -210,6 +237,33 @@ describe("scan results workflow", () => {
     await waitFor(() => expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("offset=50")));
     await new Promise((resolve) => window.setTimeout(resolve, 450));
     expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("offset=50"));
+  });
+
+  it("opens graph tab, filters, selects a node, inspects an edge, and toggles presentation", async () => {
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=graph&selected_edge=8-2");
+
+    expect(await screen.findByText("Website topology graph")).toBeInTheDocument();
+    expect(await screen.findByText(/2 of 2 nodes/i)).toBeInTheDocument();
+    expect(await screen.findByText("Selected edge")).toBeInTheDocument();
+    expect(await screen.findByText("Pricing link")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Graph mode"), { target: { value: "2d" } });
+    expect(screen.getByLabelText("Graph mode")).toHaveValue("2d");
+
+    fireEvent.change(screen.getByLabelText("Search graph nodes"), { target: { value: "pricing" } });
+    await waitFor(() => expect(screen.getAllByText("Pricing").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByText("Pricing")[0]);
+    expect(await screen.findByText("Selected page")).toBeInTheDocument();
+    expect(screen.getByText(/Inbound: 2 occurrences/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Neighborhood" }));
+    await waitFor(() => expect(api.getScanGraph).toHaveBeenLastCalledWith("1", expect.stringContaining("focus_snapshot_id=9")));
+
+    fireEvent.change(screen.getByLabelText("Graph status filter"), { target: { value: "2xx" } });
+    await waitFor(() => expect(api.getScanGraph).toHaveBeenLastCalledWith("1", expect.stringContaining("status=2xx")));
+
+    fireEvent.click(screen.getByRole("button", { name: "Presentation" }));
+    expect(await screen.findByRole("button", { name: "Exit presentation" })).toBeInTheDocument();
   });
 
   it("renders a scan status badge with accessible text", () => {
@@ -540,6 +594,129 @@ const inboundFixture = {
     nofollow_occurrences: 1,
     self_link_occurrences: 1
   }
+};
+
+const graphFixture = {
+  scan: {
+    id: 1,
+    starting_url: "https://example.com/",
+    status: "completed",
+    website_property_id: null,
+    website_property_name: null,
+    created_at: "2026-07-30T01:00:00Z",
+    finished_at: "2026-07-30T01:01:00Z"
+  },
+  summary: {
+    total_available_nodes: 2,
+    total_available_edges: 1,
+    returned_nodes: 2,
+    returned_edges: 1,
+    fetched_nodes: 2,
+    unfetched_nodes: 0,
+    error_nodes: 0,
+    self_link_edges: 0,
+    total_occurrences: 2,
+    truncated: false,
+    truncation_reasons: [],
+    focused: false,
+    focus_snapshot_id: null,
+    focus_hops: null
+  },
+  nodes: [
+    {
+      id: "snapshot:8",
+      kind: "page",
+      snapshot_id: 8,
+      resource_id: 1,
+      requested_url: "https://example.com/",
+      final_url: "https://example.com/",
+      page_title: "Home",
+      host: "example.com",
+      path: "/",
+      http_status: 200,
+      fetch_state: "fetched",
+      error_type: null,
+      crawl_depth: 0,
+      content_type: "text/html",
+      response_time_ms: 80,
+      inbound_occurrence_count: 0,
+      inbound_source_page_count: 0,
+      outbound_occurrence_count: 2,
+      outbound_target_page_count: 1,
+      is_scan_seed: true,
+      seed_origin_count: 1,
+      is_starting_url: true,
+      redirects: false,
+      canonical_url: null,
+      category: "2xx"
+    },
+    {
+      id: "snapshot:9",
+      kind: "page",
+      snapshot_id: 9,
+      resource_id: 2,
+      requested_url: "https://example.com/pricing",
+      final_url: "https://example.com/pricing",
+      page_title: "Pricing",
+      host: "example.com",
+      path: "/pricing",
+      http_status: 200,
+      fetch_state: "fetched",
+      error_type: null,
+      crawl_depth: 1,
+      content_type: "text/html",
+      response_time_ms: 120,
+      inbound_occurrence_count: 2,
+      inbound_source_page_count: 1,
+      outbound_occurrence_count: 0,
+      outbound_target_page_count: 0,
+      is_scan_seed: false,
+      seed_origin_count: 0,
+      is_starting_url: false,
+      redirects: false,
+      canonical_url: null,
+      category: "2xx"
+    }
+  ],
+  edges: [
+    {
+      id: "8-2",
+      source: "snapshot:8",
+      target: "snapshot:9",
+      source_snapshot_id: 8,
+      target_snapshot_id: 9,
+      target_resource_id: 2,
+      occurrence_count: 2,
+      unique_anchor_text_count: 1,
+      nofollow_occurrence_count: 0,
+      follow_occurrence_count: 2,
+      empty_anchor_occurrence_count: 0,
+      is_self_link: false,
+      sample_anchor_texts: ["Pricing"],
+      first_discovered_at: "2026-07-30T01:00:01Z",
+      last_discovered_at: "2026-07-30T01:00:02Z",
+      scope_decisions: { crawlable: 2 }
+    }
+  ],
+  effective_filters: {}
+};
+
+const edgeOccurrenceFixture = {
+  items: [
+    {
+      ...linkFixtures[0],
+      id: 20,
+      source_snapshot_id: 8,
+      target_snapshot_id: 9,
+      anchor_text: "Pricing link",
+      raw_href: "/pricing",
+      is_self_link: false
+    }
+  ],
+  total: 2,
+  limit: 50,
+  offset: 0,
+  edge: graphFixture.edges[0]
 };
 
 const siteFixture = {
