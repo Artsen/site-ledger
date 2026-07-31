@@ -60,7 +60,7 @@ export function NewScanPage() {
       submittingRef.current = false;
     }
   });
-  const canStart = mode === "site" ? Boolean(selectedSite) && !mutation.isPending : !validation.hasErrors && !mutation.isPending;
+  const canStart = mode === "site" ? Boolean(selectedSite) && !validation.hasErrors && !mutation.isPending : !validation.hasErrors && !mutation.isPending;
 
   useEffect(() => {
     if (!selectedSite || mode !== "site") return;

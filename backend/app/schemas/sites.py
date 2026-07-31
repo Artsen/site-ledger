@@ -7,6 +7,18 @@ from app.schemas.scans import ScopeConfigPayload
 from app.services.site_classifications import normalize_classification
 
 
+def normalize_locale(value: str | None) -> str | None:
+    if value in {None, ""}:
+        return None
+    parts = value.split("-")
+    if len(parts) != 2 or len(parts[0]) != 2 or len(parts[1]) != 2:
+        raise ValueError("Locale must look like en-US.")
+    language, region = parts
+    if not (language.isalpha() and region.isalpha()):
+        raise ValueError("Locale must look like en-US.")
+    return f"{language.lower()}-{region.upper()}"
+
+
 class WebsitePropertyBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     base_url: str = Field(min_length=1, max_length=2048)
@@ -36,15 +48,7 @@ class WebsitePropertyBase(BaseModel):
     @field_validator("locale")
     @classmethod
     def validate_locale(cls, value: str | None) -> str | None:
-        if value in {None, ""}:
-            return None
-        parts = value.split("-")
-        if len(parts) != 2 or len(parts[0]) != 2 or len(parts[1]) != 2:
-            raise ValueError("Locale must look like en-US.")
-        language, region = parts
-        if not (language.isalpha() and region.isalpha()):
-            raise ValueError("Locale must look like en-US.")
-        return f"{language.lower()}-{region.upper()}"
+        return normalize_locale(value)
 
 
 class WebsitePropertyCreate(WebsitePropertyBase):
@@ -83,7 +87,10 @@ class WebsitePropertyUpdate(BaseModel):
             return None
         return normalize_classification(value, fallback="Unknown")
 
-    _validate_locale = field_validator("locale")(WebsitePropertyBase.validate_locale)
+    @field_validator("locale")
+    @classmethod
+    def validate_locale(cls, value: str | None) -> str | None:
+        return normalize_locale(value)
 
 
 class ScanSummary(BaseModel):
