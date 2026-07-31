@@ -67,7 +67,7 @@ export function ScanDetailPage() {
   const deletePreview = useQuery({
     queryKey: ["scan-delete-preview", scanId],
     queryFn: () => getScanDeletePreview(scanId),
-    enabled: Boolean(scan.data && isTerminalStatus(scan.data.status))
+    enabled: tab === "overview" && Boolean(scan.data && isTerminalStatus(scan.data.status))
   });
   const remove = useMutation({
     mutationFn: () => deleteScan(scanId),

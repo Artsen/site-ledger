@@ -246,6 +246,7 @@ describe("scan results workflow", () => {
     expect(await screen.findByText(/2 of 2 nodes/i)).toBeInTheDocument();
     expect(await screen.findByText("Selected edge")).toBeInTheDocument();
     expect(await screen.findByText("Pricing link")).toBeInTheDocument();
+    expect(api.getScanDeletePreview).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText("Graph mode"), { target: { value: "2d" } });
     expect(screen.getByLabelText("Graph mode")).toHaveValue("2d");

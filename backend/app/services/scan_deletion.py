@@ -172,19 +172,27 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         if referenced_blob_ids
         else []
     )
-    deletable_blobs: list[ContentBlob] = []
-    for blob in referenced_blobs:
-        references_outside_scan = (
-            db.scalar(
-                select(func.count(ResourceSnapshot.id)).where(
-                    ResourceSnapshot.html_blob_id == blob.id,
+    outside_blob_references = (
+        {
+            blob_id: count
+            for blob_id, count in db.execute(
+                select(ResourceSnapshot.html_blob_id, func.count(ResourceSnapshot.id))
+                .where(
+                    ResourceSnapshot.html_blob_id.in_(referenced_blob_ids),
                     ResourceSnapshot.scan_id != scan.id,
                 )
+                .group_by(ResourceSnapshot.html_blob_id)
             )
-            or 0
-        )
-        if references_outside_scan == 0:
-            deletable_blobs.append(blob)
+            if blob_id is not None
+        }
+        if referenced_blob_ids
+        else {}
+    )
+    deletable_blobs = [
+        blob
+        for blob in referenced_blobs
+        if outside_blob_references.get(blob.id, 0) == 0
+    ]
     return DeletionImpact(
         scan=scan,
         snapshots=snapshots,
