@@ -123,3 +123,26 @@ the content-store abstraction only after database cleanup commits. Shared blobs 
 other scans. If a blob file is already missing or cannot be deleted after commit, the scan deletion
 still succeeds and returns a cleanup warning for later maintenance.
 
+## Saved Sites
+
+Sites are saved website properties above individual scans. A site stores a name, base URL,
+description, group, locale, platform, ownership, active state, and reusable scan scope configuration.
+The stored classification values are stable keys; the UI renders human-readable labels.
+
+Saved site scope uses the same shape as scan scope. When a scan starts from a site, the effective
+scope is copied into the scan row with `website_property_id`. Later edits to the site do not rewrite
+historical scan scope, and scan-specific overrides do not mutate the saved site. Ad hoc scans still
+work with no site relationship.
+
+`/sites` lists saved sites with server-side search, filters, sorting, and pagination. Site detail
+shows saved metadata, saved scope, latest scan, recent scans, and total scan count. Inactive sites
+remain inspectable and retain scan history, but they are excluded from the default saved-site scan
+selector and cannot start new scans.
+
+Site deletion is conservative. A site with scans returns `409 Conflict` and must keep its scan
+history intact. A site with no scans can be deleted permanently. Deleting a scan associated with a
+site leaves the site record intact and updates site aggregates on the next query.
+
+No TechSmith sites are seeded automatically. TechSmith-like records can be created manually for local
+testing, but core models, APIs, and crawler behavior remain generic.
+

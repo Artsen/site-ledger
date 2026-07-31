@@ -86,6 +86,31 @@ boundaries are intended to be reused by future findings, broken-link aggregation
 retention policies, alternate storage backends, and link visualizations without adding a speculative
 plugin architecture.
 
+## PR 4 Saved Sites
+
+`WebsiteProperty` represents a saved Site above scans. It stores generic site metadata, a normalized
+base URL, active state, classification keys, and a saved `scope_config` JSON object using the same
+schema as scan creation. Classifications are centralized stable keys rather than display labels or
+crawler behavior switches.
+
+`Scan.website_property_id` is nullable. Existing and future ad hoc scans remain valid with no site
+relationship. Saved-site scans store both the site relationship and a copied effective `scope_config`
+snapshot, so editing a site later does not alter historical scan behavior.
+
+`services.site_management` owns creation, update, duplicate base URL validation, active/inactive
+state changes, scan creation from an active site, and conservative site deletion. A site with scans
+cannot be deleted; scan deletion and site deletion remain separate lifecycle operations.
+
+`services.site_queries` owns paginated site listing, site detail aggregates, and site scan history.
+The site list uses set-based scan counts and latest-scan joins rather than querying scans for each
+site row. `/api/sites` supports server-side search, classification filters, active-state filtering,
+sorting, limit, and offset.
+
+Future sitemap, analytics, comparison, scheduling, monitoring, ownership, tagging, and integration
+features should extend the saved-site layer through focused related tables or services. PR 4 does
+not add empty integration columns, scheduled scans, seed data, or organization/user permission
+models.
+
 ## Deferred
 
 Robots.txt enforcement and concurrent crawling remain internal configuration placeholders for a
