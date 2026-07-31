@@ -84,6 +84,13 @@ def test_update_site_does_not_mutate_existing_scan_scope(db_session: Session) ->
     assert scan.scope_config["included_path_prefixes"] == ["/"]
 
 
+def test_site_update_schema_normalizes_locale() -> None:
+    payload = WebsitePropertyUpdate(locale="en-us", group_key="  Web   Team  ")
+
+    assert payload.locale == "en-US"
+    assert payload.group_key == "Web Team"
+
+
 def test_create_scan_from_site_requires_active_site_and_copies_scope(db_session: Session) -> None:
     site = create_site(db_session, _site_payload())
     override = ScopeConfigPayload(max_pages=7, max_depth=2, included_path_prefixes=["/custom/"])
