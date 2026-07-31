@@ -10,6 +10,9 @@ import { NewScanPage } from "../src/pages/NewScanPage";
 import { PageDetailPage } from "../src/pages/PageDetailPage";
 import { ScanDetailPage } from "../src/pages/ScanDetailPage";
 import { ScansPage } from "../src/pages/ScansPage";
+import { SiteDetailPage } from "../src/pages/SiteDetailPage";
+import { SiteFormPage } from "../src/pages/SiteFormPage";
+import { SitesPage } from "../src/pages/SitesPage";
 import type { PageList, Scan, Snapshot } from "../src/types/scans";
 
 const api = vi.hoisted(() => ({
@@ -25,7 +28,14 @@ const api = vi.hoisted(() => ({
   getScanDeletePreview: vi.fn(),
   deleteScan: vi.fn(),
   listScanHistory: vi.fn(),
-  listScans: vi.fn()
+  listScans: vi.fn(),
+  listSites: vi.fn(),
+  getSite: vi.fn(),
+  createSite: vi.fn(),
+  updateSite: vi.fn(),
+  deleteSite: vi.fn(),
+  createSiteScan: vi.fn(),
+  listSiteScans: vi.fn()
 }));
 
 vi.mock("../src/api/client", () => ({
@@ -93,6 +103,13 @@ beforeEach(() => {
     warnings: []
   });
   api.listScanHistory.mockResolvedValue({ items: [scanFixture], total: 1, limit: 25, offset: 0 });
+  api.listSites.mockResolvedValue({ items: [siteFixture], total: 1, limit: 25, offset: 0 });
+  api.getSite.mockResolvedValue(siteDetailFixture);
+  api.createSite.mockResolvedValue(siteDetailFixture);
+  api.updateSite.mockResolvedValue(siteDetailFixture);
+  api.deleteSite.mockResolvedValue({ deleted_site_id: 3 });
+  api.createSiteScan.mockResolvedValue({ ...scanFixture, id: 45, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/" });
+  api.listSiteScans.mockResolvedValue({ items: [{ ...scanFixture, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/" }], total: 1, limit: 25, offset: 0 });
 });
 
 afterEach(() => cleanup());
@@ -180,6 +197,51 @@ describe("scan results workflow", () => {
   it("renders a scan status badge with accessible text", () => {
     render(<StatusBadge status="completed_with_errors" />);
     expect(screen.getByText("Completed With Errors")).toBeInTheDocument();
+  });
+});
+
+describe("saved sites workflow", () => {
+  it("renders sites list filters and actions", async () => {
+    renderRoute(<SitesPage />, "/sites", "/sites");
+
+    expect(await screen.findByRole("heading", { name: "Saved sites" })).toBeInTheDocument();
+    expect(await screen.findByText("Example Site")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search sites"), { target: { value: "example" } });
+
+    await waitFor(() => expect(api.listSites).toHaveBeenLastCalledWith(expect.stringContaining("search=example")));
+  });
+
+  it("creates a site with saved scope and one value per line", async () => {
+    renderRoute(<SiteFormPage mode="create" />, "/sites/new", "/sites/new");
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Example Site" } });
+    fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://example.com/learn/" } });
+    fireEvent.change(screen.getByLabelText("Included path prefixes"), { target: { value: "/learn/\n/docs/" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create site" }));
+
+    await waitFor(() => expect(api.createSite).toHaveBeenCalledTimes(1));
+    expect(api.createSite.mock.calls[0][0].scope_config.included_path_prefixes).toEqual(["/learn/", "/docs/"]);
+  });
+
+  it("renders site details and can disable a site", async () => {
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3");
+
+    expect(await screen.findByRole("heading", { name: "Example Site" })).toBeInTheDocument();
+    expect(screen.getByText("Recent scans")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+
+    await waitFor(() => expect(api.updateSite).toHaveBeenCalledWith("3", { is_active: false }));
+  });
+
+  it("starts a saved-site scan with scan-specific overrides", async () => {
+    renderRoute(<NewScanPage />, "/scans/new", "/scans/new?site_id=3");
+
+    expect(await screen.findByLabelText("Site")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Maximum pages"), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start scan" }));
+
+    await waitFor(() => expect(api.createSiteScan).toHaveBeenCalledWith("3", expect.objectContaining({ max_pages: 7 })));
+    expect(api.updateSite).not.toHaveBeenCalled();
   });
 });
 
@@ -287,6 +349,9 @@ function renderRoute(element: React.ReactElement, path: string, initialEntry = p
 
 const scanFixture: Scan = {
   id: 1,
+  website_property_id: null,
+  website_property_name: null,
+  website_property_base_url: null,
   starting_url: "https://example.com/",
   status: "completed",
   scope_config: {
@@ -425,4 +490,49 @@ const inboundFixture = {
     nofollow_occurrences: 1,
     self_link_occurrences: 1
   }
+};
+
+const siteFixture = {
+  id: 3,
+  name: "Example Site",
+  base_url: "https://example.com/",
+  normalized_base_url: "https://example.com/",
+  description: "A site",
+  group_key: "marketing",
+  locale: "en-US",
+  platform_key: "wordpress_root",
+  ownership_key: "web_team",
+  scope_config: {
+    allowed_host_patterns: ["example.com"],
+    excluded_host_patterns: [],
+    included_path_prefixes: ["/"],
+    excluded_path_prefixes: ["/wp-admin/", "/wp-login.php"],
+    follow_subdomains: false,
+    max_pages: 100,
+    max_depth: 3,
+    respect_robots_txt: false,
+    request_timeout_seconds: 10,
+    max_html_response_bytes: 2000000,
+    concurrent_requests_per_host: 2,
+    delay_between_requests_ms: 0,
+    user_agent: "ArtsenDesignScanner/0.1",
+    drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
+    allow_private_networks: false,
+    max_redirects: 10
+  },
+  is_active: true,
+  created_at: "2026-07-30T01:00:00Z",
+  updated_at: "2026-07-30T01:00:00Z",
+  total_scan_count: 1,
+  latest_scan_id: 1,
+  latest_scan_status: "completed",
+  latest_scan_date: "2026-07-30T01:00:00Z",
+  latest_scan_discovered_count: 1,
+  latest_scan_failed_count: 0
+};
+
+const siteDetailFixture = {
+  ...siteFixture,
+  latest_scan: { ...scanFixture, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/" },
+  recent_scans: [{ ...scanFixture, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/" }]
 };
