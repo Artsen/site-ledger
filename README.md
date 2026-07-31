@@ -147,3 +147,35 @@ site leaves the site record intact and updates site aggregates on the next query
 No TechSmith sites are seeded automatically. TechSmith-like records can be created manually for local
 testing, but core models, APIs, and crawler behavior remain generic.
 
+## URL Sources and Inventory
+
+Saved sites can now own reusable URL sources. PR 6 supports sitemap sources, robots.txt sitemap
+discovery, and manual URL batches. Source refreshes fetch with the same SSRF destination checks,
+redirect validation, timeout limits, and response-size limits used by crawling. Sitemap XML is parsed
+without networked DTD/entity loading, and `.gz` sitemap responses are decompressed with a bounded
+limit before parsing.
+
+The Sources tab on a site lets users add a sitemap URL, discover sitemap directives from
+`/robots.txt`, refresh a source, delete a source, or paste manual URLs one per line. The Inventory
+tab groups current source entries by normalized URL and shows their source provenance, scope
+decision, validation state, and whether the URL has been seen by scans. Out-of-scope and invalid
+source entries are preserved for review but are not queued for crawling.
+
+When starting a scan from a saved site, users can include the current URL inventory. The scan stores
+explicit `ScanSeed` rows with `ScanSeedOrigin` provenance, so later source edits do not rewrite the
+inputs used by an existing scan. Inventory seeds respect scope and page limits before being queued;
+the crawler still deduplicates fetched resources by normalized URL.
+
+Deleting a URL source removes its source entries and refresh history. Resource cleanup remains
+reference-aware: resources still referenced by scans, link occurrences, source entries, or scan seeds
+are preserved. Deleting a scan removes its scan seeds and seed origins without deleting the saved
+site or source configuration.
+
+Source refreshes run synchronously in the current API request. A background refresh worker and
+progress polling are intentionally left for a later PR.
+
+Current npm production audit status: `npm audit --omit=dev` reports React Router advisories in the
+available registry ranges for both the existing v6 line and npm's suggested v7 targets. The
+application does not use React Router SSR/RSC features, but the audit remains a known dependency
+advisory until the package publishes or resolves a non-vulnerable compatible target.
+

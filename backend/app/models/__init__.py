@@ -3,6 +3,11 @@ from app.models.resources import (
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
+    ScanSeed,
+    ScanSeedOrigin,
+    SourceRefresh,
+    UrlSource,
+    UrlSourceEntry,
     WebResource,
     WebsiteProperty,
 )
@@ -12,6 +17,11 @@ __all__ = [
     "ResourceOccurrence",
     "ResourceSnapshot",
     "Scan",
+    "ScanSeed",
+    "ScanSeedOrigin",
+    "SourceRefresh",
+    "UrlSource",
+    "UrlSourceEntry",
     "WebResource",
     "WebsiteProperty",
 ]

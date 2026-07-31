@@ -1,9 +1,12 @@
-from sqlalchemy import func, select
+from typing import Any
+
+from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Scan, WebsiteProperty
+from app.models import Scan, UrlSourceEntry, WebsiteProperty
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate, WebsitePropertyUpdate
+from app.services.scan_seeds import create_scan_seeds
 from app.services.site_urls import normalize_site_base_url
 
 
@@ -74,7 +77,19 @@ def delete_site(db: Session, site_id: int) -> int | None:
     scan_count = db.scalar(select(func.count(Scan.id)).where(Scan.website_property_id == site.id))
     if scan_count:
         raise SiteHasScansError("Delete or detach this site's scans before deleting the site.")
+    resource_ids = list(
+        db.scalars(
+            select(distinct(UrlSourceEntry.resource_id))
+            .join(UrlSourceEntry.url_source)
+            .where(
+                UrlSourceEntry.resource_id.is_not(None),
+                UrlSourceEntry.url_source.has(website_property_id=site.id),
+            )
+        )
+    )
     db.delete(site)
+    db.flush()
+    _delete_unreferenced_resources_after_site_delete(db, [item for item in resource_ids if item])
     db.commit()
     return site_id
 
@@ -83,6 +98,9 @@ def create_scan_from_site(
     db: Session,
     site_id: int,
     scope_config: ScopeConfigPayload,
+    *,
+    include_inventory: bool = False,
+    source_ids: list[int] | None = None,
 ) -> Scan | None:
     site = db.get(WebsiteProperty, site_id)
     if site is None:
@@ -96,6 +114,14 @@ def create_scan_from_site(
         scope_config=scope_config.model_dump(),
     )
     db.add(scan)
+    db.flush()
+    create_scan_seeds(
+        db,
+        scan,
+        site,
+        include_inventory=include_inventory,
+        source_ids=source_ids or [],
+    )
     db.commit()
     db.refresh(scan)
     return scan
@@ -111,3 +137,33 @@ def _ensure_unique_base_url(
         query = query.where(WebsiteProperty.id != site_id)
     if db.scalar(query) is not None:
         raise DuplicateSiteError("A site with this base URL already exists.")
+
+
+def _reference_count(db: Session, model: type[Any], column: Any, resource_id: int) -> int:
+    return db.scalar(select(func.count(model.id)).where(column == resource_id)) or 0
+
+
+def _delete_unreferenced_resources_after_site_delete(db: Session, resource_ids: list[int]) -> None:
+    if not resource_ids:
+        return
+    from app.models import (
+        ResourceOccurrence,
+        ResourceSnapshot,
+        ScanSeed,
+        UrlSourceEntry,
+        WebResource,
+    )
+
+    for resource_id in set(resource_ids):
+        has_reference = (
+            _reference_count(db, ResourceSnapshot, ResourceSnapshot.resource_id, resource_id)
+            + _reference_count(
+                db, ResourceOccurrence, ResourceOccurrence.target_resource_id, resource_id
+            )
+            + _reference_count(db, UrlSourceEntry, UrlSourceEntry.resource_id, resource_id)
+            + _reference_count(db, ScanSeed, ScanSeed.resource_id, resource_id)
+        )
+        if has_reference == 0:
+            resource = db.get(WebResource, resource_id)
+            if resource:
+                db.delete(resource)

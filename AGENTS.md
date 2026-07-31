@@ -469,6 +469,24 @@ PR 4 adds saved Sites through the internal `WebsiteProperty` model:
 - Do not seed TechSmith data or hardcode TechSmith-specific logic in site models, APIs, services, or
   crawler behavior.
 
+PR 6 adds URL sources and saved-site inventory:
+
+- Site detail includes Sources and Inventory tabs.
+- `UrlSource`, `SourceRefresh`, `UrlSourceEntry`, `ScanSeed`, and `ScanSeedOrigin` preserve source
+  configuration, refresh history, current URL inventory, and scan input provenance.
+- Supported source types are sitemap, robots.txt discovery, sitemap-index children, and manual URL
+  batches.
+- Sitemap and robots fetching must use the same SSRF, redirect, timeout, and response-size safety
+  boundaries as crawling.
+- Source refreshes may discover out-of-scope or invalid URLs, but those rows must remain reviewable
+  and must not be queued for crawling.
+- Saved-site scans may include current inventory entries as explicit scan seeds. Later source edits
+  must not rewrite an existing scan's seed provenance.
+- Source and scan deletion must preserve resources still referenced by snapshots, occurrences,
+  source entries, or scan seeds.
+- Do not treat source inventory as crawled page results. A URL in a source is an input candidate
+  until the crawler fetches it.
+
 The page table should include requested URL, final URL, status, title, depth, content type, discovery source, inbound occurrence count, fetch duration, and error state.
 
 Favor clarity and density over decorative dashboard cards. The graph visualization is not part of PR 1.
@@ -559,7 +577,6 @@ The milestone is complete only when:
 
 Do not implement:
 
-- Sitemap ingestion or robots.txt sitemap discovery
 - Browser-rendered crawling
 - Image, script, stylesheet, video, font, or document inventories
 - Screenshots

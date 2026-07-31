@@ -3,7 +3,16 @@ from dataclasses import dataclass
 from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.models import ContentBlob, ResourceOccurrence, ResourceSnapshot, Scan, WebResource
+from app.models import (
+    ContentBlob,
+    ResourceOccurrence,
+    ResourceSnapshot,
+    Scan,
+    ScanSeed,
+    ScanSeedOrigin,
+    UrlSourceEntry,
+    WebResource,
+)
 from app.schemas.scans import ScanDeletePreview, ScanDeleteResult
 from app.storage.content_store import LocalContentStore
 
@@ -82,6 +91,9 @@ def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDele
         delete(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id.in_(snapshot_ids))
     )
     db.execute(delete(ResourceSnapshot).where(ResourceSnapshot.scan_id == scan.id))
+    seed_ids = select(ScanSeed.id).where(ScanSeed.scan_id == scan.id)
+    db.execute(delete(ScanSeedOrigin).where(ScanSeedOrigin.scan_seed_id.in_(seed_ids)))
+    db.execute(delete(ScanSeed).where(ScanSeed.scan_id == scan.id))
     db.execute(delete(Scan).where(Scan.id == scan.id))
     if deleted_blob_ids:
         db.execute(delete(ContentBlob).where(ContentBlob.id.in_(deleted_blob_ids)))
@@ -135,13 +147,26 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
             )
         )
     )
-    resource_ids = list(
-        db.scalars(
+    snapshot_resource_ids = [
+        resource_id
+        for resource_id in db.scalars(
             select(distinct(ResourceSnapshot.resource_id)).where(
                 ResourceSnapshot.scan_id == scan.id
             )
         )
-    )
+        if resource_id is not None
+    ]
+    seed_resource_ids = [
+        resource_id
+        for resource_id in db.scalars(
+            select(distinct(ScanSeed.resource_id)).where(
+                ScanSeed.scan_id == scan.id,
+                ScanSeed.resource_id.is_not(None),
+            )
+        )
+        if resource_id is not None
+    ]
+    resource_ids = sorted(set(snapshot_resource_ids + seed_resource_ids))
     referenced_blobs = (
         list(db.scalars(select(ContentBlob).where(ContentBlob.id.in_(referenced_blob_ids))))
         if referenced_blob_ids
@@ -188,7 +213,27 @@ def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int
             )
         )
     )
-    deletable = sorted(set(candidate_resource_ids) - still_snapshotted - still_targeted)
+    still_source_entry = set(
+        db.scalars(
+            select(distinct(UrlSourceEntry.resource_id)).where(
+                UrlSourceEntry.resource_id.in_(candidate_resource_ids)
+            )
+        )
+    )
+    still_seeded = set(
+        db.scalars(
+            select(distinct(ScanSeed.resource_id)).where(
+                ScanSeed.resource_id.in_(candidate_resource_ids)
+            )
+        )
+    )
+    deletable = sorted(
+        set(candidate_resource_ids)
+        - still_snapshotted
+        - still_targeted
+        - still_source_entry
+        - still_seeded
+    )
     if deletable:
         db.execute(delete(WebResource).where(WebResource.id.in_(deletable)))
     return deletable

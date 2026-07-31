@@ -111,6 +111,44 @@ features should extend the saved-site layer through focused related tables or se
 not add empty integration columns, scheduled scans, seed data, or organization/user permission
 models.
 
+## PR 6 URL Sources and Inventory
+
+URL sources are saved-site children, not crawler plugins. `UrlSource` stores source configuration,
+`SourceRefresh` stores one fetch/parse attempt, and `UrlSourceEntry` stores each URL observed from
+that source with raw URL, normalized URL, current membership, validation state, scope decision, and
+source-specific metadata. Valid in-scope entries link to `WebResource`; invalid or out-of-scope
+entries are retained without being crawlable resources.
+
+`services.source_refresh` owns robots.txt sitemap discovery and sitemap refreshes. It uses
+`crawler.safe_fetch.SafeHttpFetcher` so source ingestion and page crawling share redirect limits,
+SSRF destination checks, timeout handling, user-agent handling, and streamed response-size
+enforcement. Sitemap XML parsing lives in `parsers.sitemap`; robots directives live in
+`parsers.robots`; gzip detection and bounded decompression live in `parsers.compression`.
+
+Sitemap index children are represented as child `UrlSource` rows linked through
+`parent_source_id` and `root_source_id`. Child refreshes reuse the same scope and safety checks as
+top-level sitemap refreshes, and cycle/child-count limits prevent unbounded source expansion.
+Robots discovery creates or reuses a `robots_txt` source for the site and child sitemap sources for
+the discovered `Sitemap:` directives.
+
+`services.source_queries` owns source, source-entry, refresh, and inventory list queries. Inventory
+groups current entries by normalized URL and exposes multi-source provenance plus latest crawl
+status when a linked resource has scan snapshots. This is deliberately source inventory, not a
+replacement for scan results: scan pages remain observations from crawler fetches.
+
+Scan starts from saved sites can include current inventory entries. `services.scan_seeds` snapshots
+the selected source entries into `ScanSeed` and `ScanSeedOrigin` rows before the scan is queued.
+The crawler reads queued seeds at startup and marks them fetched or failed as it processes them.
+This preserves scan input provenance even if sources are refreshed or deleted later.
+
+Deletion rules include the new source tables. Source deletion cascades source config, refreshes, and
+entries, then removes only resources no longer referenced by snapshots, occurrences, other source
+entries, or scan seeds. Scan deletion removes seed origins and seeds for that scan while preserving
+source configuration and source-owned resources still in use.
+
+Source refreshes are synchronous in PR 6. A later worker can move `refresh_source` behind a queue in
+the same way `services.scan_runner` hides crawler execution.
+
 ## Deferred
 
 Robots.txt enforcement and concurrent crawling remain internal configuration placeholders for a
@@ -121,5 +159,6 @@ The Playwright coverage currently exercises the frontend scan form route. Comple
 crawl behavior, including redirect and response-size handling, is covered in backend integration
 tests through mocked HTTP transports.
 
-PR 1 deliberately excludes asset inventory, rendered crawling, sitemap ingestion, analytics integrations, scheduled scans, AI features, and multi-user permissions.
+Rendered crawling, asset inventory, analytics integrations, scheduled scans, AI features, and
+multi-user permissions remain excluded.
 

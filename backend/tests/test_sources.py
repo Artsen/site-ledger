@@ -1,0 +1,245 @@
+import gzip
+
+import httpx
+import pytest
+from sqlalchemy.orm import Session
+
+from app.models import UrlSourceEntry, WebResource
+from app.parsers.compression import (
+    DecompressedResponseTooLargeError,
+    InvalidGzipError,
+    maybe_decompress_gzip,
+)
+from app.parsers.robots import parse_sitemap_directives
+from app.parsers.sitemap import SitemapParseError, parse_sitemap_xml
+from app.schemas.scans import ScopeConfigPayload
+from app.schemas.sites import WebsitePropertyCreate
+from app.schemas.sources import UrlSourceCreate
+from app.services.scan_deletion import delete_scan
+from app.services.site_management import create_scan_from_site, create_site, delete_site
+from app.services.source_management import DuplicateSourceError, add_manual_urls, create_source
+from app.services.source_queries import list_inventory, list_scan_seeds, list_sources
+from app.services.source_refresh import discover_from_robots, refresh_source
+from app.storage.content_store import LocalContentStore
+
+
+def test_sitemap_parser_handles_urlsets_indexes_and_unsafe_xml() -> None:
+    parsed = parse_sitemap_xml(
+        b"""<?xml version="1.0"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>https://example.com/a</loc><lastmod>2026-01-01</lastmod><changefreq>daily</changefreq><priority>0.8</priority></url>
+          <url><lastmod>missing loc</lastmod></url>
+        </urlset>"""
+    )
+    assert parsed.document_type == "urlset"
+    assert parsed.urls[0].loc == "https://example.com/a"
+    assert parsed.urls[0].priority == "0.8"
+
+    index = parse_sitemap_xml(
+        b"""<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <sitemap><loc>https://example.com/child.xml</loc><lastmod>2026-01-02</lastmod></sitemap>
+        </sitemapindex>"""
+    )
+    assert index.children[0].loc.endswith("child.xml")
+
+    with pytest.raises(SitemapParseError):
+        parse_sitemap_xml(
+            b"<!DOCTYPE foo [ <!ENTITY xxe SYSTEM 'file:///etc/passwd'> ]><foo>&xxe;</foo>"
+        )
+
+
+def test_gzip_detection_and_limits() -> None:
+    body = gzip.compress(b"<urlset />")
+    content, decompressed = maybe_decompress_gzip(
+        body,
+        url="https://example.com/sitemap.xml.gz",
+        content_type=None,
+        max_decompressed_bytes=100,
+    )
+    assert decompressed is True
+    assert content == b"<urlset />"
+
+    with pytest.raises(InvalidGzipError):
+        maybe_decompress_gzip(
+            b"not gzip",
+            url="https://example.com/sitemap.xml.gz",
+            content_type=None,
+            max_decompressed_bytes=100,
+        )
+    with pytest.raises(DecompressedResponseTooLargeError):
+        maybe_decompress_gzip(
+            gzip.compress(b"x" * 200),
+            url="https://example.com/sitemap.xml.gz",
+            content_type=None,
+            max_decompressed_bytes=100,
+        )
+
+
+def test_robots_parser_extracts_multiple_directives() -> None:
+    directives = parse_sitemap_directives(
+        b"Sitemap: /sitemap.xml\nsitemap: https://cdn.example.com/other.xml\n",
+        "https://example.com/robots.txt",
+    )
+
+    assert [item.resolved_url for item in directives] == [
+        "https://example.com/sitemap.xml",
+        "https://cdn.example.com/other.xml",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sitemap_refresh_persists_entries_and_current_membership(db_session: Session) -> None:
+    site = create_site(
+        db_session,
+        _site_payload(
+            scope_config=ScopeConfigPayload(
+                allowed_host_patterns=["example.com"], drop_query_parameters=["utm_*"]
+            )
+        ),
+    )
+    source = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Main sitemap", source_url="https://example.com/sitemap.xml"),
+    )
+    assert source is not None
+
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "application/xml"},
+            content=b"""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <url><loc>https://example.com/a?utm_source=x</loc><lastmod>2026-01-01</lastmod></url>
+              <url><loc>https://outside.example/b</loc></url>
+              <url><loc>ftp://example.com/file</loc></url>
+            </urlset>""",
+        )
+    )
+    refresh = await refresh_source(db_session, site.id, source.id, transport)
+
+    assert refresh is not None
+    assert refresh.status == "completed_with_errors"
+    entries = db_session.query(UrlSourceEntry).order_by(UrlSourceEntry.id).all()
+    assert len(entries) == 3
+    assert entries[0].normalized_url == "https://example.com/a"
+    assert entries[0].validation_state == "valid"
+    assert entries[1].scope_decision == "external"
+    assert entries[2].validation_state == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_robots_discovery_creates_sitemap_sources(db_session: Session) -> None:
+    site = create_site(
+        db_session,
+        _site_payload(scope_config=ScopeConfigPayload(allowed_host_patterns=["example.com"])),
+    )
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, content=b"Sitemap: /sitemap.xml\n")
+    )
+
+    refresh = await discover_from_robots(db_session, site.id, transport)
+    sources = list_sources(
+        db_session, site.id, source_type=None, active_state="all", limit=10, offset=0
+    )
+
+    assert refresh is not None
+    assert refresh.status == "completed"
+    assert sources is not None
+    assert {source.source_type for source in sources.items} == {"robots", "sitemap"}
+
+
+def test_manual_urls_inventory_and_scan_seeds(db_session: Session) -> None:
+    site = create_site(
+        db_session,
+        _site_payload(scope_config=ScopeConfigPayload(allowed_host_patterns=["example.com"])),
+    )
+
+    source, entries, accepted, rejected, duplicates = add_manual_urls(
+        db_session, site.id, "/a\nhttps://example.com/a\njavascript:alert(1)"
+    )
+    assert source is not None
+    assert accepted == 1
+    assert rejected == 1
+    assert duplicates == 1
+
+    inventory = list_inventory(
+        db_session,
+        site.id,
+        search=None,
+        source_type=None,
+        source_id=None,
+        scope_decision=None,
+        validation_state=None,
+        limit=10,
+        offset=0,
+    )
+    assert inventory is not None
+    assert inventory.total == 2
+
+    scan = create_scan_from_site(
+        db_session,
+        site.id,
+        ScopeConfigPayload(allowed_host_patterns=["example.com"]),
+        include_inventory=True,
+    )
+    assert scan is not None
+    seeds = list_scan_seeds(db_session, scan.id, limit=10, offset=0)
+    assert seeds is not None
+    assert any(seed.origins[0].origin_type == "manual" for seed in seeds.items)
+
+
+def test_source_duplicate_and_deletion_resource_cleanup(db_session: Session, tmp_path) -> None:
+    site = create_site(
+        db_session,
+        _site_payload(scope_config=ScopeConfigPayload(allowed_host_patterns=["example.com"])),
+    )
+    create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Main sitemap", source_url="https://example.com/sitemap.xml"),
+    )
+    with pytest.raises(DuplicateSourceError):
+        create_source(
+            db_session,
+            site.id,
+            UrlSourceCreate(name="Duplicate", source_url="https://EXAMPLE.com/sitemap.xml"),
+        )
+    add_manual_urls(db_session, site.id, "https://example.com/a")
+    resource_count = db_session.query(WebResource).count()
+    assert resource_count == 1
+
+    assert delete_site(db_session, site.id) == site.id
+    assert db_session.query(WebResource).count() == 0
+
+    site = create_site(
+        db_session,
+        _site_payload(scope_config=ScopeConfigPayload(allowed_host_patterns=["example.com"])),
+    )
+    add_manual_urls(db_session, site.id, "https://example.com/a")
+    scan = create_scan_from_site(
+        db_session,
+        site.id,
+        ScopeConfigPayload(allowed_host_patterns=["example.com"]),
+        include_inventory=True,
+    )
+    assert scan is not None
+    scan.status = "completed"
+    db_session.commit()
+    delete_scan(db_session, scan.id, LocalContentStore(tmp_path))
+    assert db_session.query(WebResource).count() == 1
+
+
+def _site_payload(**overrides) -> WebsitePropertyCreate:
+    data = {
+        "name": "Example Site",
+        "base_url": "https://example.com/",
+        "description": None,
+        "group_key": "Other",
+        "locale": None,
+        "platform_key": "Other",
+        "ownership_key": "Unknown",
+        "scope_config": ScopeConfigPayload(),
+        "is_active": True,
+    }
+    data.update(overrides)
+    return WebsitePropertyCreate(**data)

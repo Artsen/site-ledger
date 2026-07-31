@@ -73,6 +73,146 @@ export type SitePayload = {
   is_active: boolean;
 };
 
+export type UrlSource = {
+  id: number;
+  website_property_id: number;
+  parent_source_id: number | null;
+  root_source_id: number | null;
+  source_type: string;
+  name: string;
+  source_url: string | null;
+  normalized_source_url: string | null;
+  is_active: boolean;
+  discovery_mode: string;
+  settings_json: Record<string, unknown>;
+  last_refresh_status: string | null;
+  last_refresh_started_at: string | null;
+  last_refresh_finished_at: string | null;
+  last_successful_refresh_at: string | null;
+  last_http_status: number | null;
+  last_error_type: string | null;
+  last_error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  current_entry_count: number;
+};
+
+export type UrlSourceList = {
+  items: UrlSource[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type SourceRefresh = {
+  id: number;
+  url_source_id: number;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  http_status: number | null;
+  fetched_url: string | null;
+  final_url: string | null;
+  response_bytes: number;
+  content_type: string | null;
+  discovered_entry_count: number;
+  accepted_entry_count: number;
+  rejected_entry_count: number;
+  child_source_count: number;
+  entries_added: number;
+  entries_updated: number;
+  entries_no_longer_current: number;
+  error_type: string | null;
+  error_message: string | null;
+  warnings_json: Array<Record<string, unknown>>;
+};
+
+export type UrlSourceEntry = {
+  id: number;
+  url_source_id: number;
+  resource_id: number | null;
+  normalized_url: string | null;
+  raw_url: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  last_refresh_id: number | null;
+  is_current: boolean;
+  sitemap_lastmod: string | null;
+  sitemap_changefreq: string | null;
+  sitemap_priority: string | null;
+  source_metadata_json: Record<string, unknown>;
+  validation_state: string;
+  validation_message: string | null;
+  scope_decision: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UrlSourceEntryList = {
+  items: UrlSourceEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ManualUrlBatchResult = {
+  source: UrlSource;
+  items: UrlSourceEntry[];
+  accepted_count: number;
+  rejected_count: number;
+  duplicate_count: number;
+};
+
+export type InventoryItem = {
+  normalized_url: string | null;
+  resource_id: number | null;
+  source_count: number;
+  source_types: string[];
+  sources: Array<Record<string, unknown>>;
+  scope_decision: string;
+  validation_state: string;
+  sitemap_lastmod: string | null;
+  latest_scan_status: string | null;
+  latest_fetch_date: string | null;
+  classification: string;
+};
+
+export type InventoryList = {
+  items: InventoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ScanSeed = {
+  id: number;
+  scan_id: number;
+  resource_id: number | null;
+  normalized_url: string | null;
+  requested_url: string;
+  depth: number;
+  queue_state: string;
+  scope_decision: string;
+  exclusion_reason: string | null;
+  created_at: string;
+  origins: Array<{
+    id: number;
+    origin_type: string;
+    url_source_id: number | null;
+    url_source_entry_id: number | null;
+    source_refresh_id: number | null;
+    raw_url: string | null;
+    metadata_json: Record<string, unknown>;
+  }>;
+};
+
+export type ScanSeedList = {
+  items: ScanSeed[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export type ScopeConfig = {
   allowed_host_patterns: string[];
   excluded_host_patterns: string[];
