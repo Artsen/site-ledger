@@ -36,7 +36,7 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
   const [listFields, setListFields] = useState<ListFieldText>(() => listsFromScope(defaultScope()));
   const baseValidation = useMemo(() => normalizeStartingUrlInput(form.base_url), [form.base_url]);
   const effectiveScope = useMemo(() => scopeFromForm(form.scope_config, listFields), [form.scope_config, listFields]);
-  const validation = validate(form, baseValidation);
+  const validation = validate(form, baseValidation, effectiveScope);
   const save = useMutation({
     mutationFn: () => {
       const payload = { ...form, base_url: baseValidation.normalizedUrl, description: form.description || null, locale: form.locale || null, scope_config: effectiveScope };
@@ -127,12 +127,12 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
             <TextArea id="dropped-query-parameters" label="Dropped query parameters" value={listFields.drop_query_parameters} onChange={(value) => updateList("drop_query_parameters", value)} />
             <div className="space-y-4">
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.scope_config.follow_subdomains} onChange={(event) => setForm({ ...form, scope_config: { ...form.scope_config, follow_subdomains: event.target.checked } })} className="size-4 rounded border-stone-300" />Follow subdomains</label>
-              <NumberField id="max-pages" label="Maximum pages" value={form.scope_config.max_pages} onChange={(value) => updateScopeNumber("max_pages", value)} />
-              <NumberField id="max-depth" label="Maximum depth" value={form.scope_config.max_depth} onChange={(value) => updateScopeNumber("max_depth", value)} />
-              <NumberField id="request-timeout" label="Request timeout" value={form.scope_config.request_timeout_seconds} onChange={(value) => updateScopeNumber("request_timeout_seconds", value)} />
-              <NumberField id="max-html-bytes" label="Maximum HTML response size" value={form.scope_config.max_html_response_bytes} onChange={(value) => updateScopeNumber("max_html_response_bytes", value)} />
-              <NumberField id="request-delay" label="Delay between requests" value={form.scope_config.delay_between_requests_ms} onChange={(value) => updateScopeNumber("delay_between_requests_ms", value)} />
-              <NumberField id="max-redirects" label="Maximum redirects" value={form.scope_config.max_redirects} onChange={(value) => updateScopeNumber("max_redirects", value)} />
+              <NumberField id="max-pages" label="Maximum pages" value={form.scope_config.max_pages} error={validation.maxPages} onChange={(value) => updateScopeNumber("max_pages", value)} />
+              <NumberField id="max-depth" label="Maximum depth" value={form.scope_config.max_depth} error={validation.maxDepth} onChange={(value) => updateScopeNumber("max_depth", value)} />
+              <NumberField id="request-timeout" label="Request timeout" value={form.scope_config.request_timeout_seconds} error={validation.requestTimeout} onChange={(value) => updateScopeNumber("request_timeout_seconds", value)} />
+              <NumberField id="max-html-bytes" label="Maximum HTML response size" value={form.scope_config.max_html_response_bytes} error={validation.maxHtmlBytes} onChange={(value) => updateScopeNumber("max_html_response_bytes", value)} />
+              <NumberField id="request-delay" label="Delay between requests" value={form.scope_config.delay_between_requests_ms} error={validation.requestDelay} onChange={(value) => updateScopeNumber("delay_between_requests_ms", value)} />
+              <NumberField id="max-redirects" label="Maximum redirects" value={form.scope_config.max_redirects} error={validation.maxRedirects} onChange={(value) => updateScopeNumber("max_redirects", value)} />
               <Field id="user-agent" label="User agent"><input id="user-agent" value={form.scope_config.user_agent} onChange={(event) => setForm({ ...form, scope_config: { ...form.scope_config, user_agent: event.target.value } })} className={inputClass()} /></Field>
             </div>
           </div>
@@ -156,8 +156,8 @@ function TextArea({ id, label, value, onChange }: { id: string; label: string; v
   return <Field id={id} label={label} helper="One value per line. Blank lines are ignored."><textarea id={id} value={value} onChange={(event) => onChange(event.target.value)} rows={5} className={`${inputClass()} font-mono text-xs leading-5`} /></Field>;
 }
 
-function NumberField({ id, label, value, onChange }: { id: string; label: string; value: number; onChange: (value: string) => void }) {
-  return <Field id={id} label={label}><input id={id} type="number" value={Number.isNaN(value) ? "" : value} onChange={(event) => onChange(event.target.value)} className={inputClass()} /></Field>;
+function NumberField({ id, label, value, error, onChange }: { id: string; label: string; value: number; error: string | null; onChange: (value: string) => void }) {
+  return <Field id={id} label={label} error={error}><input id={id} type="number" value={Number.isNaN(value) ? "" : value} onChange={(event) => onChange(event.target.value)} className={inputClass(Boolean(error))} /></Field>;
 }
 
 function ScopeSummary({ scope, baseUrl }: { scope: ScopeConfig; baseUrl: string }) {
@@ -209,12 +209,28 @@ function listsFromScope(scope: ScopeConfig): ListFieldText {
   };
 }
 
-function validate(form: SitePayload, baseValidation: ReturnType<typeof normalizeStartingUrlInput>) {
+function validate(form: SitePayload, baseValidation: ReturnType<typeof normalizeStartingUrlInput>, scope: ScopeConfig) {
   const locale = form.locale && !/^[a-z]{2}-[A-Z]{2}$/.test(form.locale) ? "Locale must look like en-US." : null;
-  return {
+  const validation = {
     name: form.name.trim() ? null : "Name is required.",
     baseUrl: baseValidation.error,
     locale,
-    hasErrors: !form.name.trim() || Boolean(baseValidation.error) || Boolean(locale)
+    maxPages: validateInteger(scope.max_pages, 1, 10000, "Maximum pages must be between 1 and 10,000."),
+    maxDepth: validateInteger(scope.max_depth, 0, 50, "Maximum depth must be between 0 and 50."),
+    requestTimeout: validateNumber(scope.request_timeout_seconds, 1, 300, "Request timeout must be between 1 and 300 seconds."),
+    maxHtmlBytes: validateInteger(scope.max_html_response_bytes, 1, 100000000, "Maximum HTML response size must be at least 1 byte."),
+    requestDelay: validateInteger(scope.delay_between_requests_ms, 0, 60000, "Delay must be between 0 and 60,000 milliseconds."),
+    maxRedirects: validateInteger(scope.max_redirects, 0, 50, "Maximum redirects must be between 0 and 50.")
   };
+  return { ...validation, hasErrors: Object.values(validation).some(Boolean) };
+}
+
+function validateInteger(value: number, min: number, max: number, message: string) {
+  if (!Number.isInteger(value) || value < min || value > max) return message;
+  return null;
+}
+
+function validateNumber(value: number, min: number, max: number, message: string) {
+  if (!Number.isFinite(value) || value < min || value > max) return message;
+  return null;
 }

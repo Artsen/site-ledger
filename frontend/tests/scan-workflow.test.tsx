@@ -223,6 +223,16 @@ describe("saved sites workflow", () => {
     expect(api.createSite.mock.calls[0][0].scope_config.included_path_prefixes).toEqual(["/learn/", "/docs/"]);
   });
 
+  it("blocks saving site settings with invalid numeric scope", async () => {
+    renderRoute(<SiteFormPage mode="edit" />, "/sites/:siteId/edit", "/sites/3/edit");
+
+    expect(await screen.findByRole("heading", { name: "Edit site" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Maximum pages"), { target: { value: "" } });
+
+    expect(screen.getByText(/Maximum pages must be between/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save site" })).toBeDisabled();
+  });
+
   it("renders site details and can disable a site", async () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3");
 
@@ -242,6 +252,16 @@ describe("saved sites workflow", () => {
 
     await waitFor(() => expect(api.createSiteScan).toHaveBeenCalledWith("3", expect.objectContaining({ max_pages: 7 })));
     expect(api.updateSite).not.toHaveBeenCalled();
+  });
+
+  it("blocks saved-site scans with invalid scan-specific numeric overrides", async () => {
+    renderRoute(<NewScanPage />, "/scans/new", "/scans/new?site_id=3");
+
+    expect(await screen.findByLabelText("Site")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Maximum pages"), { target: { value: "" } });
+
+    expect(screen.getByText(/Maximum pages must be between/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start scan" })).toBeDisabled();
   });
 });
 
