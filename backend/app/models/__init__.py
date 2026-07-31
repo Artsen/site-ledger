@@ -4,6 +4,14 @@ from app.models.resources import (
     ResourceSnapshot,
     Scan,
     WebResource,
+    WebsiteProperty,
 )
 
-__all__ = ["ContentBlob", "ResourceOccurrence", "ResourceSnapshot", "Scan", "WebResource"]
+__all__ = [
+    "ContentBlob",
+    "ResourceOccurrence",
+    "ResourceSnapshot",
+    "Scan",
+    "WebResource",
+    "WebsiteProperty",
+]

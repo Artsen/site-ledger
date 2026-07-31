@@ -101,8 +101,9 @@ export function ScansPage() {
                 <tr key={scan.id} className="border-t border-stone-100 align-top">
                   <td className="max-w-md px-3 py-2">
                     <Link to={`/scans/${scan.id}`} className="block truncate font-medium text-stone-950 underline" title={scan.starting_url}>
-                      {hostnameFromUrl(scan.starting_url)}
+                      {scan.website_property_name ?? hostnameFromUrl(scan.starting_url)}
                     </Link>
+                    <span className="block text-xs text-stone-500">{scan.website_property_name ? "Saved site" : "Ad hoc"}</span>
                     <span className="block truncate font-mono text-xs text-stone-500">{scan.starting_url}</span>
                   </td>
                   <td className="px-3 py-2"><StatusBadge status={scan.status} /></td>

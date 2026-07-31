@@ -21,6 +21,9 @@ class Scan(Base):
     __tablename__ = "scans"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    website_property_id: Mapped[int | None] = mapped_column(
+        ForeignKey("website_properties.id"), index=True
+    )
     starting_url: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), index=True, default="queued")
     scope_config: Mapped[dict[str, Any]] = mapped_column(JSON)
@@ -36,6 +39,37 @@ class Scan(Base):
     fatal_error_message: Mapped[str | None] = mapped_column(Text)
 
     snapshots: Mapped[list["ResourceSnapshot"]] = relationship(back_populates="scan")
+    website_property: Mapped["WebsiteProperty | None"] = relationship(back_populates="scans")
+
+    @property
+    def website_property_name(self) -> str | None:
+        return self.website_property.name if self.website_property else None
+
+    @property
+    def website_property_base_url(self) -> str | None:
+        return self.website_property.base_url if self.website_property else None
+
+
+class WebsiteProperty(Base):
+    __tablename__ = "website_properties"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    base_url: Mapped[str] = mapped_column(Text)
+    normalized_base_url: Mapped[str] = mapped_column(Text, unique=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    group_key: Mapped[str] = mapped_column(String(64), index=True)
+    locale: Mapped[str | None] = mapped_column(String(32), index=True)
+    platform_key: Mapped[str] = mapped_column(String(64), index=True)
+    ownership_key: Mapped[str] = mapped_column(String(64), index=True)
+    scope_config: Mapped[dict[str, Any]] = mapped_column(JSON)
+    is_active: Mapped[bool] = mapped_column(default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    scans: Mapped[list[Scan]] = relationship(back_populates="website_property")
 
 
 class WebResource(Base):

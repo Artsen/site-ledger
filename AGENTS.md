@@ -453,6 +453,22 @@ Scan deletion must remain reference-aware: preserve shared HTML blobs, delete on
 blob records and files after database cleanup commits, and remove `WebResource` rows only when no
 remaining snapshot or occurrence references them.
 
+PR 4 adds saved Sites through the internal `WebsiteProperty` model:
+
+- `/sites`, `/sites/new`, `/sites/{siteId}`, and `/sites/{siteId}/edit` are real frontend routes.
+- `POST /api/sites`, `GET /api/sites`, `GET /api/sites/{site_id}`, `PATCH /api/sites/{site_id}`,
+  `DELETE /api/sites/{site_id}`, `POST /api/sites/{site_id}/scans`, and
+  `GET /api/sites/{site_id}/scans` are the saved-site API surface.
+- `Scan.website_property_id` is optional. Ad hoc scans must keep working with `null`.
+- Saved-site scans copy the effective scope into the scan row. Updating a site must not mutate
+  existing scans.
+- Inactive sites remain inspectable, but cannot start scans and should not appear in the default
+  active-site selector.
+- Site deletion must be conservative: block deletion when scans exist, and never invoke scan
+  deletion as part of deleting a site.
+- Do not seed TechSmith data or hardcode TechSmith-specific logic in site models, APIs, services, or
+  crawler behavior.
+
 The page table should include requested URL, final URL, status, title, depth, content type, discovery source, inbound occurrence count, fetch duration, and error state.
 
 Favor clarity and density over decorative dashboard cards. The graph visualization is not part of PR 1.

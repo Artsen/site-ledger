@@ -3,6 +3,26 @@ import { expect, test, type Page } from "@playwright/test";
 test("mocked scan workflow supports creation, filtering, details, inbound links, and deletion", async ({ page }) => {
   await mockApi(page);
 
+  await page.goto("/sites");
+  await expect(page.getByRole("heading", { name: "Saved sites" })).toBeVisible();
+  await page.getByRole("link", { name: "Create site" }).click();
+  await page.getByLabel("Name").fill("Example Site");
+  await page.getByLabel("Base URL").fill("https://example.com/learn/");
+  await page.getByLabel("Included path prefixes").fill("/learn/");
+  await page.getByRole("button", { name: "Create site" }).click();
+  await expect(page).toHaveURL(/\/sites\/3$/);
+  await expect(page.getByRole("heading", { name: "Example Site" })).toBeVisible();
+  await page.getByRole("link", { name: "Edit site" }).click();
+  await page.getByLabel("Maximum pages").fill("150");
+  await page.getByRole("button", { name: "Save site" }).click();
+  await expect(page).toHaveURL(/\/sites\/3$/);
+  await page.getByRole("link", { name: "Run scan" }).click();
+  await expect(page).toHaveURL(/\/scans\/new\?site_id=3/);
+  await page.getByLabel("Maximum pages").fill("12");
+  await page.getByRole("button", { name: "Start scan" }).click();
+  await expect(page).toHaveURL(/\/scans\/2$/);
+  await expect(page.getByText("Example Site").first()).toBeVisible();
+
   await page.goto("/scans/new");
   await expect(page.getByRole("heading", { name: "Start a new scan" })).toBeVisible();
 
@@ -65,6 +85,7 @@ test("mocked scan workflow supports creation, filtering, details, inbound links,
 
 async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
+  let siteActive = true;
 
   await page.route("**/api/scans", async (route) => {
     if (route.request().method() === "POST") {
@@ -100,6 +121,40 @@ async function mockApi(page: Page) {
     const body = { ...scan, status: scanStatus };
     scanStatus = "completed";
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+  });
+
+  await page.route("**/api/scans/2", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...scan, id: 2, status: "completed", website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/", starting_url: "https://example.com/learn/", scope_config: { ...scope, max_pages: 12 } }) });
+  });
+
+  await page.route("**/api/sites/3/scans", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ ...scan, id: 2, status: "running", website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/", starting_url: "https://example.com/learn/" }) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ ...scan, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/" }], total: 1, limit: 25, offset: 0 }) });
+  });
+
+  await page.route("**/api/sites/3", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const body = await route.request().postDataJSON();
+      if (typeof body.is_active === "boolean") siteActive = body.is_active;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...site, is_active: siteActive, scope_config: body.scope_config ?? site.scope_config }) });
+      return;
+    }
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Delete or detach this site's scans before deleting the site." }) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...site, is_active: siteActive }) });
+  });
+
+  await page.route(/\/api\/sites(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(site) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ ...site, latest_scan: undefined, recent_scans: undefined, latest_scan_id: 1, latest_scan_status: "completed", latest_scan_date: "2026-07-30T01:00:00Z", latest_scan_discovered_count: 3, latest_scan_failed_count: 0 }], total: 1, limit: 25, offset: 0 }) });
   });
 
   await page.route("**/api/scans/1/pages**", async (route) => {
@@ -202,6 +257,9 @@ const scope = {
 
 const scan = {
   id: 1,
+  website_property_id: null,
+  website_property_name: null,
+  website_property_base_url: null,
   starting_url: "https://example.com/",
   status: "running",
   scope_config: scope,
@@ -215,6 +273,25 @@ const scan = {
   queued_count: 2,
   stop_reason: null,
   fatal_error_message: null
+};
+
+const site = {
+  id: 3,
+  name: "Example Site",
+  base_url: "https://example.com/learn/",
+  normalized_base_url: "https://example.com/learn/",
+  description: "Example site",
+  group_key: "Marketing",
+  locale: "en-US",
+  platform_key: "WordPress Learn",
+  ownership_key: "Web Team",
+  scope_config: { ...scope, included_path_prefixes: ["/learn/"] },
+  is_active: true,
+  created_at: "2026-07-30T01:00:00Z",
+  updated_at: "2026-07-30T01:00:00Z",
+  total_scan_count: 1,
+  latest_scan: { ...scan, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/" },
+  recent_scans: [{ ...scan, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/" }]
 };
 
 const pageRow = {

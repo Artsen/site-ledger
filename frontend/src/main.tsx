@@ -7,6 +7,9 @@ import { AppShell } from "./components/AppShell";
 import { PageDetailPage } from "./pages/PageDetailPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
 import { ScansPage } from "./pages/ScansPage";
+import { SiteDetailPage } from "./pages/SiteDetailPage";
+import { SiteFormPage } from "./pages/SiteFormPage";
+import { SitesPage } from "./pages/SitesPage";
 import { NewScanPage } from "./pages/NewScanPage";
 import "./styles/index.css";
 
@@ -16,6 +19,10 @@ const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { index: true, element: <Navigate to="/scans/new" replace /> },
+      { path: "sites", element: <SitesPage /> },
+      { path: "sites/new", element: <SiteFormPage mode="create" /> },
+      { path: "sites/:siteId", element: <SiteDetailPage /> },
+      { path: "sites/:siteId/edit", element: <SiteFormPage mode="edit" /> },
       { path: "scans", element: <ScansPage /> },
       { path: "scans/new", element: <NewScanPage /> },
       { path: "scans/:scanId", element: <ScanDetailPage /> },

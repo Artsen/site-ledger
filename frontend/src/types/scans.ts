@@ -1,5 +1,8 @@
 export type Scan = {
   id: number;
+  website_property_id: number | null;
+  website_property_name: string | null;
+  website_property_base_url: string | null;
   starting_url: string;
   status: string;
   scope_config: ScopeConfig;
@@ -13,6 +16,61 @@ export type Scan = {
   queued_count: number;
   stop_reason: string | null;
   fatal_error_message: string | null;
+};
+
+export type Site = {
+  id: number;
+  name: string;
+  base_url: string;
+  normalized_base_url: string;
+  description: string | null;
+  group_key: string;
+  locale: string | null;
+  platform_key: string;
+  ownership_key: string;
+  scope_config: ScopeConfig;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  total_scan_count: number;
+  latest_scan: Scan | null;
+  recent_scans: Scan[];
+};
+
+export type SiteListItem = Omit<Site, "scope_config" | "total_scan_count" | "latest_scan" | "recent_scans"> & {
+  scope_config: ScopeConfig;
+  total_scan_count: number;
+  latest_scan_id: number | null;
+  latest_scan_status: string | null;
+  latest_scan_date: string | null;
+  latest_scan_discovered_count: number | null;
+  latest_scan_failed_count: number | null;
+};
+
+export type SiteList = {
+  items: SiteListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type SiteScans = {
+  items: Scan[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type SitePayload = {
+  name: string;
+  base_url: string;
+  description: string | null;
+  group_key: string;
+  locale: string | null;
+  platform_key: string;
+  ownership_key: string;
+  scope_config: ScopeConfig;
+  is_active: boolean;
 };
 
 export type ScopeConfig = {

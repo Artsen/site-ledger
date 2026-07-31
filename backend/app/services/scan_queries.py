@@ -1,7 +1,7 @@
 from typing import Any, Literal
 
 from sqlalchemy import Select, distinct, func, or_, select
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.models import ResourceOccurrence, ResourceSnapshot, Scan, WebResource
 from app.schemas.scans import (
@@ -18,16 +18,21 @@ def list_scan_history(
     db: Session,
     search: str | None,
     status: str | None,
-    sort: Literal["created_at", "started_at", "finished_at", "status", "starting_url"],
-    direction: Literal["asc", "desc"],
-    limit: int,
-    offset: int,
+    website_property_id: int | None = None,
+    sort: Literal[
+        "created_at", "started_at", "finished_at", "status", "starting_url"
+    ] = "created_at",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: int = 50,
+    offset: int = 0,
 ) -> ScanHistory:
-    query = select(Scan)
+    query = select(Scan).options(joinedload(Scan.website_property))
     if search:
         query = query.where(Scan.starting_url.ilike(f"%{search}%"))
     if status:
         query = query.where(Scan.status == status)
+    if website_property_id is not None:
+        query = query.where(Scan.website_property_id == website_property_id)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     sort_map = {
         "created_at": Scan.created_at,

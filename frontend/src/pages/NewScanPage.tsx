@@ -1,13 +1,14 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { createScan, defaultScope } from "../api/client";
+import { createScan, createSiteScan, defaultScope, listSites } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
+import { LoadingBlock } from "../components/ui/Loading";
 import { inputClass } from "../components/ui/styles";
-import type { ScopeConfig } from "../types/scans";
+import type { ScopeConfig, SiteListItem } from "../types/scans";
 import { plural } from "../utils/format";
 import { normalizeStartingUrlInput, parseLineList } from "../utils/url";
 
@@ -30,6 +31,10 @@ export function NewScanPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
+  const initialSiteId = searchParams.get("site_id") ?? "";
+  const sites = useQuery({ queryKey: ["sites", "active-selector"], queryFn: () => listSites("?active_state=active&limit=100&sort=name") });
+  const [mode, setMode] = useState<"site" | "ad_hoc">(initialSiteId ? "site" : "ad_hoc");
+  const [selectedSiteId, setSelectedSiteId] = useState(initialSiteId);
   const initialScope = useMemo(() => scopeFromQuery(searchParams), [searchParams]);
   const preferences = useMemo(() => readPreferences(), []);
   const [startingUrl, setStartingUrl] = useState(searchParams.get("starting_url") ?? "");
@@ -44,8 +49,9 @@ export function NewScanPage() {
   const urlValidation = useMemo(() => normalizeStartingUrlInput(startingUrl), [startingUrl]);
   const effectiveScope = useMemo(() => scopeFromForm(scope, listFields), [scope, listFields]);
   const validation = useMemo(() => validateForm(startingUrl, urlValidation, scope), [startingUrl, urlValidation, scope]);
+  const selectedSite = sites.data?.items.find((site) => String(site.id) === selectedSiteId);
   const mutation = useMutation({
-    mutationFn: () => createScan(urlValidation.normalizedUrl, effectiveScope),
+    mutationFn: () => mode === "site" && selectedSite ? createSiteScan(String(selectedSite.id), effectiveScope) : createScan(urlValidation.normalizedUrl, effectiveScope),
     onSuccess: async (scan) => {
       await queryClient.invalidateQueries({ queryKey: ["scans"] });
       navigate(`/scans/${scan.id}`);
@@ -54,7 +60,14 @@ export function NewScanPage() {
       submittingRef.current = false;
     }
   });
-  const canStart = !validation.hasErrors && !mutation.isPending;
+  const canStart = mode === "site" ? Boolean(selectedSite) && !mutation.isPending : !validation.hasErrors && !mutation.isPending;
+
+  useEffect(() => {
+    if (!selectedSite || mode !== "site") return;
+    setStartingUrl(selectedSite.base_url);
+    setScope(selectedSite.scope_config);
+    setListFields(listsFromScope(selectedSite.scope_config));
+  }, [selectedSite, mode]);
 
   useEffect(() => {
     writePreferences({
@@ -89,7 +102,40 @@ export function NewScanPage() {
 
       <form onSubmit={submit} className="space-y-6">
         <div className="rounded-md border border-stone-200 bg-white p-4 shadow-sm sm:p-5">
-          <Field
+          <div className="mb-4 text-sm font-medium text-stone-900">Mode</div>
+          <div className="flex flex-wrap gap-3">
+            <label className="flex items-center gap-2 text-sm"><input type="radio" checked={mode === "site"} onChange={() => setMode("site")} className="size-4" />Saved site</label>
+            <label className="flex items-center gap-2 text-sm"><input type="radio" checked={mode === "ad_hoc"} onChange={() => setMode("ad_hoc")} className="size-4" />Ad hoc URL</label>
+          </div>
+          {mode === "site" ? (
+            <div className="mt-4">
+              {sites.isLoading ? <LoadingBlock label="Loading active sites..." /> : null}
+              {sites.data?.items.length ? (
+                <Field id="saved-site" label="Site" helper="Scan-specific settings below are copied from the saved site and do not update it.">
+                  <select id="saved-site" value={selectedSiteId} onChange={(event) => setSelectedSiteId(event.target.value)} className={inputClass()}>
+                    <option value="">Select a site</option>
+                    {sites.data.items.map((site: SiteListItem) => <option key={site.id} value={site.id}>{site.name} · {site.base_url}</option>)}
+                  </select>
+                </Field>
+              ) : !sites.isLoading ? (
+                <div className="text-sm text-stone-600">No active sites yet. <a className="underline" href="/sites/new">Create site</a></div>
+              ) : null}
+              {selectedSite ? (
+                <div className="mt-3 rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
+                  <div className="font-medium">{selectedSite.name}</div>
+                  <div className="mt-1 font-mono text-xs text-stone-600">{selectedSite.base_url}</div>
+                  <Button type="button" className="mt-3" onClick={() => {
+                    setScope(selectedSite.scope_config);
+                    setListFields(listsFromScope(selectedSite.scope_config));
+                  }}>Reset to saved site configuration</Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+        <div className="rounded-md border border-stone-200 bg-white p-4 shadow-sm sm:p-5">
+          {mode === "site" ? <h2 className="mb-4 text-base font-semibold">Scan-specific settings</h2> : null}
+          {mode === "ad_hoc" ? <Field
             id="starting-url"
             label="Starting URL"
             error={validation.startingUrl}
@@ -114,7 +160,7 @@ export function NewScanPage() {
               className={`${inputClass(Boolean(validation.startingUrl))} text-base`}
               placeholder="https://www.example.com/"
             />
-          </Field>
+          </Field> : null}
 
           <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field id="max-pages" label="Maximum pages" error={validation.maxPages} helper="Stop after this many pages have been fetched or skipped.">
