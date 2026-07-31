@@ -100,5 +100,6 @@ export type GraphDisplaySettings = {
   labels: GraphLabels;
   edgeWidthBy: GraphEdgeWidthBy;
   showArrows: boolean;
+  showIsolated: boolean;
   background: GraphBackground;
 };

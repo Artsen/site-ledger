@@ -10,6 +10,7 @@ const settings: GraphDisplaySettings = {
   labels: "selected",
   edgeWidthBy: "occurrences",
   showArrows: true,
+  showIsolated: false,
   background: "light"
 };
 
@@ -47,6 +48,17 @@ describe("graph data adapter", () => {
     expect(adaptGraphData(graph, { ...settings, colorBy: "host" }).nodes[0].categoryLabel).toBe("example.com");
     expect(edgeWidth(graph.edges[0], "uniform")).toBe(1.2);
     expect(edgeWidth(graph.edges[0], "occurrences")).toBeGreaterThan(1.2);
+  });
+
+  it("hides isolated nodes unless requested", () => {
+    const graph = graphFixture();
+    graph.nodes.push(nodeFixture({ id: "snapshot:3", snapshot_id: 3, path: "/isolated", is_starting_url: false }));
+
+    expect(adaptGraphData(graph, settings).nodes.map((node) => node.id)).toEqual([
+      "snapshot:1",
+      "snapshot:2"
+    ]);
+    expect(adaptGraphData(graph, { ...settings, showIsolated: true }).nodes.map((node) => node.id)).toContain("snapshot:3");
   });
 });
 

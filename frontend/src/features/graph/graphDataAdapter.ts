@@ -28,7 +28,12 @@ export type RendererGraphData = {
 const palette = ["#2563eb", "#059669", "#d97706", "#7c3aed", "#dc2626", "#0891b2", "#4b5563", "#be123c", "#65a30d", "#9333ea"];
 
 export function adaptGraphData(graph: GraphResponse, settings: GraphDisplaySettings): RendererGraphData {
-  const nodes = graph.nodes.map((node) => {
+  const connectedNodeIds = new Set(graph.edges.flatMap((edge) => [edge.source, edge.target]));
+  const visibleNodes = settings.showIsolated
+    ? graph.nodes
+    : graph.nodes.filter((node) => connectedNodeIds.has(node.id) || node.is_starting_url);
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
+  const nodes = visibleNodes.map((node) => {
     const coordinates = deterministicCoordinates(node.id);
     const category = categoryForNode(node, settings.colorBy);
     return {
@@ -40,16 +45,18 @@ export function adaptGraphData(graph: GraphResponse, settings: GraphDisplaySetti
       categoryLabel: category.label
     };
   });
-  const edges = graph.edges.map((edge) => ({
-    ...edge,
-    width: edgeWidth(edge, settings.edgeWidthBy),
-    color: edge.is_self_link ? "rgba(120, 113, 108, 0.45)" : "rgba(68, 64, 60, 0.45)",
-    label: `${edge.occurrence_count} ${edge.occurrence_count === 1 ? "link" : "links"}`
-  }));
+  const edges = graph.edges
+    .filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
+    .map((edge) => ({
+      ...edge,
+      width: edgeWidth(edge, settings.edgeWidthBy),
+      color: edge.is_self_link ? "rgba(120, 113, 108, 0.45)" : "rgba(68, 64, 60, 0.45)",
+      label: `${edge.occurrence_count} ${edge.occurrence_count === 1 ? "link" : "links"}`
+    }));
   return {
     nodes,
     links: edges,
-    legend: legendFor(graph.nodes, settings.colorBy),
+    legend: legendFor(visibleNodes, settings.colorBy),
     sizeLegend: sizeLabel(settings.sizeBy)
   };
 }

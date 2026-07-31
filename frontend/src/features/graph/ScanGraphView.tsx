@@ -189,15 +189,15 @@ function GraphControls({ searchParams, setSearchParams, settings }: { searchPara
           <input aria-label="Minimum outbound links" type="number" min={0} value={searchParams.get("min_outbound") ?? ""} onChange={(event) => updateGraphParam(setSearchParams, "min_outbound", event.target.value || null)} placeholder="Min outbound" className={inputClass()} />
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <input aria-label="Maximum graph nodes" type="number" min={1} max={1500} value={searchParams.get("max_nodes") ?? "400"} onChange={(event) => updateGraphParam(setSearchParams, "max_nodes", event.target.value || null)} className={inputClass()} />
-          <input aria-label="Maximum graph edges" type="number" min={0} max={5000} value={searchParams.get("max_edges") ?? "1200"} onChange={(event) => updateGraphParam(setSearchParams, "max_edges", event.target.value || null)} className={inputClass()} />
+          <input aria-label="Maximum graph nodes" type="number" min={1} max={1500} value={searchParams.get("max_nodes") ?? "200"} onChange={(event) => updateGraphParam(setSearchParams, "max_nodes", event.target.value || null)} className={inputClass()} />
+          <input aria-label="Maximum graph edges" type="number" min={0} max={5000} value={searchParams.get("max_edges") ?? "600"} onChange={(event) => updateGraphParam(setSearchParams, "max_edges", event.target.value || null)} className={inputClass()} />
         </div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={searchParams.get("unfetched") === "1"} onChange={(event) => updateGraphParam(setSearchParams, "unfetched", event.target.checked ? "1" : null)} /> Show unfetched internal pages</label>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={searchParams.get("self_links") !== "0"} onChange={(event) => updateGraphParam(setSearchParams, "self_links", event.target.checked ? null : "0")} /> Show self-links</label>
       </section>
       <section className="space-y-3 border-t border-stone-200 pt-4">
         <h3 className="text-sm font-semibold">Display</h3>
-        <select aria-label="Graph mode" value={settings.mode} onChange={(event) => updateGraphParam(setSearchParams, "graph_mode", event.target.value)} className={inputClass()}><option value="3d">3D</option><option value="2d">2D</option></select>
+        <select aria-label="Graph mode" value={settings.mode} onChange={(event) => updateGraphParam(setSearchParams, "graph_mode", event.target.value)} className={inputClass()}><option value="2d">2D</option><option value="3d">3D</option></select>
         <select aria-label="Node size" value={settings.sizeBy} onChange={(event) => updateGraphParam(setSearchParams, "size_by", event.target.value)} className={inputClass()}>
           <option value="uniform">Uniform</option><option value="inbound_sources">Unique inbound pages</option><option value="inbound_occurrences">Inbound occurrences</option><option value="outbound_targets">Unique outbound pages</option><option value="outbound_occurrences">Outbound occurrences</option><option value="response_time">Response time</option><option value="depth_inverse">Crawl depth inverse</option>
         </select>
@@ -207,6 +207,7 @@ function GraphControls({ searchParams, setSearchParams, settings }: { searchPara
         <select aria-label="Graph labels" value={settings.labels} onChange={(event) => updateGraphParam(setSearchParams, "labels", event.target.value)} className={inputClass()}><option value="selected">Selected and important</option><option value="hide">Hide labels</option><option value="important">Important nodes</option><option value="all">All labels for small graphs</option></select>
         <select aria-label="Edge width" value={settings.edgeWidthBy} onChange={(event) => updateGraphParam(setSearchParams, "edge_width", event.target.value)} className={inputClass()}><option value="uniform">Uniform edges</option><option value="occurrences">Occurrence count</option></select>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.showArrows} onChange={(event) => updateGraphParam(setSearchParams, "arrows", event.target.checked ? null : "0")} /> Show arrows</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.showIsolated} onChange={(event) => updateGraphParam(setSearchParams, "isolated", event.target.checked ? "1" : null)} /> Show isolated pages</label>
         <select aria-label="Graph background" value={settings.background} onChange={(event) => updateGraphParam(setSearchParams, "background", event.target.value)} className={inputClass()}><option value="light">Light background</option><option value="dark">Dark background</option></select>
         <Button type="button" variant="ghost" onClick={() => setSearchParams(new URLSearchParams({ tab: "graph" }))}>Clear graph state</Button>
       </section>
@@ -346,6 +347,8 @@ function buildGraphQuery(searchParams: URLSearchParams) {
     const value = searchParams.get(sourceKey);
     if (value) params.set(targetKey, value);
   }
+  if (!params.has("max_nodes")) params.set("max_nodes", "200");
+  if (!params.has("max_edges")) params.set("max_edges", "600");
   params.set("include_self_links", searchParams.get("self_links") === "0" ? "false" : "true");
   params.set("include_unfetched", searchParams.get("unfetched") === "1" ? "true" : "false");
   return `?${params.toString()}`;
@@ -362,12 +365,13 @@ function buildOccurrenceQuery(searchParams: URLSearchParams) {
 
 function displaySettings(searchParams: URLSearchParams): GraphDisplaySettings {
   return {
-    mode: searchParams.get("graph_mode") === "2d" ? "2d" : "3d",
+    mode: searchParams.get("graph_mode") === "3d" ? "3d" : "2d",
     sizeBy: (searchParams.get("size_by") as GraphDisplaySettings["sizeBy"]) || "uniform",
     colorBy: (searchParams.get("color_by") as GraphDisplaySettings["colorBy"]) || "status",
     labels: (searchParams.get("labels") as GraphDisplaySettings["labels"]) || "selected",
     edgeWidthBy: (searchParams.get("edge_width") as GraphDisplaySettings["edgeWidthBy"]) || "occurrences",
     showArrows: searchParams.get("arrows") !== "0",
+    showIsolated: searchParams.get("isolated") === "1",
     background: searchParams.get("background") === "dark" ? "dark" : "light"
   };
 }
