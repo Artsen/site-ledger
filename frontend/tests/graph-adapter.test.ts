@@ -4,7 +4,7 @@ import { adaptGraphData, deterministicCoordinates, edgeWidth, nodeSize } from ".
 import type { GraphDisplaySettings, GraphNode, GraphResponse } from "../src/types/graph";
 
 const settings: GraphDisplaySettings = {
-  mode: "3d",
+  mode: "2d",
   sizeBy: "uniform",
   colorBy: "status",
   labels: "selected",
