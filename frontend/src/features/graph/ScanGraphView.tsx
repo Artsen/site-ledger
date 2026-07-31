@@ -17,8 +17,8 @@ import { adaptGraphData, type RendererEdge, type RendererNode } from "./graphDat
 const TwoDimensionalGraphRenderer = lazy(() => import("./TwoDimensionalGraphRenderer").then((module) => ({ default: module.TwoDimensionalGraphRenderer })));
 const ThreeDimensionalGraphRenderer = lazy(() => import("./ThreeDimensionalGraphRenderer").then((module) => ({ default: module.ThreeDimensionalGraphRenderer })));
 const GRAPH_LIMITS = {
-  "2d": { nodes: 200, edges: 600 },
-  "3d": { nodes: 80, edges: 160 }
+  "2d": { nodes: 3000, edges: 10000 },
+  "3d": { nodes: 300, edges: 1000 }
 } as const;
 
 export function ScanGraphView({ scan }: { scan: Scan }) {

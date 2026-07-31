@@ -253,7 +253,7 @@ describe("scan results workflow", () => {
 
     fireEvent.change(screen.getByLabelText("Graph mode"), { target: { value: "3d" } });
     await waitFor(() => {
-      expect(api.getScanGraph.mock.calls.some((call) => call[0] === "1" && String(call[1]).includes("max_nodes=80") && String(call[1]).includes("max_edges=160"))).toBe(true);
+      expect(api.getScanGraph.mock.calls.some((call) => call[0] === "1" && String(call[1]).includes("max_nodes=300") && String(call[1]).includes("max_edges=1000"))).toBe(true);
     });
     expect(screen.getByLabelText("Graph mode")).toHaveValue("3d");
 
