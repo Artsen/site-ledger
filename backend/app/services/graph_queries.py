@@ -2,7 +2,7 @@ from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import distinct, func, or_, select
+from sqlalchemy import and_, case, distinct, func, or_, select, tuple_
 from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.models import ResourceOccurrence, ResourceSnapshot, Scan, ScanSeed, WebResource
@@ -52,6 +52,13 @@ class _NodeMetrics:
     seed_origins: int = 0
 
 
+@dataclass(frozen=True)
+class _GraphEdgeSet:
+    edges: list[GraphEdgeRead]
+    available_edge_count: int
+    available_occurrence_count: int
+
+
 def get_scan_graph(db: Session, scan_id: int, filters: GraphFilters) -> GraphResponse | None:
     scan = db.scalar(
         select(Scan).options(joinedload(Scan.website_property)).where(Scan.id == scan_id)
@@ -68,20 +75,23 @@ def get_scan_graph(db: Session, scan_id: int, filters: GraphFilters) -> GraphRes
         return _empty_graph(scan, filters)
 
     snapshot_by_resource = {snapshot.resource_id: snapshot for snapshot, _resource in snapshots}
-    snapshot_ids = {snapshot.id for snapshot, _resource in snapshots}
     metrics = _load_metrics(db, scan_id)
     seed_metrics = _load_seed_metrics(db, scan_id)
     for resource_id, values in seed_metrics.items():
         metrics[resource_id].is_seed = True
         metrics[resource_id].seed_origins = values
 
-    all_edges = _load_edges(db, scan_id, snapshot_by_resource, filters.include_self_links)
     if filters.focus_snapshot_id is not None:
-        allowed = _focus_snapshot_ids(all_edges, filters.focus_snapshot_id, filters.focus_hops)
+        allowed = _focus_snapshot_ids(
+            db,
+            scan_id,
+            filters.focus_snapshot_id,
+            filters.focus_hops,
+            filters.include_self_links,
+        )
         snapshots = [
             (snapshot, resource) for snapshot, resource in snapshots if snapshot.id in allowed
         ]
-        snapshot_ids = {snapshot.id for snapshot, _resource in snapshots}
 
     filtered_snapshots = [
         (snapshot, resource)
@@ -110,23 +120,16 @@ def get_scan_graph(db: Session, scan_id: int, filters: GraphFilters) -> GraphRes
     included_node_ids = {f"snapshot:{snapshot.id}" for snapshot, _resource in limited_snapshots}
     included_node_ids.update(f"resource:{resource.id}" for resource in discovered_nodes)
 
-    available_edges = [
-        edge
-        for edge in all_edges
-        if edge.source_snapshot_id in snapshot_ids
-        and (
-            edge.target_snapshot_id in snapshot_ids
-            or (
-                filters.include_unfetched
-                and f"resource:{edge.target_resource_id}" in included_node_ids
-            )
-        )
-    ]
-    limited_edges = [
-        edge
-        for edge in available_edges
-        if edge.source in included_node_ids and edge.target in included_node_ids
-    ][: filters.max_edges]
+    source_snapshot_ids = {snapshot.id for snapshot, _resource in limited_snapshots}
+    edge_set = _load_edges_for_nodes(
+        db,
+        scan_id,
+        snapshot_by_resource=snapshot_by_resource,
+        source_snapshot_ids=source_snapshot_ids,
+        target_resource_ids=included_resource_ids,
+        include_self_links=filters.include_self_links,
+        max_edges=filters.max_edges,
+    )
 
     nodes = [
         _node_read(snapshot, resource, metrics[snapshot.resource_id], scan)
@@ -139,7 +142,7 @@ def get_scan_graph(db: Session, scan_id: int, filters: GraphFilters) -> GraphRes
     reasons: list[str] = []
     if available_nodes > len(limited_snapshots):
         reasons.append(f"node_limit:{filters.max_nodes}")
-    if len(available_edges) > len(limited_edges):
+    if edge_set.available_edge_count > len(edge_set.edges):
         reasons.append(f"edge_limit:{filters.max_edges}")
     if filters.include_unfetched and len(discovered_nodes) and len(nodes) >= filters.max_nodes:
         reasons.append("unfetched_node_limit")
@@ -148,14 +151,14 @@ def get_scan_graph(db: Session, scan_id: int, filters: GraphFilters) -> GraphRes
         scan=GraphScanRead.model_validate(scan, from_attributes=True),
         summary=GraphSummaryRead(
             total_available_nodes=available_nodes,
-            total_available_edges=len(available_edges),
+            total_available_edges=edge_set.available_edge_count,
             returned_nodes=len(nodes),
-            returned_edges=len(limited_edges),
+            returned_edges=len(edge_set.edges),
             fetched_nodes=len(limited_snapshots),
             unfetched_nodes=len(discovered_nodes),
             error_nodes=sum(1 for node in nodes if node.error_type),
-            self_link_edges=sum(1 for edge in limited_edges if edge.is_self_link),
-            total_occurrences=sum(edge.occurrence_count for edge in limited_edges),
+            self_link_edges=sum(1 for edge in edge_set.edges if edge.is_self_link),
+            total_occurrences=edge_set.available_occurrence_count,
             truncated=bool(reasons),
             truncation_reasons=reasons,
             focused=filters.focus_snapshot_id is not None,
@@ -163,7 +166,7 @@ def get_scan_graph(db: Session, scan_id: int, filters: GraphFilters) -> GraphRes
             focus_hops=filters.focus_hops if filters.focus_snapshot_id is not None else None,
         ),
         nodes=nodes,
-        edges=limited_edges,
+        edges=edge_set.edges,
         effective_filters=_effective_filters(filters),
     )
 
@@ -333,55 +336,223 @@ def _load_seed_metrics(db: Session, scan_id: int) -> dict[int, int]:
     return {resource_id: count for resource_id, count in rows if resource_id is not None}
 
 
-def _load_edges(
+def _load_edges_for_nodes(
     db: Session,
     scan_id: int,
     snapshot_by_resource: dict[int, ResourceSnapshot],
+    source_snapshot_ids: set[int],
+    target_resource_ids: set[int],
     include_self_links: bool,
-) -> list[GraphEdgeRead]:
+    max_edges: int,
+) -> _GraphEdgeSet:
+    if not source_snapshot_ids or not target_resource_ids:
+        return _GraphEdgeSet(edges=[], available_edge_count=0, available_occurrence_count=0)
+
     source = aliased(ResourceSnapshot)
-    rows = db.execute(
-        select(ResourceOccurrence, source)
+    target = aliased(ResourceSnapshot)
+    aggregate_query = (
+        select(
+            source.id.label("source_snapshot_id"),
+            source.resource_id.label("source_resource_id"),
+            ResourceOccurrence.target_resource_id.label("target_resource_id"),
+            target.id.label("target_snapshot_id"),
+            func.count(ResourceOccurrence.id).label("occurrence_count"),
+            func.count(
+                distinct(func.nullif(func.trim(ResourceOccurrence.anchor_text), ""))
+            ).label("unique_anchor_text_count"),
+            func.sum(case((ResourceOccurrence.rel.ilike("%nofollow%"), 1), else_=0)).label(
+                "nofollow_occurrence_count"
+            ),
+            func.sum(
+                case(
+                    (
+                        or_(
+                            ResourceOccurrence.anchor_text.is_(None),
+                            func.trim(ResourceOccurrence.anchor_text) == "",
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("empty_anchor_occurrence_count"),
+            func.min(ResourceOccurrence.discovered_at).label("first_discovered_at"),
+            func.max(ResourceOccurrence.discovered_at).label("last_discovered_at"),
+        )
         .join(source, ResourceOccurrence.source_snapshot_id == source.id)
+        .join(
+            target,
+            and_(
+                target.scan_id == scan_id,
+                target.resource_id == ResourceOccurrence.target_resource_id,
+            ),
+            isouter=True,
+        )
         .where(
             source.scan_id == scan_id,
+            source.id.in_(source_snapshot_ids),
             ResourceOccurrence.relation_type == "page_link",
-            ResourceOccurrence.target_resource_id.is_not(None),
+            ResourceOccurrence.target_resource_id.in_(target_resource_ids),
         )
-        .order_by(
-            source.id.asc(),
-            ResourceOccurrence.target_resource_id.asc(),
-            ResourceOccurrence.id.asc(),
+        .group_by(source.id, source.resource_id, ResourceOccurrence.target_resource_id, target.id)
+    )
+    if not include_self_links:
+        aggregate_query = aggregate_query.where(
+            source.resource_id != ResourceOccurrence.target_resource_id
+        )
+
+    grouped = aggregate_query.subquery()
+    available_edge_count = db.scalar(select(func.count()).select_from(grouped)) or 0
+    available_occurrence_count = (
+        db.scalar(select(func.coalesce(func.sum(grouped.c.occurrence_count), 0))) or 0
+    )
+    aggregate_rows = list(
+        db.execute(
+            select(grouped)
+            .order_by(
+                grouped.c.source_snapshot_id.asc(),
+                grouped.c.target_snapshot_id.asc().nulls_last(),
+                grouped.c.target_resource_id.asc(),
+            )
+            .limit(max_edges)
         )
     )
-    grouped: dict[tuple[int, int], list[ResourceOccurrence]] = defaultdict(list)
-    sources: dict[int, ResourceSnapshot] = {}
-    for occurrence, source_snapshot in rows:
-        target_resource_id = occurrence.target_resource_id
+    details = _load_edge_details(
+        db,
+        {(row.source_snapshot_id, row.target_resource_id) for row in aggregate_rows},
+    )
+    edges = [
+        _edge_from_aggregate(
+            source_snapshot=snapshot_by_resource[row.source_resource_id],
+            target_snapshot=snapshot_by_resource.get(row.target_resource_id),
+            target_resource_id=row.target_resource_id,
+            occurrence_count=row.occurrence_count,
+            unique_anchor_text_count=row.unique_anchor_text_count,
+            nofollow_occurrence_count=row.nofollow_occurrence_count or 0,
+            empty_anchor_occurrence_count=row.empty_anchor_occurrence_count or 0,
+            first_discovered_at=row.first_discovered_at,
+            last_discovered_at=row.last_discovered_at,
+            detail=details[(row.source_snapshot_id, row.target_resource_id)],
+        )
+        for row in aggregate_rows
+    ]
+    return _GraphEdgeSet(
+        edges=edges,
+        available_edge_count=available_edge_count,
+        available_occurrence_count=available_occurrence_count,
+    )
+
+
+def _load_edge_details(
+    db: Session, edge_keys: set[tuple[int, int]]
+) -> defaultdict[tuple[int, int], dict[str, object]]:
+    details: defaultdict[tuple[int, int], dict[str, object]] = defaultdict(
+        lambda: {"sample_anchor_texts": [], "scope_decisions": Counter()}
+    )
+    if not edge_keys:
+        return details
+
+    edge_tuple = tuple_(
+        ResourceOccurrence.source_snapshot_id,
+        ResourceOccurrence.target_resource_id,
+    )
+    scope_rows = db.execute(
+        select(
+            ResourceOccurrence.source_snapshot_id,
+            ResourceOccurrence.target_resource_id,
+            ResourceOccurrence.scope_decision,
+            func.count(ResourceOccurrence.id),
+        )
+        .where(
+            edge_tuple.in_(edge_keys),
+            ResourceOccurrence.relation_type == "page_link",
+        )
+        .group_by(
+            ResourceOccurrence.source_snapshot_id,
+            ResourceOccurrence.target_resource_id,
+            ResourceOccurrence.scope_decision,
+        )
+    )
+    for source_snapshot_id, target_resource_id, scope_decision, count in scope_rows:
         if target_resource_id is None:
             continue
-        if not include_self_links and source_snapshot.resource_id == target_resource_id:
-            continue
-        grouped[(source_snapshot.id, target_resource_id)].append(occurrence)
-        sources[source_snapshot.id] = source_snapshot
+        decisions = details[(source_snapshot_id, target_resource_id)]["scope_decisions"]
+        if isinstance(decisions, Counter):
+            decisions[scope_decision] += count
 
-    edges = []
-    for (source_snapshot_id, target_resource_id), occurrences in grouped.items():
-        edges.append(
-            _edge_from_occurrences(
-                sources[source_snapshot_id],
-                snapshot_by_resource.get(target_resource_id),
-                target_resource_id,
-                occurrences,
-            )
+    anchor_rows = db.execute(
+        select(
+            ResourceOccurrence.source_snapshot_id,
+            ResourceOccurrence.target_resource_id,
+            ResourceOccurrence.anchor_text,
         )
-    return sorted(
-        edges,
-        key=lambda edge: (
-            edge.source_snapshot_id,
-            edge.target_snapshot_id or 10**12,
-            edge.target_resource_id or 10**12,
-        ),
+        .where(
+            edge_tuple.in_(edge_keys),
+            ResourceOccurrence.relation_type == "page_link",
+            ResourceOccurrence.anchor_text.is_not(None),
+            func.trim(ResourceOccurrence.anchor_text) != "",
+        )
+        .distinct()
+        .order_by(
+            ResourceOccurrence.source_snapshot_id.asc(),
+            ResourceOccurrence.target_resource_id.asc(),
+            ResourceOccurrence.anchor_text.asc(),
+        )
+        .limit(len(edge_keys) * SAMPLE_ANCHOR_LIMIT * 2)
+    )
+    for source_snapshot_id, target_resource_id, anchor_text in anchor_rows:
+        if target_resource_id is None:
+            continue
+        key = (source_snapshot_id, target_resource_id)
+        if key not in edge_keys:
+            continue
+        detail = details[key]
+        samples = detail["sample_anchor_texts"]
+        stripped_anchor = anchor_text.strip() if anchor_text else ""
+        if (
+            isinstance(samples, list)
+            and stripped_anchor
+            and stripped_anchor not in samples
+            and len(samples) < SAMPLE_ANCHOR_LIMIT
+        ):
+            samples.append(stripped_anchor)
+    return details
+
+
+def _edge_from_aggregate(
+    source_snapshot: ResourceSnapshot,
+    target_snapshot: ResourceSnapshot | None,
+    target_resource_id: int,
+    occurrence_count: int,
+    unique_anchor_text_count: int,
+    nofollow_occurrence_count: int,
+    empty_anchor_occurrence_count: int,
+    first_discovered_at,
+    last_discovered_at,
+    detail: dict[str, object],
+) -> GraphEdgeRead:
+    source_id = f"snapshot:{source_snapshot.id}"
+    target_id = (
+        f"snapshot:{target_snapshot.id}" if target_snapshot else f"resource:{target_resource_id}"
+    )
+    sample_anchor_texts = detail["sample_anchor_texts"]
+    scope_decisions = detail["scope_decisions"]
+    return GraphEdgeRead(
+        id=_edge_id(source_snapshot.id, target_resource_id),
+        source=source_id,
+        target=target_id,
+        source_snapshot_id=source_snapshot.id,
+        target_snapshot_id=target_snapshot.id if target_snapshot else None,
+        target_resource_id=target_resource_id,
+        occurrence_count=occurrence_count,
+        unique_anchor_text_count=unique_anchor_text_count,
+        nofollow_occurrence_count=nofollow_occurrence_count,
+        follow_occurrence_count=occurrence_count - nofollow_occurrence_count,
+        empty_anchor_occurrence_count=empty_anchor_occurrence_count,
+        is_self_link=source_snapshot.resource_id == target_resource_id,
+        sample_anchor_texts=sample_anchor_texts if isinstance(sample_anchor_texts, list) else [],
+        first_discovered_at=first_discovered_at,
+        last_discovered_at=last_discovered_at,
+        scope_decisions=dict(scope_decisions) if isinstance(scope_decisions, Counter) else {},
     )
 
 
@@ -527,24 +698,59 @@ def _node_limit_key(
     )
 
 
-def _focus_snapshot_ids(edges: list[GraphEdgeRead], focus_snapshot_id: int, hops: int) -> set[int]:
-    neighbors: defaultdict[int, set[int]] = defaultdict(set)
-    for edge in edges:
-        if edge.target_snapshot_id is None:
-            continue
-        neighbors[edge.source_snapshot_id].add(edge.target_snapshot_id)
-        neighbors[edge.target_snapshot_id].add(edge.source_snapshot_id)
+def _focus_snapshot_ids(
+    db: Session,
+    scan_id: int,
+    focus_snapshot_id: int,
+    hops: int,
+    include_self_links: bool,
+) -> set[int]:
     seen = {focus_snapshot_id}
     queue: deque[tuple[int, int]] = deque([(focus_snapshot_id, 0)])
     while queue:
         current, depth = queue.popleft()
         if depth >= hops:
             continue
-        for neighbor in sorted(neighbors[current]):
+        for neighbor in sorted(
+            _neighbor_snapshot_ids(db, scan_id, current, include_self_links)
+        ):
             if neighbor not in seen:
                 seen.add(neighbor)
                 queue.append((neighbor, depth + 1))
     return seen
+
+
+def _neighbor_snapshot_ids(
+    db: Session, scan_id: int, snapshot_id: int, include_self_links: bool
+) -> set[int]:
+    source = aliased(ResourceSnapshot)
+    target = aliased(ResourceSnapshot)
+    outgoing = (
+        select(target.id)
+        .join(ResourceOccurrence, ResourceOccurrence.target_resource_id == target.resource_id)
+        .join(source, ResourceOccurrence.source_snapshot_id == source.id)
+        .where(
+            source.scan_id == scan_id,
+            target.scan_id == scan_id,
+            source.id == snapshot_id,
+            ResourceOccurrence.relation_type == "page_link",
+        )
+    )
+    incoming = (
+        select(source.id)
+        .join(ResourceOccurrence, ResourceOccurrence.source_snapshot_id == source.id)
+        .join(target, ResourceOccurrence.target_resource_id == target.resource_id)
+        .where(
+            source.scan_id == scan_id,
+            target.scan_id == scan_id,
+            target.id == snapshot_id,
+            ResourceOccurrence.relation_type == "page_link",
+        )
+    )
+    if not include_self_links:
+        outgoing = outgoing.where(source.resource_id != target.resource_id)
+        incoming = incoming.where(source.resource_id != target.resource_id)
+    return set(db.scalars(outgoing.union(incoming)))
 
 
 def _snapshot_belongs_to_scan(db: Session, scan_id: int, snapshot_id: int) -> bool:

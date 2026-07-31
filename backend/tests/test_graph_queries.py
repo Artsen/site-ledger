@@ -125,7 +125,7 @@ def test_graph_query_count_is_bounded(db_session: Session) -> None:
         event.remove(db_session.bind, "before_cursor_execute", before_cursor_execute)
 
     assert graph is not None
-    assert len(queries) <= 8
+    assert len(queries) <= 11
 
 
 def _graph_fixture(
