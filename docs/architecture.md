@@ -149,6 +149,44 @@ source configuration and source-owned resources still in use.
 Source refreshes are synchronous in PR 6. A later worker can move `refresh_source` behind a queue in
 the same way `services.scan_runner` hides crawler execution.
 
+## PR 7 Website Graph
+
+The scan graph is derived data. It adds no persistence migration and stores no layout coordinates,
+camera state, selected nodes, exports, or presentation settings. `services.graph_queries` builds
+scan-specific topology from `ResourceSnapshot` and `ResourceOccurrence` rows and returns typed
+schemas from `schemas.graph`.
+
+Graph nodes represent scan-specific page snapshots with IDs such as `snapshot:123`. Optional
+unfetched internal boundary nodes use `resource:456` and are included only when requested. Edges are
+directed and aggregate all page-link occurrences from one source snapshot to one target resource.
+The main graph response keeps edge summaries compact; `/api/scans/{scan_id}/graph/edges/{edge_id}/occurrences`
+loads duplicate-preserving occurrence details with pagination.
+
+Graph limiting is deterministic. The backend prioritizes the starting page, lower crawl depth,
+higher inbound and outbound connectivity, stable normalized URL, and snapshot ID. Edges are returned
+only when both endpoints are included. Truncation is reported in the graph summary so the UI can warn
+users when limits shaped the view.
+
+Focused neighborhood queries validate that the focus snapshot belongs to the scan, then traverse
+incoming and outgoing graph edges up to the requested hop count. This lets large scans be explored
+without fetching an entire topology into the renderer.
+
+Frontend graph code lives under `frontend/src/features/graph`. Application-owned graph types and
+the pure `graphDataAdapter` stay independent from renderer-specific objects. The adapter computes
+deterministic initial coordinates, bounded node sizes, categories, edge widths, labels, and legends.
+Direct imports from `react-force-graph-2d`, `react-force-graph-3d`, and Three.js-backed renderer code
+are isolated in lazy renderer modules.
+
+The renderer handle supports the operations the UI needs now: fit, reset camera, focus node,
+freeze, reheat, reset deterministic layout, and PNG export. Search, node browser, edge browser,
+inspectors, and occurrence tables provide accessible alternatives to direct canvas selection.
+
+Future semantic layouts can reuse the same graph API and renderer adapter boundary by adding
+externally supplied coordinates or category keys. Future page-section graphs can add non-page node
+kinds without changing current page node semantics. Future scan comparison can decorate nodes and
+edges with added/removed/changed state without treating force-layout coordinates as persisted page
+properties.
+
 ## Deferred
 
 Robots.txt enforcement and concurrent crawling remain internal configuration placeholders for a

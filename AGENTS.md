@@ -487,6 +487,29 @@ PR 6 adds URL sources and saved-site inventory:
 - Do not treat source inventory as crawled page results. A URL in a source is an input candidate
   until the crawler fetches it.
 
+PR 7 adds a scan-specific website topology graph:
+
+- The Graph tab belongs inside `/scans/{scanId}` via URL tab state. Do not add a global graph route
+  or a site-wide graph in this PR.
+- Graph nodes represent scan-specific page snapshots with IDs like `snapshot:{id}`. Optional
+  unfetched internal target nodes use `resource:{id}` and must remain visually and semantically
+  distinct.
+- Graph edges aggregate stored `page_link` occurrences from one source snapshot to one target
+  resource. Preserve duplicate occurrences through the paginated edge occurrence endpoint.
+- Graph queries must remain scan-specific. Do not use snapshots or link occurrences from another
+  scan when building nodes, edges, counts, or focused neighborhoods.
+- Keep topology, adapter, renderer, controls, inspectors, and export concerns separate. Do not let
+  force-graph or Three.js object types spread into API schemas or general app state.
+- Do not persist force-layout coordinates, camera positions, selection state, PNG exports, or
+  presentation settings.
+- Lazy-load graph renderer code. Keep the Three.js-backed 3D renderer out of the initial app
+  bundle.
+- The graph is read-only. It must not mutate scan results, snapshots, occurrences, source inventory,
+  or scan seeds.
+- Future semantic layouts, section graphs, and scan-comparison styling should reuse the graph API
+  and adapter boundaries; do not add embeddings, section tables, or comparison models as part of
+  topology work.
+
 The page table should include requested URL, final URL, status, title, depth, content type, discovery source, inbound occurrence count, fetch duration, and error state.
 
 Favor clarity and density over decorative dashboard cards. The graph visualization is not part of PR 1.

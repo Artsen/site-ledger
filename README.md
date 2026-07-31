@@ -179,3 +179,26 @@ available registry ranges for both the existing v6 line and npm's suggested v7 t
 application does not use React Router SSR/RSC features, but the audit remains a known dependency
 advisory until the package publishes or resolves a non-vulnerable compatible target.
 
+## Website Topology Graph
+
+Scan detail includes a Graph tab at `/scans/{scan_id}?tab=graph`. The graph is read-only and is
+derived from the selected scan's page snapshots and stored page-link occurrences. Page snapshots are
+nodes; repeated links from the same source page to the same target page are aggregated into one
+directed edge with occurrence counts and sample anchor text. Edge occurrence details are loaded
+through a separate paginated API only after an edge is selected.
+
+Graph filters and display controls are stored in URL parameters. Users can filter by host, path,
+depth, status, errors, connectivity thresholds, self-links, and optional unfetched internal pages.
+Display controls include 2D/3D mode, node sizing, node categorization, labels, arrows, edge width,
+background, presentation mode, and PNG export. Search and the node/edge browser panels provide an
+accessible alternative to canvas-only exploration.
+
+The graph is bounded by deterministic server-side limits. The default graph returns up to 400 nodes
+and 1,200 edges; hard caps are 1,500 nodes and 5,000 edges. The API prioritizes the starting page,
+then shallow crawl depth, stronger connectivity, URL, and snapshot ID. Focused neighborhood mode can
+load one to three hops around a selected snapshot.
+
+The 2D and 3D graph renderers are lazy-loaded. The production build currently emits separate graph
+chunks for the 2D renderer and the Three.js-backed 3D renderer; the 3D chunk is large enough to
+trigger Vite's chunk-size warning, so it stays isolated from the initial application bundle.
+
