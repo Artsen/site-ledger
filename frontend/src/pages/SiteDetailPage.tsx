@@ -8,7 +8,7 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
 import { StatusBadge } from "../components/ui/StatusBadge";
-import { classificationLabel, groupOptions, ownershipOptions, platformOptions } from "../types/siteClassifications";
+import { classificationLabel } from "../types/siteClassifications";
 import type { Site } from "../types/scans";
 import { formatDate, plural } from "../utils/format";
 
@@ -64,10 +64,10 @@ export function SiteDetailPage() {
             <DefinitionList items={[
               { label: "Base URL", value: site.data.base_url, copyValue: site.data.base_url },
               { label: "Description", value: site.data.description ?? "Not provided" },
-              { label: "Group", value: classificationLabel(groupOptions, site.data.group_key) },
+              { label: "Group", value: classificationLabel(site.data.group_key) },
               { label: "Locale", value: site.data.locale ?? "Not specified" },
-              { label: "Platform", value: classificationLabel(platformOptions, site.data.platform_key) },
-              { label: "Ownership", value: classificationLabel(ownershipOptions, site.data.ownership_key) },
+              { label: "Platform", value: classificationLabel(site.data.platform_key) },
+              { label: "Ownership", value: classificationLabel(site.data.ownership_key) },
               { label: "Created", value: formatDate(site.data.created_at) },
               { label: "Updated", value: formatDate(site.data.updated_at) }
             ]} />

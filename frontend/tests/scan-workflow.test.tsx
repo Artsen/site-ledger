@@ -498,10 +498,10 @@ const siteFixture = {
   base_url: "https://example.com/",
   normalized_base_url: "https://example.com/",
   description: "A site",
-  group_key: "marketing",
+  group_key: "Marketing",
   locale: "en-US",
-  platform_key: "wordpress_root",
-  ownership_key: "web_team",
+  platform_key: "WordPress Root",
+  ownership_key: "Web Team",
   scope_config: {
     allowed_host_patterns: ["example.com"],
     excluded_host_patterns: [],

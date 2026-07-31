@@ -127,7 +127,8 @@ still succeeds and returns a cleanup warning for later maintenance.
 
 Sites are saved website properties above individual scans. A site stores a name, base URL,
 description, group, locale, platform, ownership, active state, and reusable scan scope configuration.
-The stored classification values are stable keys; the UI renders human-readable labels.
+Group, platform, and ownership are user-defined labels, so teams can add their own organization
+terms without a code change.
 
 Saved site scope uses the same shape as scan scope. When a scan starts from a site, the effective
 scope is copied into the scan row with `website_property_id`. Later edits to the site do not rewrite

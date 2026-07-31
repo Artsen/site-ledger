@@ -4,44 +4,34 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.scans import ScopeConfigPayload
-from app.services.site_classifications import (
-    is_valid_group_key,
-    is_valid_ownership_key,
-    is_valid_platform_key,
-)
+from app.services.site_classifications import normalize_classification
 
 
 class WebsitePropertyBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     base_url: str = Field(min_length=1, max_length=2048)
     description: str | None = Field(default=None, max_length=5000)
-    group_key: str = "other"
+    group_key: str = "Other"
     locale: str | None = Field(default=None, max_length=32)
-    platform_key: str = "other"
-    ownership_key: str = "unknown"
+    platform_key: str = "Other"
+    ownership_key: str = "Unknown"
     scope_config: ScopeConfigPayload = Field(default_factory=ScopeConfigPayload)
     is_active: bool = True
 
     @field_validator("group_key")
     @classmethod
     def validate_group_key(cls, value: str) -> str:
-        if not is_valid_group_key(value):
-            raise ValueError("Invalid site group.")
-        return value
+        return normalize_classification(value, fallback="Other")
 
     @field_validator("platform_key")
     @classmethod
     def validate_platform_key(cls, value: str) -> str:
-        if not is_valid_platform_key(value):
-            raise ValueError("Invalid platform.")
-        return value
+        return normalize_classification(value, fallback="Other")
 
     @field_validator("ownership_key")
     @classmethod
     def validate_ownership_key(cls, value: str) -> str:
-        if not is_valid_ownership_key(value):
-            raise ValueError("Invalid ownership value.")
-        return value
+        return normalize_classification(value, fallback="Unknown")
 
     @field_validator("locale")
     @classmethod
@@ -72,13 +62,27 @@ class WebsitePropertyUpdate(BaseModel):
     scope_config: ScopeConfigPayload | None = None
     is_active: bool | None = None
 
-    _validate_group_key = field_validator("group_key")(WebsitePropertyBase.validate_group_key)
-    _validate_platform_key = field_validator("platform_key")(
-        WebsitePropertyBase.validate_platform_key
-    )
-    _validate_ownership_key = field_validator("ownership_key")(
-        WebsitePropertyBase.validate_ownership_key
-    )
+    @field_validator("group_key")
+    @classmethod
+    def validate_group_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_classification(value, fallback="Other")
+
+    @field_validator("platform_key")
+    @classmethod
+    def validate_platform_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_classification(value, fallback="Other")
+
+    @field_validator("ownership_key")
+    @classmethod
+    def validate_ownership_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_classification(value, fallback="Unknown")
+
     _validate_locale = field_validator("locale")(WebsitePropertyBase.validate_locale)
 
 

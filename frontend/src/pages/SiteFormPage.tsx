@@ -9,7 +9,6 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
 import { inputClass } from "../components/ui/styles";
-import { groupOptions, ownershipOptions, platformOptions } from "../types/siteClassifications";
 import type { ScopeConfig, SitePayload } from "../types/scans";
 import { plural } from "../utils/format";
 import { normalizeStartingUrlInput, parseLineList } from "../utils/url";
@@ -27,10 +26,10 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
     name: "",
     base_url: "",
     description: "",
-    group_key: "other",
+    group_key: "Other",
     locale: "",
-    platform_key: "other",
-    ownership_key: "unknown",
+    platform_key: "Other",
+    ownership_key: "Unknown",
     scope_config: defaultScope(),
     is_active: true
   });
@@ -109,10 +108,10 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
             <Field id="site-base-url" label="Base URL" error={validation.baseUrl} helper="Use the primary URL or path that represents this website property."><input id="site-base-url" value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} className={inputClass(Boolean(validation.baseUrl))} placeholder="https://www.example.com/learn/" /></Field>
             <Field id="site-description" label="Description"><textarea id="site-description" value={form.description ?? ""} onChange={(event) => setForm({ ...form, description: event.target.value })} className={inputClass()} rows={3} /></Field>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <SelectField id="site-group" label="Group" value={form.group_key} options={groupOptions} onChange={(value) => setForm({ ...form, group_key: value })} />
+              <Field id="site-group" label="Group" helper="Optional. Create your own grouping label."><input id="site-group" value={form.group_key} onChange={(event) => setForm({ ...form, group_key: event.target.value })} className={inputClass()} placeholder="Marketing" /></Field>
               <Field id="site-locale" label="Locale" error={validation.locale} helper="Optional. Example: en-US"><input id="site-locale" value={form.locale ?? ""} onChange={(event) => setForm({ ...form, locale: event.target.value })} className={inputClass(Boolean(validation.locale))} /></Field>
-              <SelectField id="site-platform" label="Platform" value={form.platform_key} options={platformOptions} onChange={(value) => setForm({ ...form, platform_key: value })} />
-              <SelectField id="site-ownership" label="Ownership" value={form.ownership_key} options={ownershipOptions} onChange={(value) => setForm({ ...form, ownership_key: value })} />
+              <Field id="site-platform" label="Platform" helper="Optional. Example: WordPress Learn"><input id="site-platform" value={form.platform_key} onChange={(event) => setForm({ ...form, platform_key: event.target.value })} className={inputClass()} placeholder="WordPress" /></Field>
+              <Field id="site-ownership" label="Ownership" helper="Optional. Team or owner name."><input id="site-ownership" value={form.ownership_key} onChange={(event) => setForm({ ...form, ownership_key: event.target.value })} className={inputClass()} placeholder="Web Team" /></Field>
             </div>
             {mode === "edit" ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_active} onChange={(event) => setForm({ ...form, is_active: event.target.checked })} className="size-4 rounded border-stone-300" />Active site</label> : null}
           </div>
@@ -151,10 +150,6 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
 
 function PageFrame({ children }: { children: React.ReactNode }) {
   return <section className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">{children}</section>;
-}
-
-function SelectField({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
-  return <Field id={id} label={label}><select id={id} value={value} onChange={(event) => onChange(event.target.value)} className={inputClass()}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>;
 }
 
 function TextArea({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (value: string) => void }) {

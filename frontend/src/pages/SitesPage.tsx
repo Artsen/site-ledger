@@ -8,7 +8,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { inputClass } from "../components/ui/styles";
-import { classificationLabel, groupOptions, ownershipOptions, platformOptions } from "../types/siteClassifications";
+import { classificationLabel } from "../types/siteClassifications";
 import type { SiteListItem } from "../types/scans";
 import { formatDate, plural } from "../utils/format";
 
@@ -38,10 +38,10 @@ export function SitesPage() {
       <section className="mb-4 rounded-md border border-stone-200 bg-white p-4 shadow-sm">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4 lg:grid-cols-7">
           <input aria-label="Search sites" value={searchParams.get("search") ?? ""} onChange={(event) => updateParam(setSearchParams, "search", event.target.value || null)} placeholder="Search name or URL" className={`${inputClass()} md:col-span-2`} />
-          <OptionSelect label="Group" param="group_key" options={groupOptions} searchParams={searchParams} setSearchParams={setSearchParams} />
+          <FilterInput label="Group" param="group_key" placeholder="Any group" searchParams={searchParams} setSearchParams={setSearchParams} />
           <input aria-label="Locale" value={searchParams.get("locale") ?? ""} onChange={(event) => updateParam(setSearchParams, "locale", event.target.value || null)} placeholder="Locale" className={inputClass()} />
-          <OptionSelect label="Platform" param="platform_key" options={platformOptions} searchParams={searchParams} setSearchParams={setSearchParams} />
-          <OptionSelect label="Ownership" param="ownership_key" options={ownershipOptions} searchParams={searchParams} setSearchParams={setSearchParams} />
+          <FilterInput label="Platform" param="platform_key" placeholder="Any platform" searchParams={searchParams} setSearchParams={setSearchParams} />
+          <FilterInput label="Ownership" param="ownership_key" placeholder="Any owner" searchParams={searchParams} setSearchParams={setSearchParams} />
           <select aria-label="Active state" value={searchParams.get("active_state") ?? "active"} onChange={(event) => updateParam(setSearchParams, "active_state", event.target.value === "active" ? null : event.target.value)} className={inputClass()}>
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
@@ -91,9 +91,9 @@ function SitesTable({ sites, onDelete }: { sites: SiteListItem[]; onDelete: (sit
                 <span className="block truncate font-mono text-xs text-stone-500">{site.base_url}</span>
               </td>
               <td className="px-3 py-2 text-xs text-stone-600">
-                <span className="block">{classificationLabel(groupOptions, site.group_key)}</span>
-                <span className="block">{classificationLabel(platformOptions, site.platform_key)}</span>
-                <span className="block">{classificationLabel(ownershipOptions, site.ownership_key)}{site.locale ? `, ${site.locale}` : ""}</span>
+                <span className="block">{classificationLabel(site.group_key)}</span>
+                <span className="block">{classificationLabel(site.platform_key)}</span>
+                <span className="block">{classificationLabel(site.ownership_key)}{site.locale ? `, ${site.locale}` : ""}</span>
               </td>
               <td className="px-3 py-2"><StatusBadge status={site.is_active ? "completed" : "interrupted"} label={site.is_active ? "Active" : "Inactive"} /></td>
               <td className="px-3 py-2">{site.latest_scan_status ? <><StatusBadge status={site.latest_scan_status} /><span className="mt-1 block text-xs text-stone-500">{formatDate(site.latest_scan_date)}</span></> : "No scans"}</td>
@@ -114,12 +114,9 @@ function SitesTable({ sites, onDelete }: { sites: SiteListItem[]; onDelete: (sit
   );
 }
 
-function OptionSelect({ label, param, options, searchParams, setSearchParams }: { label: string; param: string; options: Array<{ value: string; label: string }>; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {
+function FilterInput({ label, param, placeholder, searchParams, setSearchParams }: { label: string; param: string; placeholder: string; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {
   return (
-    <select aria-label={label} value={searchParams.get(param) ?? ""} onChange={(event) => updateParam(setSearchParams, param, event.target.value || null)} className={inputClass()}>
-      <option value="">Any {label.toLowerCase()}</option>
-      {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-    </select>
+    <input aria-label={label} value={searchParams.get(param) ?? ""} onChange={(event) => updateParam(setSearchParams, param, event.target.value || null)} placeholder={placeholder} className={inputClass()} />
   );
 }
 

@@ -89,9 +89,9 @@ plugin architecture.
 ## PR 4 Saved Sites
 
 `WebsiteProperty` represents a saved Site above scans. It stores generic site metadata, a normalized
-base URL, active state, classification keys, and a saved `scope_config` JSON object using the same
-schema as scan creation. Classifications are centralized stable keys rather than display labels or
-crawler behavior switches.
+base URL, active state, user-defined group/platform/ownership labels, and a saved `scope_config`
+JSON object using the same schema as scan creation. Classification labels are normalized and
+validated centrally, but they are not hardcoded crawler behavior switches.
 
 `Scan.website_property_id` is nullable. Existing and future ad hoc scans remain valid with no site
 relationship. Saved-site scans store both the site relationship and a copied effective `scope_config`

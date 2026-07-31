@@ -25,19 +25,20 @@ def test_create_site_normalizes_and_validates(db_session: Session) -> None:
         _site_payload(
             base_url="HTTPS://WWW.Example.COM:443/learn/?a=1",
             locale="en-us",
-            group_key="customer_education",
-            platform_key="wordpress_learn",
-            ownership_key="customer_education",
+            group_key="Customer Education",
+            platform_key="WordPress Learn",
+            ownership_key="Customer Education",
         ),
     )
 
     assert site.base_url == "https://www.example.com/learn/?a=1"
     assert site.normalized_base_url == "https://www.example.com/learn/?a=1"
+    assert site.group_key == "Customer Education"
     assert site.locale == "en-US"
     assert site.is_active is True
 
     with pytest.raises(ValidationError):
-        _site_payload(group_key="bad")
+        _site_payload(group_key="x" * 65)
     with pytest.raises(ValidationError):
         _site_payload(locale="english")
     with pytest.raises(ValueError, match="HTTP or HTTPS"):
@@ -107,9 +108,9 @@ def test_site_list_filters_sorts_paginates_and_aggregates(db_session: Session) -
         _site_payload(
             name="Beta",
             base_url="https://beta.example/",
-            group_key="marketing",
-            platform_key="wordpress_root",
-            ownership_key="web_team",
+            group_key="Marketing",
+            platform_key="WordPress Root",
+            ownership_key="Web Team",
         ),
     )
     _scan(db_session, alpha, status="completed", discovered=3, failed=0)
@@ -119,7 +120,7 @@ def test_site_list_filters_sorts_paginates_and_aggregates(db_session: Session) -
     result = list_sites(
         db_session,
         search="beta",
-        group_key="marketing",
+        group_key="Marketing",
         locale=None,
         platform_key=None,
         ownership_key=None,
@@ -203,10 +204,10 @@ def _site_payload(**overrides) -> WebsitePropertyCreate:
         "name": "Example Site",
         "base_url": "https://example.com/",
         "description": "A site",
-        "group_key": "other",
+        "group_key": "Other",
         "locale": None,
-        "platform_key": "other",
-        "ownership_key": "unknown",
+        "platform_key": "Other",
+        "ownership_key": "Unknown",
         "scope_config": ScopeConfigPayload(),
         "is_active": True,
     }

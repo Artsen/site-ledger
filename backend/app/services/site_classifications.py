@@ -1,21 +1,12 @@
-from typing import Literal
-
-GROUP_KEYS = {"marketing", "customer_education", "rs", "other"}
-PLATFORM_KEYS = {"wordpress_root", "wordpress_learn", "rs_managed", "other"}
-OWNERSHIP_KEYS = {"web_team", "customer_education", "rs", "shared", "unknown"}
-
-GroupKey = Literal["marketing", "customer_education", "rs", "other"]
-PlatformKey = Literal["wordpress_root", "wordpress_learn", "rs_managed", "other"]
-OwnershipKey = Literal["web_team", "customer_education", "rs", "shared", "unknown"]
+MAX_CLASSIFICATION_LENGTH = 64
 
 
-def is_valid_group_key(value: str) -> bool:
-    return value in GROUP_KEYS
-
-
-def is_valid_platform_key(value: str) -> bool:
-    return value in PLATFORM_KEYS
-
-
-def is_valid_ownership_key(value: str) -> bool:
-    return value in OWNERSHIP_KEYS
+def normalize_classification(value: str, *, fallback: str) -> str:
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        return fallback
+    if len(normalized) > MAX_CLASSIFICATION_LENGTH:
+        raise ValueError(
+            f"Classification values must be {MAX_CLASSIFICATION_LENGTH} characters or fewer."
+        )
+    return normalized
