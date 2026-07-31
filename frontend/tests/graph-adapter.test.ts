@@ -36,6 +36,9 @@ describe("graph data adapter", () => {
     const second = deterministicCoordinates("snapshot:stable");
 
     expect(second).toEqual(first);
+    const spread = Array.from({ length: 16 }, (_, index) => deterministicCoordinates(`snapshot:${index + 1}`));
+    expect(new Set(spread.map((item) => Math.round(item.x / 25))).size).toBeGreaterThan(4);
+    expect(new Set(spread.map((item) => Math.round(item.y / 25))).size).toBeGreaterThan(4);
     expect(nodeSize(nodeFixture({ inbound_occurrence_count: 10_000 }), "inbound_occurrences")).toBeLessThanOrEqual(16);
     expect(nodeSize(nodeFixture({ inbound_occurrence_count: 0 }), "inbound_occurrences")).toBeGreaterThanOrEqual(3);
     expect(nodeSize(nodeFixture({}), "uniform")).toBe(5);

@@ -62,13 +62,14 @@ export function adaptGraphData(graph: GraphResponse, settings: GraphDisplaySetti
 }
 
 export function deterministicCoordinates(id: string) {
-  const first = stableHash(`${id}:x`);
-  const second = stableHash(`${id}:y`);
-  const third = stableHash(`${id}:z`);
+  const angle = unitHash(`${id}:angle`) * Math.PI * 2;
+  const radius = Math.sqrt(unitHash(`${id}:radius`)) * 420;
+  const depthAngle = unitHash(`${id}:depth`) * Math.PI * 2;
+  const depthRadius = Math.sqrt(unitHash(`${id}:depth-radius`)) * 260;
   return {
-    x: scaleHash(first, 420),
-    y: scaleHash(second, 420),
-    z: scaleHash(third, 260)
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius,
+    z: Math.sin(depthAngle) * depthRadius
   };
 }
 
@@ -165,6 +166,16 @@ function stableHash(value: string) {
   return hash >>> 0;
 }
 
-function scaleHash(hash: number, radius: number) {
-  return (hash / 0xffffffff - 0.5) * radius;
+function unitHash(value: string) {
+  return mixHash(stableHash(value)) / 0xffffffff;
+}
+
+function mixHash(value: number) {
+  let hash = value >>> 0;
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x7feb352d);
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 0x846ca68b);
+  hash ^= hash >>> 16;
+  return hash >>> 0;
 }
