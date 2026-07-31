@@ -22,7 +22,7 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
   const [searchText, setSearchText] = useState("");
   const [rendererError, setRendererError] = useState<Error | null>(null);
   const rendererRef = useRef<GraphRendererHandle | null>(null);
-  const settings = displaySettings(searchParams);
+  const settings = useMemo(() => displaySettings(searchParams), [searchParams]);
   const graphQuery = useMemo(() => buildGraphQuery(searchParams), [searchParams]);
   const graph = useQuery({
     queryKey: ["scan-graph", scan.id, graphQuery],
@@ -189,8 +189,8 @@ function GraphControls({ searchParams, setSearchParams, settings }: { searchPara
           <input aria-label="Minimum outbound links" type="number" min={0} value={searchParams.get("min_outbound") ?? ""} onChange={(event) => updateGraphParam(setSearchParams, "min_outbound", event.target.value || null)} placeholder="Min outbound" className={inputClass()} />
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <input aria-label="Maximum graph nodes" type="number" min={1} max={1500} value={searchParams.get("max_nodes") ?? "200"} onChange={(event) => updateGraphParam(setSearchParams, "max_nodes", event.target.value || null)} className={inputClass()} />
-          <input aria-label="Maximum graph edges" type="number" min={0} max={5000} value={searchParams.get("max_edges") ?? "600"} onChange={(event) => updateGraphParam(setSearchParams, "max_edges", event.target.value || null)} className={inputClass()} />
+          <input aria-label="Maximum graph nodes" type="number" min={1} max={1500} value={searchParams.get("max_nodes") ?? "100"} onChange={(event) => updateGraphParam(setSearchParams, "max_nodes", event.target.value || null)} className={inputClass()} />
+          <input aria-label="Maximum graph edges" type="number" min={0} max={5000} value={searchParams.get("max_edges") ?? "250"} onChange={(event) => updateGraphParam(setSearchParams, "max_edges", event.target.value || null)} className={inputClass()} />
         </div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={searchParams.get("unfetched") === "1"} onChange={(event) => updateGraphParam(setSearchParams, "unfetched", event.target.checked ? "1" : null)} /> Show unfetched internal pages</label>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={searchParams.get("self_links") !== "0"} onChange={(event) => updateGraphParam(setSearchParams, "self_links", event.target.checked ? null : "0")} /> Show self-links</label>
@@ -347,8 +347,8 @@ function buildGraphQuery(searchParams: URLSearchParams) {
     const value = searchParams.get(sourceKey);
     if (value) params.set(targetKey, value);
   }
-  if (!params.has("max_nodes")) params.set("max_nodes", "200");
-  if (!params.has("max_edges")) params.set("max_edges", "600");
+  if (!params.has("max_nodes")) params.set("max_nodes", "100");
+  if (!params.has("max_edges")) params.set("max_edges", "250");
   params.set("include_self_links", searchParams.get("self_links") === "0" ? "false" : "true");
   params.set("include_unfetched", searchParams.get("unfetched") === "1" ? "true" : "false");
   return `?${params.toString()}`;
