@@ -1,4 +1,4 @@
-import type { InboundLinkList, LinkOccurrence, PageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScopeConfig, Snapshot } from "../types/scans";
+import type { InboundLinkList, LinkOccurrence, PageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot } from "../types/scans";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -33,12 +33,26 @@ export const defaultScope = (): ScopeConfig => ({
   max_redirects: 10
 });
 
-export function createScan(startingUrl: string, scopeConfig: ScopeConfig) {
+export function createScan(startingUrl: string, scopeConfig: ScopeConfig, websitePropertyId?: number | null) {
   return request<Scan>("/api/scans", {
     method: "POST",
-    body: JSON.stringify({ starting_url: startingUrl, scope_config: scopeConfig })
+    body: JSON.stringify({ starting_url: startingUrl, scope_config: scopeConfig, website_property_id: websitePropertyId ?? null })
   });
 }
+
+export function createSiteScan(siteId: string, scopeConfig: ScopeConfig) {
+  return request<Scan>(`/api/sites/${siteId}/scans`, {
+    method: "POST",
+    body: JSON.stringify({ scope_config: scopeConfig })
+  });
+}
+
+export const listSites = (query = "") => request<SiteList>(`/api/sites${query}`);
+export const getSite = (id: string) => request<Site>(`/api/sites/${id}`);
+export const createSite = (payload: SitePayload) => request<Site>("/api/sites", { method: "POST", body: JSON.stringify(payload) });
+export const updateSite = (id: string, payload: Partial<SitePayload>) => request<Site>(`/api/sites/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const deleteSite = (id: string) => request<{ deleted_site_id: number }>(`/api/sites/${id}`, { method: "DELETE" });
+export const listSiteScans = (id: string, query = "") => request<SiteScans>(`/api/sites/${id}/scans${query}`);
 
 export const listScans = () => request<Scan[]>("/api/scans");
 export const listScanHistory = (query = "") => request<ScanHistory>(`/api/scans/history${query}`);

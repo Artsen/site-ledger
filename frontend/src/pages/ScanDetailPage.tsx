@@ -87,7 +87,7 @@ export function ScanDetailPage() {
     <PageFrame>
       <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <div className="mb-2 text-sm text-stone-500">Scans / {hostnameFromUrl(scan.data.starting_url)}</div>
+          <div className="mb-2 text-sm text-stone-500">Scans / {scan.data.website_property_name ?? hostnameFromUrl(scan.data.starting_url)}</div>
           <h1 className="truncate text-xl font-semibold text-stone-950">{scan.data.starting_url}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <StatusBadge status={scan.data.status} />
@@ -222,6 +222,7 @@ function Overview({
           <DefinitionList
             items={[
               { label: "Starting URL", value: scan.starting_url, copyValue: scan.starting_url },
+              { label: "Site", value: scan.website_property_name ? <Link to={`/sites/${scan.website_property_id}`} className="underline">{scan.website_property_name}</Link> : "Ad hoc" },
               { label: "Status", value: <StatusBadge status={scan.status} /> },
               { label: "Started", value: formatDate(scan.started_at) },
               { label: "Finished", value: formatDate(scan.finished_at) },

@@ -33,6 +33,16 @@ export function AppShell() {
             New Scan
           </NavLink>
           <NavLink
+            to="/sites"
+            className={({ isActive }) =>
+              `rounded-md px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2 lg:mt-2 lg:block ${
+                isActive ? "bg-white text-stone-950 shadow-sm" : "text-stone-700 hover:bg-stone-200"
+              }`
+            }
+          >
+            Sites
+          </NavLink>
+          <NavLink
             to="/scans"
             end
             className={({ isActive }) =>
@@ -53,7 +63,7 @@ export function AppShell() {
           <nav aria-label="Recent scans" className="space-y-1">
             {scans.data?.map((scan) => {
               const active = String(scan.id) === scanId;
-              const host = hostnameFromUrl(scan.starting_url);
+              const label = scan.website_property_name ?? hostnameFromUrl(scan.starting_url);
               return (
                 <NavLink
                   key={scan.id}
@@ -63,7 +73,8 @@ export function AppShell() {
                   }`}
                   title={scan.starting_url}
                 >
-                  <span className="block truncate font-medium text-stone-900">{host}</span>
+                  <span className="block truncate font-medium text-stone-900">{label}</span>
+                  <span className="block truncate text-xs text-stone-500">{scan.website_property_name ? "Saved site" : "Ad hoc"}</span>
                   <span className="mt-1 flex items-center justify-between gap-2">
                     <span className="truncate text-xs text-stone-500">{formatRelativeDate(scan.created_at)}</span>
                     <StatusBadge status={scan.status} label={shortStatus(scan.status)} />
