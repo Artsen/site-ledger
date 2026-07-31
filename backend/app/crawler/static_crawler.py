@@ -2,18 +2,24 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from time import monotonic
 from typing import Any
-from urllib.parse import urljoin
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.crawler.html_parser import parse_html
+from app.crawler.safe_fetch import (
+    FetchLimits,
+    RedirectFailureError,
+    ResponseTooLargeError,
+    SafeHttpFetcher,
+    connect_error_type,
+)
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.security import UnsafeDestinationError, validate_public_destination
 from app.crawler.url_normalizer import NormalizedUrl
-from app.models import ResourceOccurrence, ResourceSnapshot, Scan
+from app.models import ResourceOccurrence, ResourceSnapshot, Scan, ScanSeed
 from app.services.repositories import get_or_create_resource
 from app.storage.content_store import LocalContentStore
 
@@ -23,9 +29,6 @@ class CrawlItem:
     normalized: NormalizedUrl
     requested_url: str
     depth: int
-
-
-REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
 class StaticPageCrawler:
@@ -52,89 +55,80 @@ class StaticPageCrawler:
 
         scan.status = "running"
         scan.started_at = datetime.now(UTC)
-        queue: deque[CrawlItem] = deque(
-            [CrawlItem(initial.normalized, initial.normalized.normalized_url, 0)]
-        )
-        seen = {initial.normalized.normalized_url}
+        queue = self._initial_queue(scan, initial.normalized)
+        seen = {item.normalized.normalized_url for item in queue}
         fetched: set[str] = set()
         had_errors = False
         self._update_counts(scan, len(seen), len(fetched), len(queue))
         self.db.commit()
 
-        async with httpx.AsyncClient(
-            follow_redirects=False,
-            max_redirects=config.max_redirects,
-            timeout=config.request_timeout_seconds,
-            headers={"User-Agent": config.user_agent},
-            transport=self.transport,
-        ) as client:
-            while queue and scan.status != "cancelled" and len(fetched) < config.max_pages:
-                item = queue.popleft()
-                scan.queued_count = len(queue)
-                self.db.commit()
-                if item.depth > config.max_depth:
-                    scan.skipped_count += 1
-                    continue
-                try:
-                    snapshot, anchors = await self._fetch_one(scan, item, client, config, scope)
-                    fetched.add(item.normalized.normalized_url)
-                    if snapshot.error_type:
-                        had_errors = True
-                    for anchor in anchors:
-                        result = scope.evaluate(
-                            anchor.raw_href or "", snapshot.final_url or item.requested_url, seen
-                        )
-                        target = (
-                            get_or_create_resource(self.db, result.normalized)
-                            if result.normalized
-                            else None
-                        )
-                        occurrence = ResourceOccurrence(
-                            source_snapshot_id=snapshot.id,
-                            raw_href=anchor.raw_href,
-                            resolved_url=anchor.resolved_url,
-                            normalized_target_url=result.normalized.normalized_url
-                            if result.normalized
-                            else None,
-                            target_resource_id=target.id if target else None,
-                            anchor_text=anchor.anchor_text,
-                            title=anchor.title,
-                            aria_label=anchor.aria_label,
-                            rel=anchor.rel,
-                            target=anchor.target,
-                            dom_path=anchor.dom_path,
-                            in_scope=result.in_scope,
-                            scope_decision=result.decision,
-                            exclusion_reason=result.exclusion_reason,
-                        )
-                        self.db.add(occurrence)
-                        if (
-                            result.in_scope
-                            and result.normalized is not None
-                            and result.normalized.normalized_url not in seen
-                            and item.depth + 1 <= config.max_depth
-                            and len(seen) < config.max_pages
-                        ):
-                            seen.add(result.normalized.normalized_url)
-                            queue.append(
-                                CrawlItem(
-                                    result.normalized,
-                                    result.normalized.normalized_url,
-                                    item.depth + 1,
-                                )
-                            )
-                    self._update_counts(scan, len(seen), len(fetched), len(queue))
-                    self.db.commit()
-                except (
-                    Exception
-                ) as exc:  # page-level failures are persisted, not fatal scan failures
+        while queue and scan.status != "cancelled" and len(fetched) < config.max_pages:
+            item = queue.popleft()
+            scan.queued_count = len(queue)
+            self.db.commit()
+            if item.depth > config.max_depth:
+                scan.skipped_count += 1
+                continue
+            try:
+                snapshot, anchors = await self._fetch_one(scan, item, config, scope)
+                fetched.add(item.normalized.normalized_url)
+                self._mark_seed(scan.id, item.normalized.normalized_url, "fetched")
+                if snapshot.error_type:
                     had_errors = True
-                    self._record_failure(scan, item, "connection_error", str(exc))
-                    fetched.add(item.normalized.normalized_url)
-                    self._update_counts(scan, len(seen), len(fetched), len(queue))
-                    self.db.commit()
-                if config.delay_between_requests_ms:
-                    await asyncio.sleep(config.delay_between_requests_ms / 1000)
+                for anchor in anchors:
+                    result = scope.evaluate(
+                        anchor.raw_href or "", snapshot.final_url or item.requested_url, seen
+                    )
+                    target = (
+                        get_or_create_resource(self.db, result.normalized)
+                        if result.normalized
+                        else None
+                    )
+                    occurrence = ResourceOccurrence(
+                        source_snapshot_id=snapshot.id,
+                        raw_href=anchor.raw_href,
+                        resolved_url=anchor.resolved_url,
+                        normalized_target_url=result.normalized.normalized_url
+                        if result.normalized
+                        else None,
+                        target_resource_id=target.id if target else None,
+                        anchor_text=anchor.anchor_text,
+                        title=anchor.title,
+                        aria_label=anchor.aria_label,
+                        rel=anchor.rel,
+                        target=anchor.target,
+                        dom_path=anchor.dom_path,
+                        in_scope=result.in_scope,
+                        scope_decision=result.decision,
+                        exclusion_reason=result.exclusion_reason,
+                    )
+                    self.db.add(occurrence)
+                    if (
+                        result.in_scope
+                        and result.normalized is not None
+                        and result.normalized.normalized_url not in seen
+                        and item.depth + 1 <= config.max_depth
+                        and len(seen) < config.max_pages
+                    ):
+                        seen.add(result.normalized.normalized_url)
+                        queue.append(
+                            CrawlItem(
+                                result.normalized,
+                                result.normalized.normalized_url,
+                                item.depth + 1,
+                            )
+                        )
+                self._update_counts(scan, len(seen), len(fetched), len(queue))
+                self.db.commit()
+            except Exception as exc:  # page-level failures are persisted, not fatal scan failures
+                had_errors = True
+                self._record_failure(scan, item, "connection_error", str(exc))
+                fetched.add(item.normalized.normalized_url)
+                self._mark_seed(scan.id, item.normalized.normalized_url, "failed")
+                self._update_counts(scan, len(seen), len(fetched), len(queue))
+                self.db.commit()
+            if config.delay_between_requests_ms:
+                await asyncio.sleep(config.delay_between_requests_ms / 1000)
 
         if scan.status == "cancelled":
             scan.stop_reason = "cancelled_by_user"
@@ -149,23 +143,30 @@ class StaticPageCrawler:
         self,
         scan: Scan,
         item: CrawlItem,
-        client: httpx.AsyncClient,
         config: ScopeConfig,
         scope: ScopeEngine,
     ) -> tuple[ResourceSnapshot, list[Any]]:
         resource = get_or_create_resource(self.db, item.normalized)
-        started = monotonic()
         try:
             await validate_public_destination(item.requested_url, config.allow_private_networks)
-            response, content, redirect_chain = await self._get_with_validated_redirects(
-                client, item.requested_url, config, scope
+            fetcher = SafeHttpFetcher(
+                FetchLimits(
+                    timeout_seconds=config.request_timeout_seconds,
+                    max_response_bytes=config.max_html_response_bytes,
+                    max_redirects=config.max_redirects,
+                    user_agent=config.user_agent,
+                    allow_private_networks=config.allow_private_networks,
+                ),
+                transport=self.transport,
+                redirect_validator=lambda url: _validate_redirect(scope, url),
+                destination_validator=validate_public_destination,
             )
-            response_time_ms = int((monotonic() - started) * 1000)
-            content_type = response.headers.get("content-type")
+            result = await fetcher.get(item.requested_url)
+            content_type = result.content_type
             is_html = "text/html" in (content_type or "").lower() or not content_type
-            parsed = parse_html(content, str(response.url)) if is_html else None
+            parsed = parse_html(result.content, result.final_url) if is_html else None
             blob = (
-                self.store.put_html(self.db, content, content_type, response.encoding)
+                self.store.put_html(self.db, result.content, content_type, result.encoding)
                 if is_html
                 else None
             )
@@ -173,15 +174,15 @@ class StaticPageCrawler:
                 scan_id=scan.id,
                 resource_id=resource.id,
                 requested_url=item.requested_url,
-                final_url=str(response.url),
-                http_status=response.status_code,
+                final_url=result.final_url,
+                http_status=result.http_status,
                 content_type=content_type,
-                encoding=response.encoding,
+                encoding=result.encoding,
                 crawl_depth=item.depth,
                 fetched_at=datetime.now(UTC),
-                response_time_ms=response_time_ms,
-                response_headers=dict(response.headers),
-                redirect_chain=redirect_chain,
+                response_time_ms=result.response_time_ms,
+                response_headers=result.headers,
+                redirect_chain=result.redirect_chain,
                 html_blob_id=blob.id if blob else None,
                 raw_html_sha256=blob.sha256 if blob else None,
                 head_sha256=parsed.head_sha256 if parsed else None,
@@ -222,152 +223,13 @@ class StaticPageCrawler:
         except httpx.ReadTimeout as exc:
             return self._record_failure(scan, item, "read_timeout", str(exc)), []
         except httpx.ConnectError as exc:
-            return self._record_failure(scan, item, _connect_error_type(exc), str(exc)), []
+            return self._record_failure(scan, item, connect_error_type(exc), str(exc)), []
         except UnsafeDestinationError as exc:
             return self._record_failure(scan, item, "unsafe_destination", str(exc)), []
         except httpx.InvalidURL as exc:
             return self._record_failure(scan, item, "invalid_url", str(exc)), []
         except ValueError as exc:
             return self._record_failure(scan, item, "invalid_url", str(exc)), []
-
-    async def _get_with_validated_redirects(
-        self,
-        client: httpx.AsyncClient,
-        start_url: str,
-        config: ScopeConfig,
-        scope: ScopeEngine,
-    ) -> tuple[httpx.Response, bytes, list[dict[str, Any]]]:
-        current_url = start_url
-        initial = scope.evaluate(start_url)
-        seen_redirects: set[str] = (
-            {initial.normalized.normalized_url} if initial.normalized else set()
-        )
-        redirect_chain: list[dict[str, Any]] = []
-
-        for _hop in range(config.max_redirects + 1):
-            await validate_public_destination(current_url, config.allow_private_networks)
-            async with client.stream("GET", current_url) as response:
-                if response.status_code not in REDIRECT_STATUSES:
-                    content = await self._read_limited_response(response, config, redirect_chain)
-                    return response, content, redirect_chain
-
-                location = response.headers.get("location")
-                try:
-                    resolved_url = urljoin(str(response.url), location) if location else None
-                except ValueError as exc:
-                    redirect_chain.append(
-                        {
-                            "requested_url": current_url,
-                            "status_code": response.status_code,
-                            "location": location,
-                            "resolved_url": None,
-                        }
-                    )
-                    raise RedirectFailureError(
-                        "invalid_url",
-                        str(exc),
-                        str(response.url),
-                        response.status_code,
-                        dict(response.headers),
-                        redirect_chain,
-                    ) from exc
-                redirect_chain.append(
-                    {
-                        "requested_url": current_url,
-                        "status_code": response.status_code,
-                        "location": location,
-                        "resolved_url": resolved_url,
-                    }
-                )
-                if not location or not resolved_url:
-                    raise RedirectFailureError(
-                        "invalid_url",
-                        "Redirect response did not include a valid Location header",
-                        str(response.url),
-                        response.status_code,
-                        dict(response.headers),
-                        redirect_chain,
-                    )
-                try:
-                    httpx.URL(resolved_url)
-                except httpx.InvalidURL as exc:
-                    raise RedirectFailureError(
-                        "invalid_url",
-                        str(exc),
-                        str(response.url),
-                        response.status_code,
-                        dict(response.headers),
-                        redirect_chain,
-                    ) from exc
-                destination = scope.evaluate(resolved_url)
-                if destination.normalized is None:
-                    raise RedirectFailureError(
-                        destination.decision,
-                        destination.exclusion_reason or "Redirect location is invalid",
-                        str(response.url),
-                        response.status_code,
-                        dict(response.headers),
-                        redirect_chain,
-                    )
-                if destination.decision != "crawlable":
-                    raise RedirectFailureError(
-                        "scope_excluded",
-                        destination.exclusion_reason or "Redirect left configured scope",
-                        str(response.url),
-                        response.status_code,
-                        dict(response.headers),
-                        redirect_chain,
-                    )
-                if destination.normalized.normalized_url in seen_redirects:
-                    raise RedirectFailureError(
-                        "redirect_loop",
-                        "Redirect loop detected",
-                        str(response.url),
-                        response.status_code,
-                        dict(response.headers),
-                        redirect_chain,
-                    )
-                await validate_public_destination(
-                    destination.normalized.normalized_url, config.allow_private_networks
-                )
-                seen_redirects.add(destination.normalized.normalized_url)
-                current_url = destination.normalized.normalized_url
-
-        raise RedirectFailureError(
-            "too_many_redirects",
-            "Redirect limit exceeded",
-            current_url,
-            None,
-            None,
-            redirect_chain,
-        )
-
-    @staticmethod
-    async def _read_limited_response(
-        response: httpx.Response,
-        config: ScopeConfig,
-        redirect_chain: list[dict[str, Any]],
-    ) -> bytes:
-        content_length = response.headers.get("content-length")
-        if content_length is not None:
-            try:
-                if int(content_length) > config.max_html_response_bytes:
-                    raise ResponseTooLargeError(
-                        "Content-Length exceeded configured response limit", redirect_chain
-                    )
-            except ValueError:
-                pass
-
-        chunks: list[bytes] = []
-        total = 0
-        async for chunk in response.aiter_bytes():
-            total += len(chunk)
-            if total > config.max_html_response_bytes:
-                raise ResponseTooLargeError(
-                    "Streamed response exceeded configured response limit", redirect_chain
-                )
-            chunks.append(chunk)
-        return b"".join(chunks)
 
     def _record_failure(
         self,
@@ -418,35 +280,63 @@ class StaticPageCrawler:
         scan.fetched_count = fetched
         scan.queued_count = queued
 
+    def _initial_queue(self, scan: Scan, initial: NormalizedUrl) -> deque[CrawlItem]:
+        seeds = list(
+            self.db.scalars(
+                select(ScanSeed)
+                .where(ScanSeed.scan_id == scan.id, ScanSeed.queue_state == "queued")
+                .order_by(ScanSeed.created_at, ScanSeed.id)
+            )
+        )
+        if not seeds:
+            return deque([CrawlItem(initial, initial.normalized_url, 0)])
+        queue: deque[CrawlItem] = deque()
+        for seed in seeds:
+            if not seed.normalized_url:
+                continue
+            try:
+                normalized = NormalizedUrl(
+                    raw_url=seed.requested_url,
+                    resolved_url=seed.requested_url,
+                    normalized_url=seed.normalized_url,
+                    scheme=seed.normalized_url.split(":", 1)[0],
+                    host=seed.resource.host if seed.resource else "",
+                    port=seed.resource.port if seed.resource else None,
+                    path=seed.resource.path if seed.resource else "/",
+                    query=seed.resource.query if seed.resource else "",
+                )
+            except ValueError:
+                continue
+            queue.append(CrawlItem(normalized, seed.requested_url, seed.depth))
+        return queue or deque([CrawlItem(initial, initial.normalized_url, 0)])
 
-def _connect_error_type(exc: httpx.ConnectError) -> str:
-    text = str(exc).lower()
-    if "name" in text or "dns" in text:
-        return "dns_error"
-    if "ssl" in text or "tls" in text:
-        return "tls_error"
-    return "connection_error"
+    def _mark_seed(self, scan_id: int, normalized_url: str, state: str) -> None:
+        seed = self.db.scalar(
+            select(ScanSeed).where(
+                ScanSeed.scan_id == scan_id,
+                ScanSeed.normalized_url == normalized_url,
+            )
+        )
+        if seed:
+            seed.queue_state = state
 
 
-class RedirectFailureError(Exception):
-    def __init__(
-        self,
-        error_type: str,
-        message: str,
-        final_url: str | None,
-        http_status: int | None,
-        response_headers: dict[str, Any] | None,
-        redirect_chain: list[dict[str, Any]],
-    ):
-        super().__init__(message)
-        self.error_type = error_type
-        self.final_url = final_url
-        self.http_status = http_status
-        self.response_headers = response_headers
-        self.redirect_chain = redirect_chain
-
-
-class ResponseTooLargeError(Exception):
-    def __init__(self, message: str, redirect_chain: list[dict[str, Any]]):
-        super().__init__(message)
-        self.redirect_chain = redirect_chain
+async def _validate_redirect(
+    scope: ScopeEngine, url: str
+) -> tuple[bool, str | None, str | None, str | None]:
+    destination = scope.evaluate(url)
+    if destination.normalized is None:
+        return (
+            False,
+            destination.decision,
+            destination.exclusion_reason or "Redirect location is invalid",
+            None,
+        )
+    if destination.decision != "crawlable":
+        return (
+            False,
+            "scope_excluded",
+            destination.exclusion_reason or "Redirect left configured scope",
+            destination.normalized.normalized_url,
+        )
+    return True, None, None, destination.normalized.normalized_url

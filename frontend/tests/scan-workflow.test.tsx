@@ -35,7 +35,16 @@ const api = vi.hoisted(() => ({
   updateSite: vi.fn(),
   deleteSite: vi.fn(),
   createSiteScan: vi.fn(),
-  listSiteScans: vi.fn()
+  listSiteScans: vi.fn(),
+  listSources: vi.fn(),
+  createSource: vi.fn(),
+  deleteSource: vi.fn(),
+  refreshSource: vi.fn(),
+  discoverRobots: vi.fn(),
+  listSourceEntries: vi.fn(),
+  addManualUrls: vi.fn(),
+  listInventory: vi.fn(),
+  listScanSeeds: vi.fn()
 }));
 
 vi.mock("../src/api/client", () => ({
@@ -110,6 +119,15 @@ beforeEach(() => {
   api.deleteSite.mockResolvedValue({ deleted_site_id: 3 });
   api.createSiteScan.mockResolvedValue({ ...scanFixture, id: 45, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/" });
   api.listSiteScans.mockResolvedValue({ items: [{ ...scanFixture, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/" }], total: 1, limit: 25, offset: 0 });
+  api.listSources.mockResolvedValue({ items: [sourceFixture], total: 1, limit: 25, offset: 0 });
+  api.createSource.mockResolvedValue(sourceFixture);
+  api.deleteSource.mockResolvedValue({ deleted_source_id: 4 });
+  api.refreshSource.mockResolvedValue(refreshFixture);
+  api.discoverRobots.mockResolvedValue(refreshFixture);
+  api.listSourceEntries.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  api.addManualUrls.mockResolvedValue({ source: sourceFixture, items: [], accepted_count: 1, rejected_count: 1, duplicate_count: 0 });
+  api.listInventory.mockResolvedValue({ items: [inventoryFixture], total: 1, limit: 50, offset: 0 });
+  api.listScanSeeds.mockResolvedValue({ items: [seedFixture], total: 1, limit: 50, offset: 0 });
 });
 
 afterEach(() => cleanup());
@@ -250,8 +268,20 @@ describe("saved sites workflow", () => {
     fireEvent.change(screen.getByLabelText("Maximum pages"), { target: { value: "7" } });
     fireEvent.click(screen.getByRole("button", { name: "Start scan" }));
 
-    await waitFor(() => expect(api.createSiteScan).toHaveBeenCalledWith("3", expect.objectContaining({ max_pages: 7 })));
+    await waitFor(() => expect(api.createSiteScan).toHaveBeenCalledWith("3", expect.objectContaining({ max_pages: 7 }), false, []));
     expect(api.updateSite).not.toHaveBeenCalled();
+  });
+
+  it("shows source and inventory tools on site detail", async () => {
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=sources");
+
+    expect(await screen.findByText("Sources")).toBeInTheDocument();
+    expect(await screen.findByText("Main sitemap")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(api.refreshSource).toHaveBeenCalledWith("3", "4"));
+
+    fireEvent.click(screen.getByRole("button", { name: /inventory/i }));
+    expect(await screen.findByText("https://example.com/a")).toBeInTheDocument();
   });
 
   it("blocks saved-site scans with invalid scan-specific numeric overrides", async () => {
@@ -555,4 +585,92 @@ const siteDetailFixture = {
   ...siteFixture,
   latest_scan: { ...scanFixture, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/" },
   recent_scans: [{ ...scanFixture, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/" }]
+};
+
+const sourceFixture = {
+  id: 4,
+  website_property_id: 3,
+  parent_source_id: null,
+  root_source_id: null,
+  source_type: "sitemap",
+  name: "Main sitemap",
+  source_url: "https://example.com/sitemap.xml",
+  normalized_source_url: "https://example.com/sitemap.xml",
+  is_active: true,
+  discovery_mode: "configured",
+  settings_json: {},
+  last_refresh_status: "completed",
+  last_refresh_started_at: "2026-07-30T01:00:00Z",
+  last_refresh_finished_at: "2026-07-30T01:00:01Z",
+  last_successful_refresh_at: "2026-07-30T01:00:01Z",
+  last_http_status: 200,
+  last_error_type: null,
+  last_error_message: null,
+  created_at: "2026-07-30T01:00:00Z",
+  updated_at: "2026-07-30T01:00:01Z",
+  current_entry_count: 2
+};
+
+const refreshFixture = {
+  id: 5,
+  url_source_id: 4,
+  status: "completed",
+  started_at: "2026-07-30T01:00:00Z",
+  finished_at: "2026-07-30T01:00:01Z",
+  http_status: 200,
+  fetched_url: "https://example.com/sitemap.xml",
+  final_url: "https://example.com/sitemap.xml",
+  response_bytes: 120,
+  content_type: "application/xml",
+  discovered_entry_count: 2,
+  accepted_entry_count: 2,
+  rejected_entry_count: 0,
+  child_source_count: 0,
+  entries_added: 2,
+  entries_updated: 0,
+  entries_no_longer_current: 0,
+  error_type: null,
+  error_message: null,
+  warnings_json: []
+};
+
+const inventoryFixture = {
+  normalized_url: "https://example.com/a",
+  resource_id: 2,
+  source_count: 2,
+  source_types: ["manual", "sitemap"],
+  sources: [
+    { id: 4, name: "Main sitemap", type: "sitemap", entry_id: 6, raw_url: "https://example.com/a" },
+    { id: 7, name: "Manual URLs", type: "manual", entry_id: 8, raw_url: "/a" }
+  ],
+  scope_decision: "crawlable",
+  validation_state: "valid",
+  sitemap_lastmod: "2026-01-01",
+  latest_scan_status: "completed",
+  latest_fetch_date: "2026-07-30T01:00:02Z",
+  classification: "source_and_crawl"
+};
+
+const seedFixture = {
+  id: 9,
+  scan_id: 1,
+  resource_id: 2,
+  normalized_url: "https://example.com/a",
+  requested_url: "https://example.com/a",
+  depth: 0,
+  queue_state: "queued",
+  scope_decision: "crawlable",
+  exclusion_reason: null,
+  created_at: "2026-07-30T01:00:00Z",
+  origins: [
+    {
+      id: 10,
+      origin_type: "sitemap",
+      url_source_id: 4,
+      url_source_entry_id: 6,
+      source_refresh_id: 5,
+      raw_url: "https://example.com/a",
+      metadata_json: {}
+    }
+  ]
 };

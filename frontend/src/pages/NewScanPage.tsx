@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { createScan, createSiteScan, defaultScope, listSites } from "../api/client";
+import { createScan, createSiteScan, defaultScope, listSites, listSources } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
@@ -45,13 +45,20 @@ export function NewScanPage() {
     max_depth: preferences.max_depth ?? initialScope.max_depth
   });
   const [listFields, setListFields] = useState<ListFieldText>(() => listsFromScope(initialScope));
+  const [includeInventory, setIncludeInventory] = useState(false);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<number[]>([]);
   const submittingRef = useRef(false);
   const urlValidation = useMemo(() => normalizeStartingUrlInput(startingUrl), [startingUrl]);
   const effectiveScope = useMemo(() => scopeFromForm(scope, listFields), [scope, listFields]);
   const validation = useMemo(() => validateForm(startingUrl, urlValidation, scope), [startingUrl, urlValidation, scope]);
   const selectedSite = sites.data?.items.find((site) => String(site.id) === selectedSiteId);
+  const sources = useQuery({
+    queryKey: ["sources", selectedSiteId, "scan-selector"],
+    queryFn: () => listSources(selectedSiteId, "?active_state=active&limit=100"),
+    enabled: mode === "site" && Boolean(selectedSiteId)
+  });
   const mutation = useMutation({
-    mutationFn: () => mode === "site" && selectedSite ? createSiteScan(String(selectedSite.id), effectiveScope) : createScan(urlValidation.normalizedUrl, effectiveScope),
+    mutationFn: () => mode === "site" && selectedSite ? createSiteScan(String(selectedSite.id), effectiveScope, includeInventory, selectedSourceIds) : createScan(urlValidation.normalizedUrl, effectiveScope),
     onSuccess: async (scan) => {
       await queryClient.invalidateQueries({ queryKey: ["scans"] });
       navigate(`/scans/${scan.id}`);
@@ -67,6 +74,7 @@ export function NewScanPage() {
     setStartingUrl(selectedSite.base_url);
     setScope(selectedSite.scope_config);
     setListFields(listsFromScope(selectedSite.scope_config));
+    setSelectedSourceIds([]);
   }, [selectedSite, mode]);
 
   useEffect(() => {
@@ -124,6 +132,27 @@ export function NewScanPage() {
                 <div className="mt-3 rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
                   <div className="font-medium">{selectedSite.name}</div>
                   <div className="mt-1 font-mono text-xs text-stone-600">{selectedSite.base_url}</div>
+                  <label className="mt-3 flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={includeInventory} onChange={(event) => setIncludeInventory(event.target.checked)} className="size-4 rounded border-stone-300" />
+                    Include current URL inventory
+                  </label>
+                  {includeInventory ? (
+                    <div className="mt-3 rounded-md border border-stone-200 bg-white p-3">
+                      <div className="mb-2 text-xs font-medium text-stone-600">Sources</div>
+                      {sources.isLoading ? <LoadingBlock label="Loading sources..." /> : null}
+                      {sources.data?.items.length ? sources.data.items.map((source) => (
+                        <label key={source.id} className="flex items-center gap-2 py-1 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={selectedSourceIds.includes(source.id)}
+                            onChange={(event) => setSelectedSourceIds((current) => event.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id))}
+                            className="size-4 rounded border-stone-300"
+                          />
+                          <span>{source.name} · {source.current_entry_count} URLs</span>
+                        </label>
+                      )) : !sources.isLoading ? <div className="text-xs text-stone-500">No active sources yet. All current active sources will be used when available.</div> : null}
+                    </div>
+                  ) : null}
                   <Button type="button" className="mt-3" onClick={() => {
                     setScope(selectedSite.scope_config);
                     setListFields(listsFromScope(selectedSite.scope_config));

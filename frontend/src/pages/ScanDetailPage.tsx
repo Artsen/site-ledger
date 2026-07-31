@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { cancelScan, deleteScan, getScan, getScanDeletePreview, listErrors, listPages } from "../api/client";
+import { cancelScan, deleteScan, getScan, getScanDeletePreview, listErrors, listPages, listScanSeeds } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
 import { DefinitionList } from "../components/ui/DefinitionList";
@@ -12,7 +12,7 @@ import { LoadingBlock } from "../components/ui/Loading";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { inputClass } from "../components/ui/styles";
-import type { Page, Scan, Snapshot } from "../types/scans";
+import type { Page, Scan, ScanSeed, Snapshot } from "../types/scans";
 import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
 
 const pageSizes = [25, 50, 100];
@@ -51,6 +51,11 @@ export function ScanDetailPage() {
     enabled: tab === "errors" || tab === "overview",
     refetchInterval: isActiveScan ? 3000 : false
   });
+  const seeds = useQuery({
+    queryKey: ["scan-seeds", scanId],
+    queryFn: () => listScanSeeds(scanId),
+    enabled: tab === "inputs"
+  });
   const cancel = useMutation({
     mutationFn: () => cancelScan(scanId),
     onSuccess: async () => {
@@ -79,6 +84,7 @@ export function ScanDetailPage() {
   const pageTotal = pages.data?.total ?? scan.data.fetched_count;
   const tabs = [
     { id: "overview", label: "Overview" },
+    { id: "inputs", label: "Inputs", count: seeds.data?.total },
     { id: "pages", label: "Pages", count: pageTotal },
     { id: "errors", label: "Errors", count: errors.data?.length ?? scan.data.failed_count }
   ];
@@ -155,6 +161,7 @@ export function ScanDetailPage() {
             activeScan={isActiveScan}
           />
         ) : null}
+        {tab === "inputs" ? <InputsView seeds={seeds.data?.items ?? []} loading={seeds.isLoading} error={seeds.error} /> : null}
         {tab === "errors" ? <ErrorsView scanId={scanId} errors={errors.data ?? []} loading={errors.isLoading} error={errors.error} /> : null}
       </div>
     </PageFrame>
@@ -463,6 +470,35 @@ function ErrorsView({ scanId, errors, loading, error }: { scanId: string; errors
           </div>
         </section>
       ))}
+    </div>
+  );
+}
+
+function InputsView({ seeds, loading, error }: { seeds: ScanSeed[]; loading: boolean; error: unknown }) {
+  if (error) return <ErrorBanner error={error} title="Could not load scan inputs" />;
+  if (loading) return <LoadingBlock label="Loading scan inputs..." />;
+  if (!seeds.length) return <EmptyState title="No saved inputs" message="This scan was created before URL inventory inputs were recorded." />;
+  return (
+    <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
+      <table className="min-w-full text-left text-sm">
+        <thead className="bg-stone-100 text-xs uppercase text-stone-500">
+          <tr>{["URL", "Queue", "Scope", "Origins"].map((header) => <th key={header} className="px-3 py-2 font-medium">{header}</th>)}</tr>
+        </thead>
+        <tbody>
+          {seeds.map((seed) => (
+            <tr key={seed.id} className="border-t border-stone-100 align-top">
+              <td className="max-w-xl px-3 py-2 font-mono text-xs">{seed.normalized_url ?? seed.requested_url}</td>
+              <td className="px-3 py-2">{seed.queue_state}</td>
+              <td className="px-3 py-2">{seed.scope_decision}</td>
+              <td className="px-3 py-2 text-xs">
+                {seed.origins.map((origin) => (
+                  <div key={origin.id}>{origin.origin_type}{origin.raw_url ? ` - ${origin.raw_url}` : ""}</div>
+                ))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

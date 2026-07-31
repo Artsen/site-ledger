@@ -172,6 +172,8 @@ class SiteScans(BaseModel):
 
 class SiteScanCreate(BaseModel):
     scope_config: ScopeConfigPayload
+    include_inventory: bool = False
+    source_ids: list[int] = Field(default_factory=list)
 
 
 class SiteDeleteResult(BaseModel):
