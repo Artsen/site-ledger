@@ -83,6 +83,17 @@ vi.mock("../src/features/graph/TwoDimensionalGraphRenderer", () => ({
   })
 }));
 
+vi.mock("../src/features/graph/ThreeDimensionalGraphRenderer", () => ({
+  ThreeDimensionalGraphRenderer: forwardRef(function MockThreeDimensionalGraphRenderer(props: {
+    data: { nodes: Array<{ id: string; label: string }>; links: Array<{ id: string; label: string }> };
+    onNodeSelect: (node: { id: string; label: string }) => void;
+    onEdgeSelect: (edge: { id: string; label: string }) => void;
+  }, ref) {
+    useImperativeHandle(ref, () => ({ fit: vi.fn(), resetCamera: vi.fn(), focusNode: vi.fn(), freeze: vi.fn(), reheat: vi.fn(), resetLayout: vi.fn(), exportPng: vi.fn().mockResolvedValue("data:image/png;base64,abc") }));
+    return <div aria-label="mock 3D graph">{props.data.nodes.map((node) => <button key={node.id} onClick={() => props.onNodeSelect(node)}>{node.label}</button>)}{props.data.links.map((edge) => <button key={edge.id} onClick={() => props.onEdgeSelect(edge)}>{edge.label}</button>)}</div>;
+  })
+}));
+
 beforeEach(() => {
   window.localStorage.clear();
   vi.useRealTimers();
@@ -238,6 +249,11 @@ describe("scan results workflow", () => {
 
     fireEvent.change(screen.getByLabelText("Graph mode"), { target: { value: "2d" } });
     expect(screen.getByLabelText("Graph mode")).toHaveValue("2d");
+
+    fireEvent.change(screen.getByLabelText("Graph mode"), { target: { value: "3d" } });
+    await waitFor(() => {
+      expect(api.getScanGraph.mock.calls.some((call) => call[0] === "1" && String(call[1]).includes("max_nodes=40") && String(call[1]).includes("max_edges=80"))).toBe(true);
+    });
 
     fireEvent.change(screen.getByLabelText("Search graph nodes"), { target: { value: "pricing" } });
     await waitFor(() => expect(screen.getAllByText("Pricing").length).toBeGreaterThan(0));

@@ -15,8 +15,11 @@ import type { GraphRendererHandle } from "./GraphRendererTypes";
 import { adaptGraphData, type RendererEdge, type RendererNode } from "./graphDataAdapter";
 
 const TwoDimensionalGraphRenderer = lazy(() => import("./TwoDimensionalGraphRenderer").then((module) => ({ default: module.TwoDimensionalGraphRenderer })));
-const SAFE_GRAPH_NODES = 100;
-const SAFE_GRAPH_EDGES = 250;
+const ThreeDimensionalGraphRenderer = lazy(() => import("./ThreeDimensionalGraphRenderer").then((module) => ({ default: module.ThreeDimensionalGraphRenderer })));
+const GRAPH_LIMITS = {
+  "2d": { nodes: 100, edges: 250 },
+  "3d": { nodes: 40, edges: 80 }
+} as const;
 
 export function ScanGraphView({ scan }: { scan: Scan }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -54,11 +57,11 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
   const presentation = searchParams.get("presentation") === "1";
 
   useEffect(() => {
-    const maxNodes = boundedNumber(searchParams.get("max_nodes"), SAFE_GRAPH_NODES, 1, SAFE_GRAPH_NODES);
-    const maxEdges = boundedNumber(searchParams.get("max_edges"), SAFE_GRAPH_EDGES, 0, SAFE_GRAPH_EDGES);
+    const limits = GRAPH_LIMITS[settings.mode];
+    const maxNodes = boundedNumber(searchParams.get("max_nodes"), limits.nodes, 1, limits.nodes);
+    const maxEdges = boundedNumber(searchParams.get("max_edges"), limits.edges, 0, limits.edges);
     if (
-      searchParams.get("graph_mode") === "3d"
-      || searchParams.get("max_nodes") !== String(maxNodes)
+      searchParams.get("max_nodes") !== String(maxNodes)
       || searchParams.get("max_edges") !== String(maxEdges)
     ) {
       setSearchParams((current) => {
@@ -70,7 +73,7 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
         return next;
       }, { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, settings.mode]);
 
   useEffect(() => {
     if (selectedNodeId && rendererData && !rendererData.nodes.some((node) => node.id === selectedNodeId)) {
@@ -107,19 +110,35 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
             {!graph.isLoading && graph.data && graph.data.nodes.length === 0 ? <EmptyState title="No graph nodes" message="This scan has no page snapshots, or current filters removed every page." /> : null}
             {!graph.isLoading && rendererData && rendererData.nodes.length > 0 ? (
               <Suspense fallback={<LoadingBlock label={`Loading ${settings.mode.toUpperCase()} graph renderer...`} />}>
-                <TwoDimensionalGraphRenderer
-                  ref={rendererRef}
-                  data={rendererData}
-                  selectedNodeId={selectedNodeId}
-                  selectedEdgeId={selectedEdgeId}
-                  showLabels={labelsVisible(settings, rendererData.nodes.length)}
-                  showArrows={settings.showArrows}
-                  presentation={presentation}
-                  reducedMotion={reducedMotion}
-                  onNodeSelect={(node) => selectNode(setSearchParams, node)}
-                  onEdgeSelect={(edge) => selectEdge(setSearchParams, edge)}
-                  onError={setRendererError}
-                />
+                {settings.mode === "3d" ? (
+                  <ThreeDimensionalGraphRenderer
+                    ref={rendererRef}
+                    data={rendererData}
+                    selectedNodeId={selectedNodeId}
+                    selectedEdgeId={selectedEdgeId}
+                    showLabels={false}
+                    showArrows={settings.showArrows}
+                    presentation={presentation}
+                    reducedMotion={reducedMotion}
+                    onNodeSelect={(node) => selectNode(setSearchParams, node)}
+                    onEdgeSelect={(edge) => selectEdge(setSearchParams, edge)}
+                    onError={setRendererError}
+                  />
+                ) : (
+                  <TwoDimensionalGraphRenderer
+                    ref={rendererRef}
+                    data={rendererData}
+                    selectedNodeId={selectedNodeId}
+                    selectedEdgeId={selectedEdgeId}
+                    showLabels={labelsVisible(settings, rendererData.nodes.length)}
+                    showArrows={settings.showArrows}
+                    presentation={presentation}
+                    reducedMotion={reducedMotion}
+                    onNodeSelect={(node) => selectNode(setSearchParams, node)}
+                    onEdgeSelect={(edge) => selectEdge(setSearchParams, edge)}
+                    onError={setRendererError}
+                  />
+                )}
               </Suspense>
             ) : null}
           </section>
@@ -172,6 +191,7 @@ function GraphHeader({ scan, summary, loading, onRefresh, presentation, setSearc
 }
 
 function GraphControls({ searchParams, setSearchParams, settings }: { searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1]; settings: GraphDisplaySettings }) {
+  const limits = GRAPH_LIMITS[settings.mode];
   return (
     <aside className="space-y-4 rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <section className="space-y-3">
@@ -193,15 +213,15 @@ function GraphControls({ searchParams, setSearchParams, settings }: { searchPara
           <input aria-label="Minimum outbound links" type="number" min={0} value={searchParams.get("min_outbound") ?? ""} onChange={(event) => updateGraphParam(setSearchParams, "min_outbound", event.target.value || null)} placeholder="Min outbound" className={inputClass()} />
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <input aria-label="Maximum graph nodes" type="number" min={1} max={SAFE_GRAPH_NODES} value={searchParams.get("max_nodes") ?? String(SAFE_GRAPH_NODES)} onChange={(event) => updateGraphParam(setSearchParams, "max_nodes", event.target.value || null)} className={inputClass()} />
-          <input aria-label="Maximum graph edges" type="number" min={0} max={SAFE_GRAPH_EDGES} value={searchParams.get("max_edges") ?? String(SAFE_GRAPH_EDGES)} onChange={(event) => updateGraphParam(setSearchParams, "max_edges", event.target.value || null)} className={inputClass()} />
+          <input aria-label="Maximum graph nodes" type="number" min={1} max={limits.nodes} value={searchParams.get("max_nodes") ?? String(limits.nodes)} onChange={(event) => updateGraphParam(setSearchParams, "max_nodes", event.target.value || null)} className={inputClass()} />
+          <input aria-label="Maximum graph edges" type="number" min={0} max={limits.edges} value={searchParams.get("max_edges") ?? String(limits.edges)} onChange={(event) => updateGraphParam(setSearchParams, "max_edges", event.target.value || null)} className={inputClass()} />
         </div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={searchParams.get("unfetched") === "1"} onChange={(event) => updateGraphParam(setSearchParams, "unfetched", event.target.checked ? "1" : null)} /> Show unfetched internal pages</label>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={searchParams.get("self_links") !== "0"} onChange={(event) => updateGraphParam(setSearchParams, "self_links", event.target.checked ? null : "0")} /> Show self-links</label>
       </section>
       <section className="space-y-3 border-t border-stone-200 pt-4">
         <h3 className="text-sm font-semibold">Display</h3>
-        <select aria-label="Graph mode" value={settings.mode} onChange={(event) => updateGraphParam(setSearchParams, "graph_mode", event.target.value === "2d" ? null : event.target.value)} className={inputClass()}><option value="2d">2D</option></select>
+        <select aria-label="Graph mode" value={settings.mode} onChange={(event) => updateGraphParam(setSearchParams, "graph_mode", event.target.value === "2d" ? null : event.target.value, { max_nodes: null, max_edges: null })} className={inputClass()}><option value="2d">2D</option><option value="3d">3D</option></select>
         <select aria-label="Node size" value={settings.sizeBy} onChange={(event) => updateGraphParam(setSearchParams, "size_by", event.target.value)} className={inputClass()}>
           <option value="uniform">Uniform</option><option value="inbound_sources">Unique inbound pages</option><option value="inbound_occurrences">Inbound occurrences</option><option value="outbound_targets">Unique outbound pages</option><option value="outbound_occurrences">Outbound occurrences</option><option value="response_time">Response time</option><option value="depth_inverse">Crawl depth inverse</option>
         </select>
@@ -351,8 +371,10 @@ function buildGraphQuery(searchParams: URLSearchParams) {
     const value = searchParams.get(sourceKey);
     if (value) params.set(targetKey, value);
   }
-  params.set("max_nodes", String(boundedNumber(params.get("max_nodes"), SAFE_GRAPH_NODES, 1, SAFE_GRAPH_NODES)));
-  params.set("max_edges", String(boundedNumber(params.get("max_edges"), SAFE_GRAPH_EDGES, 0, SAFE_GRAPH_EDGES)));
+  const mode = graphMode(searchParams);
+  const limits = GRAPH_LIMITS[mode];
+  params.set("max_nodes", String(boundedNumber(params.get("max_nodes"), limits.nodes, 1, limits.nodes)));
+  params.set("max_edges", String(boundedNumber(params.get("max_edges"), limits.edges, 0, limits.edges)));
   params.set("include_self_links", searchParams.get("self_links") === "0" ? "false" : "true");
   params.set("include_unfetched", searchParams.get("unfetched") === "1" ? "true" : "false");
   return `?${params.toString()}`;
@@ -369,7 +391,7 @@ function buildOccurrenceQuery(searchParams: URLSearchParams) {
 
 function displaySettings(searchParams: URLSearchParams): GraphDisplaySettings {
   return {
-    mode: "2d",
+    mode: graphMode(searchParams),
     sizeBy: (searchParams.get("size_by") as GraphDisplaySettings["sizeBy"]) || "uniform",
     colorBy: (searchParams.get("color_by") as GraphDisplaySettings["colorBy"]) || "status",
     labels: (searchParams.get("labels") as GraphDisplaySettings["labels"]) || "selected",
@@ -380,7 +402,12 @@ function displaySettings(searchParams: URLSearchParams): GraphDisplaySettings {
   };
 }
 
+function graphMode(searchParams: URLSearchParams): GraphDisplaySettings["mode"] {
+  return searchParams.get("graph_mode") === "3d" ? "3d" : "2d";
+}
+
 function boundedNumber(value: string | null, fallback: number, min: number, max: number) {
+  if (!value?.trim()) return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.trunc(parsed)));

@@ -86,7 +86,7 @@ export type GraphEdgeOccurrenceList = {
   edge: GraphEdge | null;
 };
 
-export type GraphMode = "2d";
+export type GraphMode = "2d" | "3d";
 export type GraphSizeBy = "uniform" | "inbound_sources" | "inbound_occurrences" | "outbound_targets" | "outbound_occurrences" | "response_time" | "depth_inverse";
 export type GraphColorBy = "status" | "fetch_state" | "depth" | "host" | "path" | "error" | "seed";
 export type GraphLabels = "hide" | "selected" | "important" | "all";
