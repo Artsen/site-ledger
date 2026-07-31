@@ -2,10 +2,10 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.models import ResourceOccurrence, ResourceSnapshot, Scan
+from app.models import ResourceOccurrence, ResourceSnapshot, Scan, WebsiteProperty
 from app.schemas.scans import (
     InboundLinkList,
     LinkRead,
@@ -17,6 +17,15 @@ from app.schemas.scans import (
     ScanRead,
     SnapshotRead,
 )
+from app.schemas.sites import (
+    SiteDeleteResult,
+    SiteScanCreate,
+    SiteScans,
+    WebsitePropertyCreate,
+    WebsitePropertyList,
+    WebsitePropertyRead,
+    WebsitePropertyUpdate,
+)
 from app.services.scan_deletion import delete_scan as delete_scan_service
 from app.services.scan_deletion import preview_scan_deletion
 from app.services.scan_queries import (
@@ -24,6 +33,16 @@ from app.services.scan_queries import (
     list_scan_pages,
     list_snapshot_inbound_links,
 )
+from app.services.site_management import (
+    DuplicateSiteError,
+    InactiveSiteError,
+    SiteHasScansError,
+    create_scan_from_site,
+    create_site,
+    delete_site,
+    update_site,
+)
+from app.services.site_queries import get_site_detail, list_site_scans, list_sites
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
 router = APIRouter(prefix="/api")
@@ -40,7 +59,14 @@ def health() -> dict[str, str]:
 
 @router.post("/scans", response_model=ScanRead, status_code=201)
 async def create_scan(payload: ScanCreate, request: Request, db: DbSession) -> Scan:
+    if payload.website_property_id is not None:
+        site = db.get(WebsiteProperty, payload.website_property_id)
+        if site is None:
+            raise HTTPException(404, "Site not found")
+        if not site.is_active:
+            raise HTTPException(409, "Inactive sites cannot start new scans.")
     scan = Scan(
+        website_property_id=payload.website_property_id,
         starting_url=payload.starting_url,
         status="queued",
         scope_config=payload.scope_config.model_dump(),
@@ -54,7 +80,14 @@ async def create_scan(payload: ScanCreate, request: Request, db: DbSession) -> S
 
 @router.get("/scans", response_model=list[ScanRead])
 def list_scans(db: DbSession, limit: ScanListLimit = 25) -> list[Scan]:
-    return list(db.scalars(select(Scan).order_by(Scan.created_at.desc()).limit(limit)))
+    return list(
+        db.scalars(
+            select(Scan)
+            .options(joinedload(Scan.website_property))
+            .order_by(Scan.created_at.desc())
+            .limit(limit)
+        )
+    )
 
 
 @router.get("/scans/history", response_model=ScanHistory)
@@ -62,6 +95,7 @@ def get_scan_history(
     db: DbSession,
     search: str | None = None,
     status: str | None = None,
+    website_property_id: int | None = None,
     sort: Literal[
         "created_at", "started_at", "finished_at", "status", "starting_url"
     ] = "created_at",
@@ -73,11 +107,128 @@ def get_scan_history(
         db,
         search=search,
         status=status,
+        website_property_id=website_property_id,
         sort=sort,
         direction=direction,
         limit=limit,
         offset=offset,
     )
+
+
+@router.post("/sites", response_model=WebsitePropertyRead, status_code=201)
+def post_site(payload: WebsitePropertyCreate, db: DbSession) -> WebsitePropertyRead:
+    try:
+        site = create_site(db, payload)
+    except DuplicateSiteError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    result = get_site_detail(db, site.id)
+    assert result is not None
+    return result
+
+
+@router.get("/sites", response_model=WebsitePropertyList)
+def get_sites(
+    db: DbSession,
+    search: str | None = None,
+    group_key: str | None = None,
+    locale: str | None = None,
+    platform_key: str | None = None,
+    ownership_key: str | None = None,
+    active_state: Literal["active", "inactive", "all"] = "active",
+    sort: Literal["name", "base_url", "created_at", "updated_at", "latest_scan_at"] = "name",
+    direction: Literal["asc", "desc"] = "asc",
+    limit: ScanListLimit = 25,
+    offset: PageOffset = 0,
+) -> WebsitePropertyList:
+    return list_sites(
+        db,
+        search=search,
+        group_key=group_key,
+        locale=locale,
+        platform_key=platform_key,
+        ownership_key=ownership_key,
+        active_state=active_state,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/sites/{site_id}", response_model=WebsitePropertyRead)
+def get_site(site_id: int, db: DbSession) -> WebsitePropertyRead:
+    site = get_site_detail(db, site_id)
+    if site is None:
+        raise HTTPException(404, "Site not found")
+    return site
+
+
+@router.patch("/sites/{site_id}", response_model=WebsitePropertyRead)
+def patch_site(site_id: int, payload: WebsitePropertyUpdate, db: DbSession) -> WebsitePropertyRead:
+    try:
+        site = update_site(db, site_id, payload)
+    except DuplicateSiteError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if site is None:
+        raise HTTPException(404, "Site not found")
+    result = get_site_detail(db, site.id)
+    assert result is not None
+    return result
+
+
+@router.delete("/sites/{site_id}", response_model=SiteDeleteResult)
+def remove_site(site_id: int, db: DbSession) -> SiteDeleteResult:
+    try:
+        deleted = delete_site(db, site_id)
+    except SiteHasScansError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if deleted is None:
+        raise HTTPException(404, "Site not found")
+    return SiteDeleteResult(deleted_site_id=deleted)
+
+
+@router.post("/sites/{site_id}/scans", response_model=ScanRead, status_code=201)
+async def post_site_scan(
+    site_id: int, payload: SiteScanCreate, request: Request, db: DbSession
+) -> Scan:
+    try:
+        scan = create_scan_from_site(db, site_id, payload.scope_config)
+    except InactiveSiteError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if scan is None:
+        raise HTTPException(404, "Site not found")
+    await request.app.state.scan_runner.queue(scan.id)
+    return scan
+
+
+@router.get("/sites/{site_id}/scans", response_model=SiteScans)
+def get_site_scans(
+    site_id: int,
+    db: DbSession,
+    status: str | None = None,
+    sort: Literal[
+        "created_at", "started_at", "finished_at", "status", "starting_url"
+    ] = "created_at",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: ScanListLimit = 25,
+    offset: PageOffset = 0,
+) -> SiteScans:
+    scans = list_site_scans(
+        db,
+        site_id=site_id,
+        status=status,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+    if scans is None:
+        raise HTTPException(404, "Site not found")
+    return scans
 
 
 @router.get("/scans/{scan_id}", response_model=ScanRead)

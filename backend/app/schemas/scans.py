@@ -26,10 +26,14 @@ class ScopeConfigPayload(BaseModel):
 class ScanCreate(BaseModel):
     starting_url: str
     scope_config: ScopeConfigPayload
+    website_property_id: int | None = None
 
 
 class ScanRead(BaseModel):
     id: int
+    website_property_id: int | None = None
+    website_property_name: str | None = None
+    website_property_base_url: str | None = None
     starting_url: str
     status: str
     scope_config: dict[str, Any]
