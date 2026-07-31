@@ -255,6 +255,7 @@ describe("scan results workflow", () => {
     await waitFor(() => {
       expect(api.getScanGraph.mock.calls.some((call) => call[0] === "1" && String(call[1]).includes("max_nodes=40") && String(call[1]).includes("max_edges=80"))).toBe(true);
     });
+    expect(screen.getByLabelText("Graph mode")).toHaveValue("3d");
 
     fireEvent.change(screen.getByLabelText("Search graph nodes"), { target: { value: "pricing" } });
     await waitFor(() => expect(screen.getAllByText("Pricing").length).toBeGreaterThan(0));

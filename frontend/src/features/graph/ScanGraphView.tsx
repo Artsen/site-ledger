@@ -69,7 +69,6 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
         next.set("tab", "graph");
         next.set("max_nodes", String(maxNodes));
         next.set("max_edges", String(maxEdges));
-        next.delete("graph_mode");
         return next;
       }, { replace: true });
     }
