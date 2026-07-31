@@ -28,11 +28,7 @@ export const ThreeDimensionalGraphRenderer = forwardRef<GraphRendererHandle, Gra
 
   useEffect(() => {
     const fitTimer = window.setTimeout(() => graphRef.current?.zoomToFit?.(reducedMotion ? 0 : 250, 72), 80);
-    const stopTimer = window.setTimeout(() => graphRef.current?.pauseAnimation?.(), reducedMotion ? 120 : 900);
-    return () => {
-      window.clearTimeout(fitTimer);
-      window.clearTimeout(stopTimer);
-    };
+    return () => window.clearTimeout(fitTimer);
   }, [graphData, reducedMotion]);
 
   useImperativeHandle(ref, () => ({
@@ -43,7 +39,6 @@ export const ThreeDimensionalGraphRenderer = forwardRef<GraphRendererHandle, Gra
     reheat: () => {
       graphRef.current?.resumeAnimation?.();
       graphRef.current?.d3ReheatSimulation?.();
-      window.setTimeout(() => graphRef.current?.pauseAnimation?.(), reducedMotion ? 120 : 900);
     },
     resetLayout: () => {
       for (const node of graphData.nodes) {
