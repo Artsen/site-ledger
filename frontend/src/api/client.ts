@@ -1,4 +1,5 @@
 import type { InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, PageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
+import type { GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -27,7 +28,7 @@ export const defaultScope = (): ScopeConfig => ({
   max_html_response_bytes: 2000000,
   concurrent_requests_per_host: 2,
   delay_between_requests_ms: 0,
-  user_agent: "ArtsenDesignScanner/0.1",
+  user_agent: "WebsiteScanner/0.1",
   drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
   allow_private_networks: false,
   max_redirects: 10
@@ -74,6 +75,8 @@ export const getSnapshot = (snapshotId: string) => request<Snapshot>(`/api/snaps
 export const getLinks = (snapshotId: string) => request<LinkOccurrence[]>(`/api/snapshots/${snapshotId}/links`);
 export const getInboundLinks = (snapshotId: string, query = "") => request<InboundLinkList>(`/api/snapshots/${snapshotId}/inbound-links${query}`);
 export const listScanSeeds = (scanId: string, query = "") => request<ScanSeedList>(`/api/scans/${scanId}/seeds${query}`);
+export const getScanGraph = (scanId: string, query = "") => request<GraphResponse>(`/api/scans/${scanId}/graph${query}`);
+export const getGraphEdgeOccurrences = (scanId: string, edgeId: string, query = "") => request<GraphEdgeOccurrenceList>(`/api/scans/${scanId}/graph/edges/${edgeId}/occurrences${query}`);
 
 export async function getHtml(snapshotId: string): Promise<string> {
   const response = await fetch(`${API_BASE}/api/snapshots/${snapshotId}/html`);

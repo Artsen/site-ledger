@@ -17,7 +17,7 @@ class ScopeConfigPayload(BaseModel):
     max_html_response_bytes: int = 2_000_000
     concurrent_requests_per_host: int = 2
     delay_between_requests_ms: int = 0
-    user_agent: str = "ArtsenDesignScanner/0.1"
+    user_agent: str = "WebsiteScanner/0.1"
     drop_query_parameters: list[str] = Field(default_factory=list)
     allow_private_networks: bool = False
     max_redirects: int = 10

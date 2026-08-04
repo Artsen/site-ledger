@@ -12,6 +12,7 @@ import { LoadingBlock } from "../components/ui/Loading";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { inputClass } from "../components/ui/styles";
+import { ScanGraphView } from "../features/graph/ScanGraphView";
 import type { Page, Scan, ScanSeed, Snapshot } from "../types/scans";
 import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
 
@@ -66,7 +67,7 @@ export function ScanDetailPage() {
   const deletePreview = useQuery({
     queryKey: ["scan-delete-preview", scanId],
     queryFn: () => getScanDeletePreview(scanId),
-    enabled: Boolean(scan.data && isTerminalStatus(scan.data.status))
+    enabled: tab === "overview" && Boolean(scan.data && isTerminalStatus(scan.data.status))
   });
   const remove = useMutation({
     mutationFn: () => deleteScan(scanId),
@@ -86,7 +87,8 @@ export function ScanDetailPage() {
     { id: "overview", label: "Overview" },
     { id: "inputs", label: "Inputs", count: seeds.data?.total },
     { id: "pages", label: "Pages", count: pageTotal },
-    { id: "errors", label: "Errors", count: errors.data?.length ?? scan.data.failed_count }
+    { id: "errors", label: "Errors", count: errors.data?.length ?? scan.data.failed_count },
+    { id: "graph", label: "Graph" }
   ];
 
   return (
@@ -163,6 +165,7 @@ export function ScanDetailPage() {
         ) : null}
         {tab === "inputs" ? <InputsView seeds={seeds.data?.items ?? []} loading={seeds.isLoading} error={seeds.error} /> : null}
         {tab === "errors" ? <ErrorsView scanId={scanId} errors={errors.data ?? []} loading={errors.isLoading} error={errors.error} /> : null}
+        {tab === "graph" ? <ScanGraphView scan={scan.data} /> : null}
       </div>
     </PageFrame>
   );

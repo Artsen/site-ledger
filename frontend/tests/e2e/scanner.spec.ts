@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 test("mocked scan workflow supports creation, filtering, details, inbound links, and deletion", async ({ page }) => {
+  test.setTimeout(90_000);
   await mockApi(page);
 
   await page.goto("/sites");
@@ -42,6 +43,25 @@ test("mocked scan workflow supports creation, filtering, details, inbound links,
   await page.reload();
   await expect(page.getByText("Completed").first()).toBeVisible();
   await expect(page.getByRole("tab", { name: /Pages/i })).toBeVisible();
+
+  await page.getByRole("tab", { name: /Graph/i }).click();
+  await expect(page.getByText("Website topology graph")).toBeVisible();
+  await expect(page.getByText(/2 of 2 nodes/)).toBeVisible();
+  await page.getByLabel("Graph mode").selectOption("2d");
+  await page.getByLabel("Search graph nodes").fill("pricing");
+  await page.getByRole("button", { name: /Pricing/ }).first().click();
+  await expect(page.getByText("Selected page")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open details" })).toBeVisible();
+  await page.getByRole("button", { name: "Neighborhood", exact: true }).click();
+  await expect(page).toHaveURL(/focus_snapshot_id=9/);
+  await page.getByRole("button", { name: /2 links/ }).first().click();
+  await expect(page.getByText("Selected edge")).toBeVisible();
+  await expect(page.getByText("Pricing link")).toBeVisible();
+  await page.getByLabel("Graph maximum depth").fill("1");
+  await expect(page).toHaveURL(/max_depth=1/);
+  await page.getByRole("button", { name: "Presentation" }).click();
+  await expect(page.getByRole("button", { name: "Exit presentation" })).toBeVisible();
+  await page.getByRole("button", { name: "Exit presentation" }).click();
 
   await page.getByRole("tab", { name: /Pages/i }).click();
   await page.getByLabel("Search pages").fill("pricing");
@@ -191,6 +211,23 @@ async function mockApi(page: Page) {
     });
   });
 
+  await page.route("**/api/scans/1/graph/edges/8-2/occurrences**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [{ ...links[0], id: 20, source_snapshot_id: 8, target_snapshot_id: 9, anchor_text: "Pricing link", raw_href: "/pricing", is_self_link: false }],
+        total: 2,
+        limit: 50,
+        offset: 0,
+        edge: graph.edges[0]
+      })
+    });
+  });
+
+  await page.route(/\/api\/scans\/1\/graph(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(graph) });
+  });
+
   await page.route("**/api/snapshots/9", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(snapshot) });
   });
@@ -249,7 +286,7 @@ const scope = {
   max_html_response_bytes: 2000000,
   concurrent_requests_per_host: 2,
   delay_between_requests_ms: 0,
-  user_agent: "ArtsenDesignScanner/0.1",
+  user_agent: "WebsiteScanner/0.1",
   drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
   allow_private_networks: false,
   max_redirects: 10
@@ -311,6 +348,112 @@ const pageRow = {
   error_type: null
 };
 
+const graph = {
+  scan: {
+    id: 1,
+    starting_url: "https://example.com/",
+    status: "completed",
+    website_property_id: null,
+    website_property_name: null,
+    created_at: "2026-07-30T01:00:00Z",
+    finished_at: "2026-07-30T01:01:00Z"
+  },
+  summary: {
+    total_available_nodes: 2,
+    total_available_edges: 1,
+    returned_nodes: 2,
+    returned_edges: 1,
+    fetched_nodes: 2,
+    unfetched_nodes: 0,
+    error_nodes: 0,
+    self_link_edges: 0,
+    total_occurrences: 2,
+    truncated: false,
+    truncation_reasons: [],
+    focused: false,
+    focus_snapshot_id: null,
+    focus_hops: null
+  },
+  nodes: [
+    {
+      id: "snapshot:8",
+      kind: "page",
+      snapshot_id: 8,
+      resource_id: 1,
+      requested_url: "https://example.com/",
+      final_url: "https://example.com/",
+      page_title: "Home",
+      host: "example.com",
+      path: "/",
+      http_status: 200,
+      fetch_state: "fetched",
+      error_type: null,
+      crawl_depth: 0,
+      content_type: "text/html",
+      response_time_ms: 80,
+      inbound_occurrence_count: 0,
+      inbound_source_page_count: 0,
+      outbound_occurrence_count: 2,
+      outbound_target_page_count: 1,
+      is_scan_seed: true,
+      seed_origin_count: 1,
+      is_starting_url: true,
+      redirects: false,
+      canonical_url: null,
+      category: "2xx"
+    },
+    {
+      id: "snapshot:9",
+      kind: "page",
+      snapshot_id: 9,
+      resource_id: 2,
+      requested_url: "https://example.com/pricing",
+      final_url: "https://example.com/pricing",
+      page_title: "Pricing",
+      host: "example.com",
+      path: "/pricing",
+      http_status: 200,
+      fetch_state: "fetched",
+      error_type: null,
+      crawl_depth: 1,
+      content_type: "text/html",
+      response_time_ms: 87,
+      inbound_occurrence_count: 2,
+      inbound_source_page_count: 1,
+      outbound_occurrence_count: 0,
+      outbound_target_page_count: 0,
+      is_scan_seed: false,
+      seed_origin_count: 0,
+      is_starting_url: false,
+      redirects: false,
+      canonical_url: null,
+      category: "2xx"
+    }
+  ],
+  edges: [
+    {
+      id: "8-2",
+      source: "snapshot:8",
+      target: "snapshot:9",
+      source_snapshot_id: 8,
+      target_snapshot_id: 9,
+      target_resource_id: 2,
+      occurrence_count: 2,
+      unique_anchor_text_count: 1,
+      nofollow_occurrence_count: 0,
+      follow_occurrence_count: 2,
+      empty_anchor_occurrence_count: 0,
+      is_self_link: false,
+      sample_anchor_texts: ["Pricing"],
+      first_discovered_at: "2026-07-30T01:00:01Z",
+      last_discovered_at: "2026-07-30T01:00:02Z",
+      scope_decisions: { crawlable: 2 },
+      dom_regions: { main: 2 }
+    }
+  ],
+  effective_filters: {}
+};
+
 const snapshot = {
   id: 9,
   scan_id: 1,
@@ -367,3 +510,4 @@ const links = [
     discovered_at: "2026-07-30T01:00:02Z"
   }
 ];
+
