@@ -20,7 +20,7 @@ export function AppShell() {
       <aside className="border-b border-stone-200 bg-stone-100/80 px-3 py-3 lg:sticky lg:top-0 lg:h-screen lg:w-72 lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
         <div className="flex items-center justify-between gap-3 lg:block">
           <NavLink to="/scans/new" className="block rounded-md px-3 py-2 text-base font-semibold focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">
-            Artsen Design Scanner
+            Website Scanner
           </NavLink>
           <NavLink
             to="/scans/new"

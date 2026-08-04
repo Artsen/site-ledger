@@ -350,6 +350,26 @@ def _load_edges_for_nodes(
 
     source = aliased(ResourceSnapshot)
     target = aliased(ResourceSnapshot)
+    header_dom = ResourceOccurrence.dom_path.ilike("%header%")
+    footer_dom = and_(~header_dom, ResourceOccurrence.dom_path.ilike("%footer%"))
+    nav_dom = and_(
+        ~header_dom,
+        ~ResourceOccurrence.dom_path.ilike("%footer%"),
+        ResourceOccurrence.dom_path.ilike("%nav%"),
+    )
+    aside_dom = and_(
+        ~header_dom,
+        ~ResourceOccurrence.dom_path.ilike("%footer%"),
+        ~ResourceOccurrence.dom_path.ilike("%nav%"),
+        ResourceOccurrence.dom_path.ilike("%aside%"),
+    )
+    main_dom = and_(
+        ~header_dom,
+        ~ResourceOccurrence.dom_path.ilike("%footer%"),
+        ~ResourceOccurrence.dom_path.ilike("%nav%"),
+        ~ResourceOccurrence.dom_path.ilike("%aside%"),
+        ResourceOccurrence.dom_path.ilike("%main%"),
+    )
     aggregate_query = (
         select(
             source.id.label("source_snapshot_id"),
@@ -377,6 +397,11 @@ def _load_edges_for_nodes(
             ).label("empty_anchor_occurrence_count"),
             func.min(ResourceOccurrence.discovered_at).label("first_discovered_at"),
             func.max(ResourceOccurrence.discovered_at).label("last_discovered_at"),
+            func.sum(case((header_dom, 1), else_=0)).label("header_dom_count"),
+            func.sum(case((footer_dom, 1), else_=0)).label("footer_dom_count"),
+            func.sum(case((nav_dom, 1), else_=0)).label("nav_dom_count"),
+            func.sum(case((aside_dom, 1), else_=0)).label("aside_dom_count"),
+            func.sum(case((main_dom, 1), else_=0)).label("main_dom_count"),
         )
         .join(source, ResourceOccurrence.source_snapshot_id == source.id)
         .join(
@@ -431,6 +456,7 @@ def _load_edges_for_nodes(
             empty_anchor_occurrence_count=row.empty_anchor_occurrence_count or 0,
             first_discovered_at=row.first_discovered_at,
             last_discovered_at=row.last_discovered_at,
+            dom_regions=_dom_regions_from_row(row),
             detail=details[(row.source_snapshot_id, row.target_resource_id)],
         )
         for row in aggregate_rows
@@ -515,6 +541,7 @@ def _load_edge_details(
             and len(samples) < SAMPLE_ANCHOR_LIMIT
         ):
             samples.append(stripped_anchor)
+
     return details
 
 
@@ -528,6 +555,7 @@ def _edge_from_aggregate(
     empty_anchor_occurrence_count: int,
     first_discovered_at,
     last_discovered_at,
+    dom_regions: dict[str, int],
     detail: dict[str, object],
 ) -> GraphEdgeRead:
     source_id = f"snapshot:{source_snapshot.id}"
@@ -553,7 +581,20 @@ def _edge_from_aggregate(
         first_discovered_at=first_discovered_at,
         last_discovered_at=last_discovered_at,
         scope_decisions=dict(scope_decisions) if isinstance(scope_decisions, Counter) else {},
+        dom_regions=dom_regions,
     )
+
+
+def _dom_regions_from_row(row) -> dict[str, int]:
+    region_counts = {
+        "header": row.header_dom_count or 0,
+        "footer": row.footer_dom_count or 0,
+        "nav": row.nav_dom_count or 0,
+        "aside": row.aside_dom_count or 0,
+        "main": row.main_dom_count or 0,
+    }
+    region_counts["body"] = max(0, row.occurrence_count - sum(region_counts.values()))
+    return region_counts
 
 
 def _edge_from_occurrences(
@@ -574,6 +615,11 @@ def _edge_from_occurrences(
     rel_values = [occurrence.rel or "" for occurrence in occurrences]
     nofollow = sum(1 for rel in rel_values if "nofollow" in rel.lower())
     scope_decisions = Counter(occurrence.scope_decision for occurrence in occurrences)
+    dom_regions = Counter(
+        _dom_region(occurrence.dom_path)
+        for occurrence in occurrences
+        if occurrence.dom_path
+    )
     return GraphEdgeRead(
         id=_edge_id(source_snapshot.id, target_resource_id),
         source=source_id,
@@ -591,7 +637,23 @@ def _edge_from_occurrences(
         first_discovered_at=min((item.discovered_at for item in occurrences), default=None),
         last_discovered_at=max((item.discovered_at for item in occurrences), default=None),
         scope_decisions=dict(scope_decisions),
+        dom_regions=dict(dom_regions),
     )
+
+
+def _dom_region(dom_path: str) -> str:
+    tags = {part.split(":", 1)[0].strip().lower() for part in dom_path.split(">")}
+    if "header" in tags:
+        return "header"
+    if "footer" in tags:
+        return "footer"
+    if "nav" in tags:
+        return "nav"
+    if "aside" in tags:
+        return "aside"
+    if "main" in tags:
+        return "main"
+    return "body"
 
 
 def _load_discovered_nodes(

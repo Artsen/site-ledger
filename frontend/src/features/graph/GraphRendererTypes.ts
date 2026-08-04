@@ -18,6 +18,7 @@ export type GraphRendererProps = {
   showArrows: boolean;
   presentation: boolean;
   reducedMotion: boolean;
+  background: "light" | "dark";
   onNodeSelect: (node: RendererNode) => void;
   onEdgeSelect: (edge: RendererEdge) => void;
   onError: (error: Error) => void;

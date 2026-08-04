@@ -65,7 +65,7 @@ vi.mock("../src/api/client", () => ({
     max_html_response_bytes: 2000000,
     concurrent_requests_per_host: 2,
     delay_between_requests_ms: 0,
-    user_agent: "ArtsenDesignScanner/0.1",
+    user_agent: "WebsiteScanner/0.1",
     drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
     allow_private_networks: false,
     max_redirects: 10
@@ -478,7 +478,7 @@ const scanFixture: Scan = {
     max_html_response_bytes: 2000000,
     concurrent_requests_per_host: 2,
     delay_between_requests_ms: 0,
-    user_agent: "ArtsenDesignScanner/0.1",
+    user_agent: "WebsiteScanner/0.1",
     drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
     allow_private_networks: false,
     max_redirects: 10
@@ -702,7 +702,8 @@ const graphFixture = {
       sample_anchor_texts: ["Pricing"],
       first_discovered_at: "2026-07-30T01:00:01Z",
       last_discovered_at: "2026-07-30T01:00:02Z",
-      scope_decisions: { crawlable: 2 }
+      scope_decisions: { crawlable: 2 },
+      dom_regions: { main: 2 }
     }
   ],
   effective_filters: {}
@@ -749,7 +750,7 @@ const siteFixture = {
     max_html_response_bytes: 2000000,
     concurrent_requests_per_host: 2,
     delay_between_requests_ms: 0,
-    user_agent: "ArtsenDesignScanner/0.1",
+    user_agent: "WebsiteScanner/0.1",
     drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
     allow_private_networks: false,
     max_redirects: 10
@@ -858,3 +859,4 @@ const seedFixture = {
     }
   ]
 };
+

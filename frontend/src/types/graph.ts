@@ -47,6 +47,7 @@ export type GraphEdge = {
   first_discovered_at: string | null;
   last_discovered_at: string | null;
   scope_decisions: Record<string, number>;
+  dom_regions: Record<string, number>;
 };
 
 export type GraphResponse = {
@@ -92,6 +93,8 @@ export type GraphColorBy = "status" | "fetch_state" | "depth" | "host" | "path" 
 export type GraphLabels = "hide" | "selected" | "important" | "all";
 export type GraphEdgeWidthBy = "uniform" | "occurrences";
 export type GraphBackground = "light" | "dark";
+export type GraphLinkVisibility = "selected" | "all" | "hidden";
+export type GraphLinkCategoryFilter = "all" | "content" | "navigation" | "template";
 
 export type GraphDisplaySettings = {
   mode: GraphMode;
@@ -102,4 +105,6 @@ export type GraphDisplaySettings = {
   showArrows: boolean;
   showIsolated: boolean;
   background: GraphBackground;
+  linkVisibility: GraphLinkVisibility;
+  linkCategoryFilter: GraphLinkCategoryFilter;
 };

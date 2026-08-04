@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.scans import LinkRead
 
@@ -61,6 +61,7 @@ class GraphEdgeRead(BaseModel):
     first_discovered_at: datetime | None
     last_discovered_at: datetime | None
     scope_decisions: dict[str, int]
+    dom_regions: dict[str, int] = Field(default_factory=dict)
 
 
 class GraphSummaryRead(BaseModel):

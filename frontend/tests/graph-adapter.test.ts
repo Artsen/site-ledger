@@ -11,7 +11,9 @@ const settings: GraphDisplaySettings = {
   edgeWidthBy: "occurrences",
   showArrows: true,
   showIsolated: false,
-  background: "light"
+  background: "light",
+  linkVisibility: "selected",
+  linkCategoryFilter: "all"
 };
 
 describe("graph data adapter", () => {
@@ -22,11 +24,16 @@ describe("graph data adapter", () => {
     const result = adaptGraphData(graph, settings);
 
     expect(result.nodes[0].id).toBe("snapshot:1");
-    expect(result.nodes[0].x).toBe(deterministicCoordinates("snapshot:1").x);
-    expect(result.nodes[0].z).not.toBe(0);
+    expect(result.nodes[1].x).toBeGreaterThan(result.nodes[0].x);
+    expect(result.nodes[1].z).toBeGreaterThan(result.nodes[0].z);
     expect(result.links[0].source).toBe("snapshot:1");
     expect(result.links[0].target).toBe("snapshot:2");
-    expect(result.links[0].width).toBeGreaterThan(1);
+    expect(result.links[0].displayKind).toBe("hierarchy");
+    expect(result.links[0].selectable).toBe(false);
+    const selectedResult = adaptGraphData(graph, settings, "snapshot:1");
+    expect(selectedResult.links[1].displayKind).toBe("page_link");
+    expect(selectedResult.links[1].selectable).toBe(true);
+    expect(selectedResult.links[1].width).toBeGreaterThan(1);
     expect(result.legend.length).toBeGreaterThan(0);
     expect(JSON.stringify(graph)).toBe(original);
   });
@@ -109,7 +116,8 @@ function graphFixture(): GraphResponse {
       sample_anchor_texts: ["Pricing"],
       first_discovered_at: "2026-01-01T00:00:10Z",
       last_discovered_at: "2026-01-01T00:00:20Z",
-      scope_decisions: { crawlable: 4 }
+      scope_decisions: { crawlable: 4 },
+      dom_regions: { main: 4 }
     }],
     effective_filters: {}
   };

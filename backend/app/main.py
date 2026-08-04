@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="Artsen Design Scanner", lifespan=lifespan)
+    app = FastAPI(title="Website Scanner", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

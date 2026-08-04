@@ -10,9 +10,7 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///../data/scanner.db"
     html_storage_root: Path = Path("../data/html")
-    crawler_user_agent: str = (
-        "ArtsenDesignScanner/0.1 (+https://github.com/Artsen/artsen-design_scanner)"
-    )
+    crawler_user_agent: str = "WebsiteScanner/0.1"
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
     )

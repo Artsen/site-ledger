@@ -12,7 +12,7 @@ import type { ScopeConfig, SiteListItem } from "../types/scans";
 import { plural } from "../utils/format";
 import { normalizeStartingUrlInput, parseLineList } from "../utils/url";
 
-const preferenceKey = "artsen.scan.preferences";
+const preferenceKey = "website-scanner.scan.preferences";
 
 type ListFields = Pick<
   ScopeConfig,

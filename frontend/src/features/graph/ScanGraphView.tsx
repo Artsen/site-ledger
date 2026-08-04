@@ -18,7 +18,7 @@ const TwoDimensionalGraphRenderer = lazy(() => import("./TwoDimensionalGraphRend
 const ThreeDimensionalGraphRenderer = lazy(() => import("./ThreeDimensionalGraphRenderer").then((module) => ({ default: module.ThreeDimensionalGraphRenderer })));
 const GRAPH_LIMITS = {
   "2d": { nodes: 3000, edges: 10000 },
-  "3d": { nodes: 300, edges: 1000 }
+  "3d": { nodes: 3000, edges: 10000 }
 } as const;
 
 export function ScanGraphView({ scan }: { scan: Scan }) {
@@ -28,15 +28,15 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
   const rendererRef = useRef<GraphRendererHandle | null>(null);
   const settings = useMemo(() => displaySettings(searchParams), [searchParams]);
   const graphQuery = useMemo(() => buildGraphQuery(searchParams), [searchParams]);
+  const selectedNodeId = searchParams.get("selected_node");
+  const selectedEdgeId = searchParams.get("selected_edge");
   const graph = useQuery({
     queryKey: ["scan-graph", scan.id, graphQuery],
     queryFn: () => getScanGraph(String(scan.id), graphQuery),
     refetchInterval: !isTerminalStatus(scan.status) && searchParams.get("graph_auto_refresh") === "summary" ? 5000 : false,
     placeholderData: (previous) => previous
   });
-  const rendererData = useMemo(() => graph.data ? adaptGraphData(graph.data, settings) : null, [graph.data, settings]);
-  const selectedNodeId = searchParams.get("selected_node");
-  const selectedEdgeId = searchParams.get("selected_edge");
+  const rendererData = useMemo(() => graph.data ? adaptGraphData(graph.data, settings, selectedNodeId, selectedEdgeId) : null, [graph.data, settings, selectedEdgeId, selectedNodeId]);
   const selectedNode = rendererData?.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedEdge = rendererData?.links.find((edge) => edge.id === selectedEdgeId) ?? null;
   const occurrenceQuery = selectedEdge ? buildOccurrenceQuery(searchParams) : "";
@@ -119,6 +119,7 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
                     showArrows={settings.showArrows}
                     presentation={presentation}
                     reducedMotion={reducedMotion}
+                    background={settings.background}
                     onNodeSelect={(node) => selectNode(setSearchParams, node)}
                     onEdgeSelect={(edge) => selectEdge(setSearchParams, edge)}
                     onError={setRendererError}
@@ -133,6 +134,7 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
                     showArrows={settings.showArrows}
                     presentation={presentation}
                     reducedMotion={reducedMotion}
+                    background={settings.background}
                     onNodeSelect={(node) => selectNode(setSearchParams, node)}
                     onEdgeSelect={(edge) => selectEdge(setSearchParams, edge)}
                     onError={setRendererError}
@@ -159,7 +161,7 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
                 }}
               />
             ) : null}
-            {rendererData ? <EdgeBrowser edges={rendererData.links.slice(0, 20)} onSelect={(edge) => selectEdge(setSearchParams, edge)} /> : null}
+            {rendererData ? <EdgeBrowser edges={rendererData.links.filter((edge) => edge.selectable).slice(0, 20)} onSelect={(edge) => selectEdge(setSearchParams, edge)} /> : null}
             {rendererData ? <Legend data={rendererData} /> : null}
             {selectedNode ? <NodeInspector scanId={String(scan.id)} node={selectedNode} setSearchParams={setSearchParams} /> : null}
             {selectedEdge ? <EdgeInspector scanId={String(scan.id)} edge={selectedEdge} occurrences={occurrences.data} loading={occurrences.isLoading} error={occurrences.error} searchParams={searchParams} setSearchParams={setSearchParams} /> : null}
@@ -229,6 +231,12 @@ function GraphControls({ searchParams, setSearchParams, settings }: { searchPara
         </select>
         <select aria-label="Graph labels" value={settings.labels} onChange={(event) => updateGraphParam(setSearchParams, "labels", event.target.value)} className={inputClass()}><option value="selected">Selected and important</option><option value="hide">Hide labels</option><option value="important">Important nodes</option><option value="all">All labels for small graphs</option></select>
         <select aria-label="Edge width" value={settings.edgeWidthBy} onChange={(event) => updateGraphParam(setSearchParams, "edge_width", event.target.value)} className={inputClass()}><option value="uniform">Uniform edges</option><option value="occurrences">Occurrence count</option></select>
+        <select aria-label="Page link visibility" value={settings.linkVisibility} onChange={(event) => updateGraphParam(setSearchParams, "link_visibility", event.target.value === "selected" ? null : event.target.value, { selected_edge: null })} className={inputClass()}>
+          <option value="selected">Page links for selected node</option><option value="all">Show all page links</option><option value="hidden">Hide page links</option>
+        </select>
+        <select aria-label="Page link category" value={settings.linkCategoryFilter} onChange={(event) => updateGraphParam(setSearchParams, "link_category", event.target.value === "all" ? null : event.target.value, { selected_edge: null })} className={inputClass()}>
+          <option value="all">All page link categories</option><option value="content">Content links</option><option value="navigation">Header, footer, and nav links</option><option value="template">High-coverage template links</option>
+        </select>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.showArrows} onChange={(event) => updateGraphParam(setSearchParams, "arrows", event.target.checked ? null : "0")} /> Show arrows</label>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.showIsolated} onChange={(event) => updateGraphParam(setSearchParams, "isolated", event.target.checked ? "1" : null)} /> Show isolated pages</label>
         <select aria-label="Graph background" value={settings.background} onChange={(event) => updateGraphParam(setSearchParams, "background", event.target.value)} className={inputClass()}><option value="light">Light background</option><option value="dark">Dark background</option></select>
@@ -303,6 +311,11 @@ function Legend({ data }: { data: { legend: Array<{ key: string; label: string; 
     <section className="rounded-md border border-stone-200 bg-white p-4 text-sm shadow-sm">
       <h3 className="mb-2 font-semibold">Legend</h3>
       <p className="mb-2 text-xs text-stone-500">{data.sizeLegend}</p>
+      <div className="mb-3 space-y-1 text-xs text-stone-600">
+        <div className="flex items-center gap-2"><span className="h-px w-8 bg-blue-600" /> URL parent-child</div>
+        <div className="flex items-center gap-2"><span className="h-px w-8 border-t border-dashed border-stone-500" /> Stored page links</div>
+        <div>Page link categories: content, navigation, template</div>
+      </div>
       <div className="space-y-1">
         {data.legend.map((item) => <div key={item.key} className="flex items-center gap-2"><span className="size-3 rounded-full" style={{ backgroundColor: item.color }} />{item.label}</div>)}
       </div>
@@ -397,8 +410,14 @@ function displaySettings(searchParams: URLSearchParams): GraphDisplaySettings {
     edgeWidthBy: (searchParams.get("edge_width") as GraphDisplaySettings["edgeWidthBy"]) || "occurrences",
     showArrows: searchParams.get("arrows") !== "0",
     showIsolated: searchParams.get("isolated") === "1",
-    background: searchParams.get("background") === "dark" ? "dark" : "light"
+    background: searchParams.get("background") === "dark" ? "dark" : "light",
+    linkVisibility: searchParams.get("link_visibility") === "all" ? "all" : searchParams.get("link_visibility") === "hidden" ? "hidden" : "selected",
+    linkCategoryFilter: linkCategoryFilter(searchParams.get("link_category"))
   };
+}
+
+function linkCategoryFilter(value: string | null): GraphDisplaySettings["linkCategoryFilter"] {
+  return value === "content" || value === "navigation" || value === "template" ? value : "all";
 }
 
 function graphMode(searchParams: URLSearchParams): GraphDisplaySettings["mode"] {

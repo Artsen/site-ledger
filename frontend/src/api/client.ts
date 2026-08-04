@@ -28,7 +28,7 @@ export const defaultScope = (): ScopeConfig => ({
   max_html_response_bytes: 2000000,
   concurrent_requests_per_host: 2,
   delay_between_requests_ms: 0,
-  user_agent: "ArtsenDesignScanner/0.1",
+  user_agent: "WebsiteScanner/0.1",
   drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
   allow_private_networks: false,
   max_redirects: 10

@@ -1,6 +1,6 @@
-# Artsen Design Scanner
+# Website Scanner
 
-Artsen Design Scanner is a scoped website page inventory tool. PR 1 implements a static HTML crawler that stores page snapshots, link provenance, parsed head metadata, and compressed HTML blobs.
+Website Scanner is a scoped website page inventory tool. PR 1 implements a static HTML crawler that stores page snapshots, link provenance, parsed head metadata, and compressed HTML blobs.
 
 ## Local Setup
 
