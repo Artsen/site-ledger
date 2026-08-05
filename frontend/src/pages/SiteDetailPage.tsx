@@ -29,6 +29,7 @@ import { classificationLabel } from "../types/siteClassifications";
 import type { Job, WorkerHealth } from "../types/jobs";
 import type { InventoryItem, PersistentPage, Site, UrlSource } from "../types/scans";
 import { formatDate, formatStatus, isTerminalStatus, plural } from "../utils/format";
+import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 export function SiteDetailPage() {
   const { siteId = "" } = useParams();
@@ -37,6 +38,7 @@ export function SiteDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const site = useQuery({ queryKey: ["site", siteId], queryFn: () => getSite(siteId) });
+  useDocumentTitle(site.data?.name ?? "Site");
   const toggleActive = useMutation({
     mutationFn: (next: boolean) => updateSite(siteId, { is_active: next }),
     onSuccess: async () => {

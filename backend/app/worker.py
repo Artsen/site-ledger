@@ -12,11 +12,12 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import SessionLocal
+from app.product import PRODUCT_NAME
 from app.services import background_jobs
 from app.services.job_handlers import build_handler_registry, run_claimed_job
 from app.storage.content_store import LocalContentStore
 
-logger = logging.getLogger("website_scanner.worker")
+logger = logging.getLogger("site_ledger.worker")
 
 
 class WorkerService:
@@ -123,7 +124,7 @@ class WorkerService:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Website Scanner background worker.")
+    parser = argparse.ArgumentParser(description=f"Run the {PRODUCT_NAME} background worker.")
     parser.add_argument("--once", action="store_true", help="Process at most one polling cycle.")
     parser.add_argument(
         "--recover-only",

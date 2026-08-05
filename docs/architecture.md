@@ -1,285 +1,187 @@
-# PR 1 Architecture
-
-The scanner is split into explicit boundaries:
-
-- `crawler.url_normalizer` resolves and normalizes URLs without merging distinct resources.
-- `crawler.scope` applies persisted scan scope and returns one deterministic decision per URL.
-- `crawler.html_parser` extracts head metadata and anchor provenance from best-effort parsed HTML.
-- `storage.content_store` stores exact response bytes as gzip-compressed content-addressed blobs.
-- `crawler.static_crawler` performs breadth-first HTTP GET crawling and persists partial results.
-- `services.background_jobs` owns durable queue state, leases, progress, cancellation, and worker
-  health.
-- `worker` claims durable jobs and dispatches scan and source-refresh handlers.
-- `api.routes` exposes scan, page, snapshot, link, HTML, and occurrence endpoints.
-- `frontend/src/components/ui` contains small shared UI primitives used by the current scanner
-  workflow only. It is not intended as a speculative design system.
-
-## Scope Defaults
-
-When a scan has no explicit `allowed_host_patterns`, the scope engine derives the exact starting
-hostname and does not include sibling hosts or subdomains. Subdomains require either an explicit
-wildcard pattern or `follow_subdomains` with an allowed base host.
-
-No TechSmith-specific host set is hardcoded. Site-specific configuration is deferred to future
-saved-site records.
-
-## Redirects and Response Limits
-
-Redirects are not followed automatically by HTTPX. The crawler validates each redirect target
-against scope and SSRF network rules before issuing the next GET, and stores the redirect-chain
-evidence with requested URL, status, raw `Location`, and resolved destination URL.
-
-Final response bodies are read through HTTPX streaming. `Content-Length` is checked before reading
-when present, and streamed chunks are counted so oversized responses are stopped and categorized as
-`response_too_large` without storing a partial content blob.
-
-Unsafe redirect destinations blocked by network safety checks are categorized as
-`unsafe_destination`; configured scope rejections are categorized as `scope_excluded`.
-
-## PR 2 UI and API Additions
-
-The scan workflow UI now keeps scan tabs and page filters in URL search parameters so refreshes,
-browser navigation, and shared links preserve context. Page search is debounced before requesting
-server-side results.
-
-The page-list API remains backward compatible and adds optional `min_depth` and `max_depth`
-parameters alongside the existing exact `depth` filter. Snapshot reads include additive
-`html_raw_byte_size` and `html_stored_byte_size` fields derived from the related content blob when
-available. No persistence migration is required.
-
-The page detail view presents snapshot overview data, redirect chains, head metadata, link
-occurrences, and raw HTML without using raw JSON as the primary interface. Raw HTML remains escaped
-and non-executable in the dashboard; the HTML endpoint remains `text/plain`.
-
-## PR 3 Inbound Links and Scan Lifecycle
-
-Inbound link counts and discovery sources are computed with set-based scan-specific queries in
-`services.scan_queries`. Occurrences are counted only when their source snapshot belongs to the same
-scan as the target page snapshot. Page-list aggregation returns both total inbound occurrences and
-unique source-page counts without per-row SQL loops.
-
-`GET /api/snapshots/{snapshot_id}/inbound-links` returns a paginated, typed list of every inbound
-link occurrence for the target snapshot's scan and resource, plus summary counts for total
-occurrences, unique source pages, unique anchor texts, nofollow occurrences, and self-links.
-Inbound attribution is intentionally direct: a stored occurrence points to the selected resource's
-normalized URL identity. A link to URL A is not reported as inbound to URL B just because URL A later
-redirects to URL B. Redirect-mediated attribution requires final-resource identity and remains
-future work.
-
-`services.scan_deletion` owns scan deletion preview and execution. It allows deletion only for
-terminal scans, deletes source occurrences and snapshots explicitly, and removes unreferenced
-content blobs through the content-store abstraction. Blobs referenced by another scan are preserved.
-The local content store exposes `delete()` so later object-storage implementations can provide the
-same lifecycle operation.
-
-`GET /api/scans/history` is the complete scan-history query surface. It is server-side paginated and
-supports starting-URL search, status filtering, sort, direction, limit, and offset. The lightweight
-`GET /api/scans` recent-scans endpoint remains for the sidebar.
-
-Deletion summaries and deletion execution share the same impact calculation so the preview cannot
-drift from the actual cleanup rules. The service calculates candidate blob and resource IDs before
-deleting scan-owned rows, commits database cleanup before removing files, and returns warnings for
-missing or failed physical-file cleanup. A rollback cannot leave a live snapshot pointing at a file
-that was already removed because files are never deleted before the database commit succeeds.
-
-After scan-owned rows are removed, candidate `WebResource` rows are deleted only when no remaining
-snapshot references them and no remaining occurrence targets them. These query and lifecycle service
-boundaries are intended to be reused by future findings, broken-link aggregation, scan comparison,
-retention policies, alternate storage backends, and link visualizations without adding a speculative
-plugin architecture.
-
-## PR 4 Saved Sites
-
-`WebsiteProperty` represents a saved Site above scans. It stores generic site metadata, a normalized
-base URL, active state, user-defined group/platform/ownership labels, and a saved `scope_config`
-JSON object using the same schema as scan creation. Classification labels are normalized and
-validated centrally, but they are not hardcoded crawler behavior switches.
-
-`Scan.website_property_id` is nullable. Existing and future ad hoc scans remain valid with no site
-relationship. Saved-site scans store both the site relationship and a copied effective `scope_config`
-snapshot, so editing a site later does not alter historical scan behavior.
-
-`services.site_management` owns creation, update, duplicate base URL validation, active/inactive
-state changes, scan creation from an active site, and conservative site deletion. A site with scans
-cannot be deleted; scan deletion and site deletion remain separate lifecycle operations.
-
-`services.site_queries` owns paginated site listing, site detail aggregates, and site scan history.
-The site list uses set-based scan counts and latest-scan joins rather than querying scans for each
-site row. `/api/sites` supports server-side search, classification filters, active-state filtering,
-sorting, limit, and offset.
-
-Future sitemap, analytics, comparison, scheduling, monitoring, ownership, tagging, and integration
-features should extend the saved-site layer through focused related tables or services. PR 4 does
-not add empty integration columns, scheduled scans, seed data, or organization/user permission
-models.
-
-## PR 6 URL Sources and Inventory
-
-URL sources are saved-site children, not crawler plugins. `UrlSource` stores source configuration,
-`SourceRefresh` stores one fetch/parse attempt, and `UrlSourceEntry` stores each URL observed from
-that source with raw URL, normalized URL, current membership, validation state, scope decision, and
-source-specific metadata. Valid in-scope entries link to `WebResource`; invalid or out-of-scope
-entries are retained without being crawlable resources.
-
-`services.source_refresh` owns robots.txt sitemap discovery and sitemap refreshes. It uses
-`crawler.safe_fetch.SafeHttpFetcher` so source ingestion and page crawling share redirect limits,
-SSRF destination checks, timeout handling, user-agent handling, and streamed response-size
-enforcement. Sitemap XML parsing lives in `parsers.sitemap`; robots directives live in
-`parsers.robots`; gzip detection and bounded decompression live in `parsers.compression`.
-
-Sitemap index children are represented as child `UrlSource` rows linked through
-`parent_source_id` and `root_source_id`. Child refreshes reuse the same scope and safety checks as
-top-level sitemap refreshes, and cycle/child-count limits prevent unbounded source expansion.
-Robots discovery creates or reuses a `robots_txt` source for the site and child sitemap sources for
-the discovered `Sitemap:` directives.
-
-`services.source_queries` owns source, source-entry, refresh, and inventory list queries. Inventory
-groups current entries by normalized URL and exposes multi-source provenance plus latest crawl
-status when a linked resource has scan snapshots. This is deliberately source inventory, not a
-replacement for scan results: scan pages remain observations from crawler fetches.
-
-Scan starts from saved sites can include current inventory entries. `services.scan_seeds` snapshots
-the selected source entries into `ScanSeed` and `ScanSeedOrigin` rows before the scan is queued.
-The crawler reads queued seeds at startup and marks them fetched or failed as it processes them.
-This preserves scan input provenance even if sources are refreshed or deleted later.
-
-Deletion rules include the new source tables. Source deletion cascades source config, refreshes, and
-entries, then removes only resources no longer referenced by snapshots, occurrences, other source
-entries, or scan seeds. Scan deletion removes seed origins and seeds for that scan while preserving
-source configuration and source-owned resources still in use.
-
-## PR 7 Website Graph
-
-The scan graph is derived data. It adds no persistence migration and stores no layout coordinates,
-camera state, selected nodes, exports, or presentation settings. `services.graph_queries` builds
-scan-specific topology from `ResourceSnapshot` and `ResourceOccurrence` rows and returns typed
-schemas from `schemas.graph`.
-
-Graph nodes represent scan-specific page snapshots with IDs such as `snapshot:123`. Optional
-unfetched internal boundary nodes use `resource:456` and are included only when requested. Edges are
-directed and aggregate all page-link occurrences from one source snapshot to one target resource.
-The main graph response keeps edge summaries compact; `/api/scans/{scan_id}/graph/edges/{edge_id}/occurrences`
-loads duplicate-preserving occurrence details with pagination.
-
-Graph limiting is deterministic. The backend prioritizes the starting page, lower crawl depth,
-higher inbound and outbound connectivity, stable normalized URL, and snapshot ID. Edges are returned
-only when both endpoints are included. Truncation is reported in the graph summary so the UI can warn
-users when limits shaped the view.
-
-Focused neighborhood queries validate that the focus snapshot belongs to the scan, then traverse
-incoming and outgoing graph edges up to the requested hop count. This lets large scans be explored
-without fetching an entire topology into the renderer.
-
-Frontend graph code lives under `frontend/src/features/graph`. Application-owned graph types and
-the pure `graphDataAdapter` stay independent from renderer-specific objects. The adapter computes
-deterministic initial coordinates, bounded node sizes, categories, edge widths, labels, and legends.
-Direct imports from `react-force-graph-2d`, `react-force-graph-3d`, and Three.js-backed renderer code
-are isolated in lazy renderer modules.
-
-The renderer handle supports the operations the UI needs now: fit, reset camera, focus node,
-freeze, reheat, reset deterministic layout, and PNG export. Search, node browser, edge browser,
-inspectors, and occurrence tables provide accessible alternatives to direct canvas selection.
-
-Future semantic layouts can reuse the same graph API and renderer adapter boundary by adding
-externally supplied coordinates or category keys. Future page-section graphs can add non-page node
-kinds without changing current page node semantics. Future scan comparison can decorate nodes and
-edges with added/removed/changed state without treating force-layout coordinates as persisted page
-properties.
-
-## PR 8 Durable Background Jobs
-
-`BackgroundJob`, `JobEvent`, and `WorkerInstance` add durable execution state without changing scan
-results, source inventory, or graph data into job-owned records. A job has exactly one subject:
-either a `scan_id` or a `source_refresh_id`. `website_property_id` is denormalized onto the job for
-filtering and display.
-
-`services.background_jobs` is the queue boundary. It enqueues jobs, deduplicates active jobs by a
-stable key, claims queued work in deterministic priority order, writes lease tokens, accepts
-heartbeats and progress only from the lease holder, records cancellation requests, and reconciles
-expired leases. Legal status transitions are centralized in `services.job_types`.
-
-`services.job_handlers` adapts durable jobs to domain services. The scan handler invokes
-`crawler.static_crawler` with cooperative cancellation and progress callbacks. The source-refresh
-handler invokes `services.source_refresh.execute_source_refresh`, which uses the same SSRF-safe
-fetching path as crawling. These handlers do not persist force-layout state, graph presentation
-settings, source inventory mutations outside refresh execution, or speculative future job subjects.
-
-`app.worker` is a standalone process entry point. It registers a `WorkerInstance`, heartbeats while
-online, recovers expired jobs on startup, claims available jobs up to configured process
-concurrency, and attempts graceful shutdown. `python -m app.worker --once` is available for local and
-CI-style processing, and `--recover-only` reconciles leases without claiming new work.
-
-The API creates scans and source refreshes as queued domain records, enqueues the corresponding job,
-and returns `202 Accepted`. Cancellation endpoints store durable cancellation requests rather than
-cancelling an in-memory task. Deletion services reject active jobs so scans, sources, and sites
-cannot be deleted while background work can still mutate their rows.
-
-The frontend treats job state as supplemental execution state. Scan detail and source tables poll
-jobs and worker health so users can see queued, running, cancelling, interrupted, and
-waiting-for-worker states after API restarts.
-
-## PR 9 Graph Scalability
-
-Graph configuration is centralized in `services.graph_config` and exposed through
-`GET /api/graph/capabilities`. Routes use the same configuration for validation, and frontend graph
-controls load capabilities rather than duplicating backend limit constants.
-
-`services.graph_queries` still provides the public graph service facade for routes, but candidate
-node filtering, ranking, exact available counts, and limiting now happen in SQL before ORM snapshot
-rows are loaded. Metric subqueries participate in filtering and ranking, and detailed metrics are
-loaded only for selected node resources.
-
-Focused neighborhood traversal expands incoming and outgoing page-link relationships with one
-batched query per hop instead of one query per visited node. Traversal remains scan-specific,
-cycle-aware, and bounded by configured focus hops and graph node limits.
-
-The graph edge occurrence endpoint now builds edge summaries with SQL aggregates and fetches only
-the requested occurrence page. Duplicate-heavy edges remain bounded in response size and memory:
-stored occurrences stay duplicate-preserving, but paginated graph occurrence rows are not loaded
-wholesale for summaries.
-
-Frontend graph adaptation is split into pure modules for renderer types, coordinates, node sizing,
-node categories, and edge styling. The existing `graphDataAdapter` remains the public adaptation
-entry point, and 2D/3D renderer imports remain isolated in lazy renderer modules.
-
-## PR 10 Page History and Reuse
-
-Persistent page history treats `WebResource` as the page identity and `ResourceSnapshot` as one
-scan-specific observation. No separate Page table is introduced. `services.page_queries` aggregates
-site pages from saved-site scans and returns the latest observation plus paginated observation
-history for a resource. The query surface stays site-scoped by default, with an explicit all-sites
-observation mode for comparing the same normalized URL identity outside the selected site.
-
-HTML parsing now has a durable artifact boundary. `HtmlParseArtifact` stores parser output for a
-specific content blob, parser version, parser configuration version, and URL resolution base.
-`HtmlParseAnchor` stores ordered anchor extraction for that artifact. Snapshots reference parse
-artifacts, but link occurrences are still scan-specific rows created during each crawl so current
-scope decisions and provenance remain accurate.
-
-Conditional crawl reuse is handled in `services.cache_policy` and `crawler.static_crawler`.
-The crawler derives a representation request fingerprint from crawler-controlled headers, finds a
-latest compatible prior HTML observation for the same resource, and sends `If-None-Match` and/or
-`If-Modified-Since` only through the safe fetcher's allowlisted header path. A `304 Not Modified`
-response stores a new snapshot that records the actual retrieval status separately from the reused
-effective HTTP status and points back to the snapshot it reused.
-
-Reuse is intentionally conservative. The content blob must still exist locally, the prior response
-must expose an ETag or Last-Modified validator, `Cache-Control: no-store` blocks reuse, unsupported
-`Vary` headers block reuse, and redirect/scope/SSRF checks still run through the existing safe
-fetcher. This is not a complete RFC cache implementation; it is a crawl optimization that preserves
-page observation history and avoids unnecessary HTML downloads/parsing when the origin explicitly
-reports unchanged content.
-
-## Deferred
-
-Robots.txt enforcement and concurrent crawling remain internal configuration placeholders for a
-future PR. PR 1 executes a sequential static crawl and may apply a configured delay between
-requests.
-
-The Playwright coverage currently exercises the frontend scan form route. Complete deterministic
-crawl behavior, including redirect and response-size handling, is covered in backend integration
-tests through mocked HTTP transports.
-
-Rendered crawling, asset inventory, analytics integrations, scheduled scans, AI features, and
-multi-user permissions remain excluded.
+# Site Ledger Architecture
 
+Site Ledger is a local-first website intelligence application with explicit collection,
+persistence, query, background-execution, and presentation boundaries.
+
+## Runtime Shape
+
+~~~text
+React application
+      |
+FastAPI routes
+      |
+Domain services ---- SQLAlchemy models ---- SQLite
+      |                                      |
+Durable jobs ---- standalone worker     Alembic migrations
+      |
+Crawler and source refresh ---- local content store
+~~~
+
+The frontend, API, and worker are separate processes. The API creates durable records and queues
+work. The worker claims jobs and invokes domain services. SQLite and local gzip storage are the
+current implementations.
+
+## Core Domain Model
+
+- WebsiteProperty is a saved Site with reusable configuration.
+- WebResource is the persistent Page identity.
+- ResourceSnapshot is one scan-specific Page observation.
+- ResourceOccurrence is one duplicate-preserving reference found in an observation.
+- ContentBlob stores exact compressed response evidence by SHA-256.
+- HtmlParseArtifact and HtmlParseAnchor store reusable deterministic parse output.
+- Scan stores one bounded collection run and its copied effective scope.
+- UrlSource, SourceRefresh, and UrlSourceEntry store URL-source configuration and Inventory.
+- ScanSeed and ScanSeedOrigin preserve explicit scan-input provenance.
+- BackgroundJob, JobEvent, and WorkerInstance store durable Activity state.
+
+These internal class and table names are stable technical contracts. Product copy uses Page and
+Observation where the implementation names would be unnecessarily technical.
+
+## Crawler Boundaries
+
+- crawler.url_normalizer resolves and normalizes URLs without merging distinct resources.
+- crawler.scope applies persisted scan scope and returns one deterministic decision per URL.
+- crawler.security validates destinations at the SSRF boundary.
+- crawler.safe_fetch performs bounded HTTP GET requests and validates redirects.
+- crawler.html_parser extracts head metadata and anchor provenance from best-effort HTML.
+- crawler.static_crawler performs breadth-first traversal and persists partial results.
+- storage.content_store stores exact response bytes as gzip-compressed, content-addressed blobs.
+
+The crawler does not execute JavaScript, submit forms, forward cookies, or send user credentials.
+Only HTTP and HTTPS are supported. Redirects are followed manually so every destination is checked
+against scope and network-safety rules before another request is sent.
+
+Response bodies are streamed. Content-Length is checked when available and streamed bytes are
+counted, so oversized responses stop before storage and are recorded as response_too_large.
+
+## Scope And URL Identity
+
+When a scan has no explicit allowed hosts, the exact starting hostname is derived. Sibling hosts
+and subdomains remain excluded unless explicitly configured.
+
+Normalization safely handles host casing, internationalized hosts, default ports, dot segments,
+fragments, configured tracking parameters, and deterministic query ordering. It does not lowercase
+paths, erase all trailing slashes, merge HTTP with HTTPS, or treat canonical metadata as identity.
+
+Scope belongs to each scan. Saved-site scans copy the effective Site scope into the Scan row so
+later Site edits do not rewrite history.
+
+## Saved Sites
+
+WebsiteProperty stores a Site name, normalized base URL, description, active state, user-defined
+group/platform/ownership labels, locale, and scope configuration.
+
+Scan.website_property_id remains nullable so ad hoc scans keep working. Site deletion is
+conservative: a Site with scans cannot be deleted, and Site deletion never invokes scan deletion.
+Inactive Sites remain inspectable but cannot start new scans.
+
+## URL Sources And Inventory
+
+UrlSource is a Site child, not a crawler plugin. Supported sources are direct sitemaps, robots.txt
+discovery, sitemap-index children, and manual URL batches.
+
+Source refreshes use the same SafeHttpFetcher boundary as crawling. XML parsing disables networked
+DTD/entity loading, and gzip decompression is bounded. Out-of-scope or invalid entries remain
+reviewable but are not crawlable resources.
+
+Source Inventory is input data, not scan output. When selected for a scan, source entries are copied
+into ScanSeed and ScanSeedOrigin records. Later refresh or deletion does not rewrite a scan's input
+provenance.
+
+## Durable Background Activity
+
+services.background_jobs owns queueing, claiming, leases, heartbeats, progress, cancellation, and
+worker health. A BackgroundJob has exactly one domain subject: a scan or a source refresh.
+website_property_id is filter metadata, not a polymorphic subject.
+
+services.job_handlers adapts claimed jobs to crawler and source-refresh services. Cancellation is
+cooperative. Workers recover expired leases on startup and reconcile terminal domain records before
+marking unfinished work interrupted.
+
+Deletion services reject active jobs so background work cannot mutate rows while their owning Scan,
+Source, or Site is deleted.
+
+See [Background jobs](background-jobs.md).
+
+## Page History And Reuse
+
+WebResource provides stable Page identity across scans. ResourceSnapshot retains one observation's
+requested URL, final URL, HTTP result, retrieval metadata, parsed metadata, evidence references, and
+error state.
+
+services.page_queries provides Site-scoped Page catalogs and observation history. An explicit
+all-sites observation mode can inspect the same normalized Page identity outside the selected Site.
+
+Parse artifacts are identified by content blob, parser version, parser configuration, and final URL
+resolution base. The base URL is required because relative links and canonical URLs depend on it.
+
+Conditional revalidation is conservative. A prior observation must have compatible validators,
+cache metadata, request representation, scope, and an available local blob. A successful 304 creates
+a new observation, records the actual retrieval status separately from the effective Page status,
+and recreates current-scan link occurrences.
+
+See [Page history and reuse](page-history-and-reuse.md).
+
+## Scan Queries And Lifecycle
+
+Scan page results are server-side paginated, filterable, and sortable. Inbound counts and discovery
+sources are calculated with set-based, scan-specific queries.
+
+Inbound attribution is direct: a stored occurrence targets the selected Page identity in the same
+scan. Redirect-mediated attribution is not inferred.
+
+Scan deletion calculates affected resources and blobs before deleting scan-owned rows. Database
+cleanup commits before physical blob files are removed. Shared blobs and resources referenced by
+other scans, occurrences, source entries, or scan seeds are retained.
+
+## Graph Architecture
+
+The Graph is scan-specific derived data. services.graph_config owns capabilities and hard limits.
+services.graph_queries filters, ranks, aggregates, and limits topology in SQL before constructing
+the response.
+
+Graph nodes represent scan-specific observations. Optional unfetched boundary nodes represent
+in-scope Page resources discovered through links. Directed edges aggregate duplicate-preserving
+page_link occurrences, while occurrence details remain separately paginated.
+
+The frontend graph adapter is pure and renderer-independent. 2D and 3D renderers are isolated and
+lazy-loaded. Layout coordinates, camera position, selection, and exports are not persisted.
+
+See [Website graph](website-graph.md) and [Graph performance](graph-performance.md).
+
+## API And Frontend
+
+app.api.routes exposes typed Site, Scan, Page observation, Source, Inventory, Graph, Activity, and
+HTML evidence endpoints. Existing API paths remain unversioned and stable.
+
+React routes cover new scans, scan history, scan details, scan observations, Sites, Site editing,
+Site Page catalogs, and persistent Page history. TanStack Query owns server state. URL parameters
+preserve tab, filter, pagination, graph, and presentation state where appropriate.
+
+Stored HTML is rendered only as escaped text. The raw HTML endpoint returns text/plain.
+
+## Portability And Compatibility
+
+SQLAlchemy services avoid SQLite-only behavior where a normal portable solution exists. The content
+store is abstracted so object storage can replace local files later.
+
+The following legacy identifiers remain intentionally stable:
+
+- SCANNER_ environment-variable prefix.
+- sqlite:///../data/scanner.db default database path.
+- WebsiteScanner/0.1 default crawler user agent.
+- website-scanner.scan.preferences frontend local-storage key.
+- Existing database tables, model names, migration IDs, and migration filenames.
+
+Changing these identifiers as part of branding could hide local data, discard preferences, alter
+crawl behavior, or break operator configuration.
+
+## Deferred Areas
+
+Browser rendering, screenshots, asset inventory, complete scan comparison, environment comparison,
+findings, accessibility and performance observations, analytics integrations, semantic analysis,
+investigation workflow, scheduling, notifications, authentication, and multi-user permissions are
+future direction.
+
+Robots.txt enforcement and concurrent requests within one crawl also remain deferred. The current
+static crawler uses a sequential request loop with an optional delay.

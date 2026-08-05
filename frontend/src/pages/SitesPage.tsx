@@ -11,8 +11,10 @@ import { inputClass } from "../components/ui/styles";
 import { classificationLabel } from "../types/siteClassifications";
 import type { SiteListItem } from "../types/scans";
 import { formatDate, plural } from "../utils/format";
+import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 export function SitesPage() {
+  useDocumentTitle("Sites");
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const query = buildSiteQuery(searchParams);

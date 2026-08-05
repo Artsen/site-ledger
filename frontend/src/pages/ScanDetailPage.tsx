@@ -16,6 +16,7 @@ import { ScanGraphView } from "../features/graph/ScanGraphView";
 import type { Job, WorkerHealth } from "../types/jobs";
 import type { Page, Scan, ScanSeed, Snapshot } from "../types/scans";
 import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
+import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 const pageSizes = [25, 50, 100];
 
@@ -32,6 +33,7 @@ export function ScanDetailPage() {
     refetchInterval: (query) => (isTerminalStatus(query.state.data?.status ?? "") ? false : 1500),
     retry: (failureCount, error) => (error instanceof Error && error.message.includes("not be found") ? false : failureCount < 2)
   });
+  useDocumentTitle(scan.data ? `Scan ${scan.data.id}` : scanId ? `Scan ${scanId}` : "Scan");
   const isActiveScan = Boolean(scan.data && !isTerminalStatus(scan.data.status));
   const jobs = useQuery({
     queryKey: ["jobs", "scan", scanId],

@@ -4,9 +4,11 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { forwardRef, useImperativeHandle } from "react";
 
+import { AppShell } from "../src/components/AppShell";
 import { CopyButton } from "../src/components/ui/CopyButton";
 import { StatusBadge } from "../src/components/ui/StatusBadge";
 import { displayError } from "../src/utils/errors";
+import { useDocumentTitle } from "../src/utils/useDocumentTitle";
 import { NewScanPage } from "../src/pages/NewScanPage";
 import { PageDetailPage } from "../src/pages/PageDetailPage";
 import { PersistentPageDetailPage } from "../src/pages/PersistentPageDetailPage";
@@ -148,6 +150,7 @@ beforeEach(() => {
     warnings: []
   });
   api.listScanHistory.mockResolvedValue({ items: [scanFixture], total: 1, limit: 25, offset: 0 });
+  api.listScans.mockResolvedValue([]);
   api.listSites.mockResolvedValue({ items: [siteFixture], total: 1, limit: 25, offset: 0 });
   api.getSite.mockResolvedValue(siteDetailFixture);
   api.createSite.mockResolvedValue(siteDetailFixture);
@@ -177,6 +180,41 @@ beforeEach(() => {
 });
 
 afterEach(() => cleanup());
+
+describe("Site Ledger product identity", () => {
+  it("renders the accessible shell brand, mark, and desktop tagline", async () => {
+    renderShell("/scans/new");
+
+    const brandLink = screen.getByRole("link", { name: "Site Ledger home" });
+    expect(brandLink).toHaveAttribute("href", "/scans/new");
+    expect(brandLink.querySelector("svg")).toBeInTheDocument();
+    expect(screen.getByText("Site Ledger")).toBeInTheDocument();
+    expect(screen.getByText("A historical record of your website.")).toBeInTheDocument();
+    expect(screen.queryByText("Website Scanner")).not.toBeInTheDocument();
+    await waitFor(() => expect(document.title).toBe("New Scan | Site Ledger"));
+  });
+
+  it("updates titles for entity routes after data loads", async () => {
+    const view = renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3");
+    await screen.findByRole("heading", { name: "Example Site" });
+    await waitFor(() => expect(document.title).toBe("Example Site | Site Ledger"));
+
+    view.unmount();
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+    await screen.findByRole("heading", { name: "Example page" });
+    await waitFor(() => expect(document.title).toBe("Example page | Site Ledger"));
+  });
+
+  it("uses the product name when a page title is unavailable", async () => {
+    function UntitledRoute() {
+      useDocumentTitle();
+      return <div>Untitled route</div>;
+    }
+
+    render(<UntitledRoute />);
+    await waitFor(() => expect(document.title).toBe("Site Ledger"));
+  });
+});
 
 describe("new scan workflow", () => {
   it("validates and normalizes a bare hostname while showing exact-host scope", async () => {
@@ -483,7 +521,7 @@ describe("page detail workflow", () => {
 
 describe("shared UX utilities", () => {
   it("formats API unavailable errors for users", () => {
-    expect(displayError(new TypeError("Failed to fetch")).message).toMatch(/scanner API could not be reached/i);
+    expect(displayError(new TypeError("Failed to fetch")).message).toMatch(/Site Ledger API could not be reached/i);
   });
 
   it("copies values with feedback", async () => {
@@ -505,6 +543,20 @@ function renderRoute(element: React.ReactElement, path: string, initialEntry = p
         <Routes>
           <Route path={path} element={element} />
           <Route path="*" element={<div />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
+function renderShell(initialEntry: string) {
+  return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/" element={<AppShell />}>
+            <Route path="scans/new" element={<NewScanPage />} />
+          </Route>
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>

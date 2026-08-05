@@ -1,6 +1,7 @@
-# Durable Background Jobs
+# Site Ledger Background Jobs
 
-PR 8 moves scan execution and source refresh execution behind a database-backed job queue.
+Site Ledger executes scans and source refreshes through a database-backed job queue. API requests
+persist work and return without holding an HTTP connection open for the collection run.
 
 ## Local Commands
 

@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.config import get_settings
+from app.product import API_TITLE, API_VERSION, PRODUCT_DESCRIPTION
 from app.storage.content_store import LocalContentStore
 
 
@@ -19,7 +20,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="Website Scanner", lifespan=lifespan)
+    app = FastAPI(
+        title=API_TITLE,
+        description=PRODUCT_DESCRIPTION,
+        version=API_VERSION,
+        lifespan=lifespan,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

@@ -1,6 +1,6 @@
-# Page History and Conditional Reuse
+# Site Ledger Page History and Conditional Reuse
 
-PR 10 keeps page identity and page observation separate:
+Site Ledger keeps Page identity and Page observation separate:
 
 - `WebResource` is the stable normalized page identity.
 - `ResourceSnapshot` is one observation of that page during one scan.

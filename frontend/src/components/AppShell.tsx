@@ -2,7 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { NavLink, Outlet, useParams } from "react-router-dom";
 
 import { listScans } from "../api/client";
+import { productName, productTagline } from "../config/brand";
 import { formatRelativeDate, formatStatus, hostnameFromUrl, isTerminalStatus } from "../utils/format";
+import { SiteLedgerMark } from "./SiteLedgerMark";
 import { EmptyState } from "./ui/EmptyState";
 import { LoadingBlock } from "./ui/Loading";
 import { StatusBadge } from "./ui/StatusBadge";
@@ -18,41 +20,23 @@ export function AppShell() {
   return (
     <div className="min-h-screen bg-[#f7f7f5] text-stone-950 lg:flex">
       <aside className="border-b border-stone-200 bg-stone-100/80 px-3 py-3 lg:sticky lg:top-0 lg:h-screen lg:w-72 lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
-        <div className="flex items-center justify-between gap-3 lg:block">
-          <NavLink to="/scans/new" className="block rounded-md px-3 py-2 text-base font-semibold focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">
-            Website Scanner
-          </NavLink>
+        <div>
           <NavLink
             to="/scans/new"
-            className={({ isActive }) =>
-              `rounded-md px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2 lg:mt-4 lg:block ${
-                isActive ? "bg-white text-stone-950 shadow-sm" : "text-stone-700 hover:bg-stone-200"
-              }`
-            }
+            aria-label={`${productName} home`}
+            className="flex items-center gap-3 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2"
           >
-            New Scan
+            <SiteLedgerMark className="size-8 shrink-0 text-stone-950" />
+            <span className="min-w-0">
+              <span className="block text-base font-semibold text-stone-950">{productName}</span>
+              <span className="mt-0.5 hidden text-xs font-normal text-stone-500 lg:block">{productTagline}</span>
+            </span>
           </NavLink>
-          <NavLink
-            to="/sites"
-            className={({ isActive }) =>
-              `rounded-md px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2 lg:mt-2 lg:block ${
-                isActive ? "bg-white text-stone-950 shadow-sm" : "text-stone-700 hover:bg-stone-200"
-              }`
-            }
-          >
-            Sites
-          </NavLink>
-          <NavLink
-            to="/scans"
-            end
-            className={({ isActive }) =>
-              `rounded-md px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2 lg:mt-2 lg:block ${
-                isActive ? "bg-white text-stone-950 shadow-sm" : "text-stone-700 hover:bg-stone-200"
-              }`
-            }
-          >
-            All scans
-          </NavLink>
+          <nav aria-label="Primary" className="mt-3 grid grid-cols-3 gap-1 lg:block">
+            <PrimaryNavLink to="/scans/new">New Scan</PrimaryNavLink>
+            <PrimaryNavLink to="/sites">Sites</PrimaryNavLink>
+            <PrimaryNavLink to="/scans" end>All Scans</PrimaryNavLink>
+          </nav>
         </div>
 
         <div className="mt-4 hidden lg:block">
@@ -92,6 +76,22 @@ export function AppShell() {
         <Outlet />
       </main>
     </div>
+  );
+}
+
+function PrimaryNavLink({ to, end, children }: { to: string; end?: boolean; children: React.ReactNode }) {
+  return (
+    <NavLink
+      to={to}
+      end={end}
+      className={({ isActive }) =>
+        `block rounded-md px-3 py-2 text-center text-sm font-medium focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2 lg:mt-2 lg:text-left ${
+          isActive ? "bg-white text-stone-950 shadow-sm" : "text-stone-700 hover:bg-stone-200"
+        }`
+      }
+    >
+      {children}
+    </NavLink>
   );
 }
 

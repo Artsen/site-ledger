@@ -15,12 +15,14 @@ import { UrlText } from "../components/ui/UrlText";
 import { inputClass } from "../components/ui/styles";
 import type { InboundLinkList, InboundLinkOccurrence, LinkOccurrence, Snapshot } from "../types/scans";
 import { formatBytes, formatDate, formatScopeDecision, formatStatus, plural } from "../utils/format";
+import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 export function PageDetailPage() {
   const { scanId = "", snapshotId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get("tab") ?? "overview";
   const snapshot = useQuery({ queryKey: ["snapshot", snapshotId], queryFn: () => getSnapshot(snapshotId) });
+  useDocumentTitle(snapshot.data?.page_title ?? "Page");
   const links = useQuery({ queryKey: ["links", snapshotId], queryFn: () => getLinks(snapshotId), enabled: tab === "links" });
   const inboundQuery = useMemo(() => buildInboundQuery(searchParams), [searchParams]);
   const inboundLinks = useQuery({ queryKey: ["inbound-links", snapshotId, inboundQuery], queryFn: () => getInboundLinks(snapshotId, inboundQuery), enabled: tab === "inbound" });

@@ -11,10 +11,12 @@ import { StatusBadge } from "../components/ui/StatusBadge";
 import { inputClass } from "../components/ui/styles";
 import type { Scan, ScanDeletePreview } from "../types/scans";
 import { formatBytes, formatDate, formatDuration, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
+import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 const statusOptions = ["completed", "completed_with_errors", "failed", "cancelled", "interrupted", "queued", "running"];
 
 export function ScansPage() {
+  useDocumentTitle("All Scans");
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [success, setSuccess] = useState<string | null>(null);

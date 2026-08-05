@@ -1,6 +1,7 @@
 # Graph Performance
 
-PR 9 hardens the scan-specific topology graph without changing its product purpose.
+Site Ledger bounds scan-specific topology queries and keeps renderer dependencies isolated so graph
+inspection remains practical without changing graph semantics.
 
 ## Central Configuration
 
@@ -22,11 +23,8 @@ Current defaults:
 - Default edge occurrence page: 50
 - Maximum edge occurrence page: 200
 
-These values preserve the runtime caps that existed after PR 8. The previous documentation was split:
-README listed 3,000 nodes and 10,000 edges, while `docs/website-graph.md` still listed 1,500 nodes
-and 5,000 edges. PR 9 keeps the larger current runtime caps because the 3D renderer remained usable
-in recent local testing at those caps after graph rendering optimizations, but keeps conservative
-defaults for ordinary graph loads.
+These hard caps reflect current local testing after graph rendering optimizations. Conservative
+defaults remain appropriate for ordinary graph loads.
 
 ## Node Selection
 
@@ -90,7 +88,7 @@ Renderer imports remain isolated in the lazy 2D and 3D renderer modules.
 
 Measured with `npm run build` on this branch:
 
-- Initial app chunk: 397.00 kB minified, 114.72 kB gzip
+- Initial app chunk: 411.28 kB minified, 117.76 kB gzip
 - 2D renderer chunk: 4.57 kB minified, 2.23 kB gzip
 - 3D renderer chunk: 1,386.88 kB minified, 375.20 kB gzip
 
@@ -122,7 +120,7 @@ for repeatable local comparisons, not strict wall-clock CI assertions.
 
 Defaults are intended for quick inspection of ordinary scans. Hard caps are available for larger
 scans, but users should prefer host/path/depth filters or focused neighborhoods when a scan contains
-thousands of pages or very dense navigation. This PR does not claim support for tens of thousands of
+thousands of Pages or very dense navigation. Site Ledger does not claim support for tens of thousands of
 visible nodes in one browser-rendered graph.
 
 ## Known Limitations

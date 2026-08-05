@@ -21,7 +21,7 @@ export function errorFromResponse(status: number, body: string): ApiError {
   if (status === 404 && parsed.toLowerCase().includes("snapshot")) return new ApiError("That page snapshot could not be found.", status, body);
   if (status === 404 && parsed.toLowerCase().includes("html")) return new ApiError("The stored HTML for this page is not available.", status, body);
   if (status === 422) return new ApiError("Some submitted values are invalid. Review the highlighted fields and try again.", status, body);
-  if (status >= 500) return new ApiError("The scanner API returned an unexpected server error.", status, body);
+  if (status >= 500) return new ApiError("The Site Ledger API returned an unexpected server error.", status, body);
   return new ApiError(parsed || `Request failed with status ${status}.`, status, body);
 }
 
@@ -29,7 +29,7 @@ export function displayError(error: unknown): DisplayError {
   if (error instanceof ApiError) return { message: error.message, detail: error.detail };
   if (error instanceof TypeError && error.message === "Failed to fetch") {
     return {
-      message: "The scanner API could not be reached. Confirm that the backend is running.",
+      message: "The Site Ledger API could not be reached. Confirm that the backend is running.",
       detail: error.message
     };
   }
