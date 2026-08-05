@@ -10,6 +10,7 @@ import { LoadingBlock } from "../components/ui/Loading";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import type { PageObservation } from "../types/scans";
 import { formatDate, formatStatus, plural } from "../utils/format";
+import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 export function PersistentPageDetailPage() {
   const { siteId = "", resourceId = "" } = useParams();
@@ -23,6 +24,7 @@ export function PersistentPageDetailPage() {
     queryKey: ["site-page", siteId, resourceId],
     queryFn: () => getSitePage(siteId, resourceId)
   });
+  useDocumentTitle(page.data?.page.latest_title ?? (page.data ? page.data.page.normalized_url : "Page"));
   const observations = useQuery({
     queryKey: ["site-page-observations", siteId, resourceId, query.toString()],
     queryFn: () => listPageObservations(siteId, resourceId, `?${query.toString()}`)

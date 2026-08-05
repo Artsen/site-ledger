@@ -12,6 +12,7 @@ import { inputClass } from "../components/ui/styles";
 import type { ScopeConfig, SitePayload } from "../types/scans";
 import { plural } from "../utils/format";
 import { normalizeStartingUrlInput, parseLineList } from "../utils/url";
+import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 type ListFields = Pick<ScopeConfig, "allowed_host_patterns" | "excluded_host_patterns" | "included_path_prefixes" | "excluded_path_prefixes" | "drop_query_parameters">;
 type ListFieldText = Record<keyof ListFields, string>;
@@ -21,6 +22,7 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const existing = useQuery({ queryKey: ["site", siteId], queryFn: () => getSite(siteId), enabled: mode === "edit" });
+  useDocumentTitle(mode === "edit" ? (existing.data?.name ? `Edit ${existing.data.name}` : "Edit Site") : "Create Site");
   const [touchedIncludedPaths, setTouchedIncludedPaths] = useState(false);
   const [form, setForm] = useState<SitePayload>({
     name: "",

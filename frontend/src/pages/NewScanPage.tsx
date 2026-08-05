@@ -11,6 +11,7 @@ import { inputClass } from "../components/ui/styles";
 import type { ScopeConfig, SiteListItem } from "../types/scans";
 import { plural } from "../utils/format";
 import { normalizeStartingUrlInput, parseLineList } from "../utils/url";
+import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 const preferenceKey = "website-scanner.scan.preferences";
 
@@ -28,6 +29,7 @@ type Preferences = {
 };
 
 export function NewScanPage() {
+  useDocumentTitle("New Scan");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
