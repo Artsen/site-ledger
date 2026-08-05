@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { cancelScan, deleteScan, getScan, getScanDeletePreview, listErrors, listPages, listScanSeeds } from "../api/client";
+import { cancelScan, deleteScan, getScan, getScanDeletePreview, getWorkerHealth, listErrors, listJobs, listPages, listScanSeeds } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
 import { DefinitionList } from "../components/ui/DefinitionList";
@@ -13,6 +13,7 @@ import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { inputClass } from "../components/ui/styles";
 import { ScanGraphView } from "../features/graph/ScanGraphView";
+import type { Job, WorkerHealth } from "../types/jobs";
 import type { Page, Scan, ScanSeed, Snapshot } from "../types/scans";
 import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
 
@@ -32,6 +33,24 @@ export function ScanDetailPage() {
     retry: (failureCount, error) => (error instanceof Error && error.message.includes("not be found") ? false : failureCount < 2)
   });
   const isActiveScan = Boolean(scan.data && !isTerminalStatus(scan.data.status));
+  const jobs = useQuery({
+    queryKey: ["jobs", "scan", scanId],
+    queryFn: () => listJobs(`?scan_id=${encodeURIComponent(scanId)}&limit=1`),
+    enabled: Boolean(scan.data),
+    refetchInterval: (query) => {
+      const job = query.state.data?.items[0];
+      return job && !isTerminalStatus(job.status) ? 1500 : false;
+    },
+    placeholderData: (previous) => previous
+  });
+  const workerHealth = useQuery({
+    queryKey: ["worker-health"],
+    queryFn: getWorkerHealth,
+    enabled: Boolean(scan.data && (isActiveScan || jobs.data?.items[0] && !isTerminalStatus(jobs.data.items[0].status))),
+    refetchInterval: 5000,
+    placeholderData: (previous) => previous
+  });
+  const latestJob = jobs.data?.items[0];
 
   useEffect(() => {
     if (searchDraft === (searchParams.get("search") ?? "")) return;
@@ -129,6 +148,7 @@ export function ScanDetailPage() {
         <Metric label="Skipped" value={scan.data.skipped_count} />
       </div>
 
+      {latestJob && !isTerminalStatus(latestJob.status) ? <JobNotice job={latestJob} workerHealth={workerHealth.data} /> : null}
       {cancel.error ? <div className="mb-4"><ErrorBanner error={cancel.error} title="Could not cancel scan" /></div> : null}
       {remove.error ? <div className="mb-4"><ErrorBanner error={remove.error} title="Could not delete scan" /></div> : null}
 
@@ -138,6 +158,8 @@ export function ScanDetailPage() {
         {tab === "overview" ? (
           <Overview
             scan={scan.data}
+            job={latestJob}
+            workerHealth={workerHealth.data}
             pages={pages.data?.items ?? []}
             errors={errors.data ?? []}
             scanId={scanId}
@@ -186,6 +208,8 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 function Overview({
   scan,
+  job,
+  workerHealth,
   pages,
   errors,
   scanId,
@@ -195,6 +219,8 @@ function Overview({
   onDelete
 }: {
   scan: Scan;
+  job?: Job;
+  workerHealth?: WorkerHealth;
   pages: Page[];
   errors: Snapshot[];
   scanId: string;
@@ -234,6 +260,11 @@ function Overview({
               { label: "Starting URL", value: scan.starting_url, copyValue: scan.starting_url },
               { label: "Site", value: scan.website_property_name ? <Link to={`/sites/${scan.website_property_id}`} className="underline">{scan.website_property_name}</Link> : "Ad hoc" },
               { label: "Status", value: <StatusBadge status={scan.status} /> },
+              ...(job ? [
+                { label: "Job", value: <StatusBadge status={job.presentation_status} label={formatStatus(job.presentation_status)} /> },
+                { label: "Current operation", value: job.current_operation ?? job.progress_unit ?? "Not reported" },
+                { label: "Worker", value: job.worker_id ?? (workerHealth?.queued_work_has_worker === false ? "Waiting for worker" : "Not claimed yet") }
+              ] : []),
               { label: "Started", value: formatDate(scan.started_at) },
               { label: "Finished", value: formatDate(scan.finished_at) },
               { label: "Duration", value: formatDuration(scan.started_at, scan.finished_at ?? undefined) },
@@ -292,6 +323,31 @@ function Overview({
           <EmptyState title="No pages recorded" message="This scan did not store page snapshots." />
         )}
       </section>
+    </div>
+  );
+}
+
+function JobNotice({ job, workerHealth }: { job: Job; workerHealth?: WorkerHealth }) {
+  const waitingForWorker = job.presentation_status === "waiting_for_worker" || (job.status === "queued" && workerHealth?.queued_work_has_worker === false);
+  const cancelling = job.presentation_status === "cancelling";
+  const tone = waitingForWorker ? "border-amber-200 bg-amber-50 text-amber-950" : cancelling ? "border-red-200 bg-red-50 text-red-950" : "border-sky-200 bg-sky-50 text-sky-950";
+  const progress = job.progress_total && job.progress_current != null
+    ? `${job.progress_current} of ${job.progress_total} ${job.progress_unit ?? "items"}`
+    : job.progress_current != null
+      ? `${job.progress_current} ${job.progress_unit ?? "items"}`
+      : null;
+  return (
+    <div className={`mb-4 rounded-md border p-4 text-sm ${tone}`} aria-live="polite">
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusBadge status={job.presentation_status} label={formatStatus(job.presentation_status)} />
+        <span className="font-medium">
+          {waitingForWorker ? "Queued scan is waiting for a worker" : cancelling ? "Cancellation has been requested" : job.current_operation ?? "Scan job is active"}
+        </span>
+      </div>
+      <div className="mt-1">
+        {progress ? `${progress}. ` : ""}
+        {job.worker_id ? `Worker ${job.worker_id}` : waitingForWorker ? "Start the background worker to process queued work." : "The job has not been claimed yet."}
+      </div>
     </div>
   );
 }

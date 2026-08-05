@@ -1,5 +1,6 @@
 import type { InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, PageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
 import type { GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
+import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -59,6 +60,7 @@ export const createSource = (siteId: string, payload: Partial<UrlSource>) => req
 export const deleteSource = (siteId: string, sourceId: string) => request<{ deleted_source_id: number }>(`/api/sites/${siteId}/sources/${sourceId}`, { method: "DELETE" });
 export const refreshSource = (siteId: string, sourceId: string) => request<SourceRefresh>(`/api/sites/${siteId}/sources/${sourceId}/refresh`, { method: "POST" });
 export const discoverRobots = (siteId: string) => request<SourceRefresh>(`/api/sites/${siteId}/sources/discover-robots`, { method: "POST" });
+export const cancelSourceRefresh = (refreshId: string) => request<SourceRefresh>(`/api/source-refreshes/${refreshId}/cancel`, { method: "POST" });
 export const listSourceEntries = (siteId: string, sourceId: string, query = "") => request<UrlSourceEntryList>(`/api/sites/${siteId}/sources/${sourceId}/entries${query}`);
 export const addManualUrls = (siteId: string, urlsText: string) => request<ManualUrlBatchResult>(`/api/sites/${siteId}/manual-urls`, { method: "POST", body: JSON.stringify({ urls_text: urlsText }) });
 export const listInventory = (siteId: string, query = "") => request<InventoryList>(`/api/sites/${siteId}/inventory${query}`);
@@ -77,6 +79,9 @@ export const getInboundLinks = (snapshotId: string, query = "") => request<Inbou
 export const listScanSeeds = (scanId: string, query = "") => request<ScanSeedList>(`/api/scans/${scanId}/seeds${query}`);
 export const getScanGraph = (scanId: string, query = "") => request<GraphResponse>(`/api/scans/${scanId}/graph${query}`);
 export const getGraphEdgeOccurrences = (scanId: string, edgeId: string, query = "") => request<GraphEdgeOccurrenceList>(`/api/scans/${scanId}/graph/edges/${edgeId}/occurrences${query}`);
+export const listJobs = (query = "") => request<JobList>(`/api/jobs${query}`);
+export const getJob = (jobId: string) => request<Job>(`/api/jobs/${jobId}`);
+export const getWorkerHealth = () => request<WorkerHealth>("/api/jobs/worker-health");
 
 export async function getHtml(snapshotId: string): Promise<string> {
   const response = await fetch(`${API_BASE}/api/snapshots/${snapshotId}/html`);

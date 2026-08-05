@@ -41,11 +41,15 @@ const api = vi.hoisted(() => ({
   createSource: vi.fn(),
   deleteSource: vi.fn(),
   refreshSource: vi.fn(),
+  cancelSourceRefresh: vi.fn(),
   discoverRobots: vi.fn(),
   listSourceEntries: vi.fn(),
   addManualUrls: vi.fn(),
   listInventory: vi.fn(),
   listScanSeeds: vi.fn(),
+  listJobs: vi.fn(),
+  getJob: vi.fn(),
+  getWorkerHealth: vi.fn(),
   getScanGraph: vi.fn(),
   getGraphEdgeOccurrences: vi.fn()
 }));
@@ -148,11 +152,15 @@ beforeEach(() => {
   api.createSource.mockResolvedValue(sourceFixture);
   api.deleteSource.mockResolvedValue({ deleted_source_id: 4 });
   api.refreshSource.mockResolvedValue(refreshFixture);
+  api.cancelSourceRefresh.mockResolvedValue({ ...refreshFixture, status: "cancelled" });
   api.discoverRobots.mockResolvedValue(refreshFixture);
   api.listSourceEntries.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
   api.addManualUrls.mockResolvedValue({ source: sourceFixture, items: [], accepted_count: 1, rejected_count: 1, duplicate_count: 0 });
   api.listInventory.mockResolvedValue({ items: [inventoryFixture], total: 1, limit: 50, offset: 0 });
   api.listScanSeeds.mockResolvedValue({ items: [seedFixture], total: 1, limit: 50, offset: 0 });
+  api.listJobs.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  api.getJob.mockResolvedValue(jobFixture);
+  api.getWorkerHealth.mockResolvedValue(workerHealthFixture);
   api.getScanGraph.mockResolvedValue(graphFixture);
   api.getGraphEdgeOccurrences.mockResolvedValue(edgeOccurrenceFixture);
 });
@@ -817,6 +825,49 @@ const refreshFixture = {
   error_type: null,
   error_message: null,
   warnings_json: []
+};
+
+const jobFixture = {
+  id: 11,
+  job_type: "scan",
+  status: "completed",
+  presentation_status: "completed",
+  priority: 100,
+  scan_id: 1,
+  source_refresh_id: null,
+  website_property_id: null,
+  dedupe_key: "scan:1",
+  payload_json: { scan_id: 1 },
+  progress_version: 1,
+  progress_json: {},
+  current_operation: null,
+  progress_current: null,
+  progress_total: null,
+  progress_unit: null,
+  result_json: null,
+  created_at: "2026-07-30T01:00:00Z",
+  available_at: "2026-07-30T01:00:00Z",
+  claimed_at: null,
+  started_at: "2026-07-30T01:00:01Z",
+  heartbeat_at: null,
+  lease_expires_at: null,
+  finished_at: "2026-07-30T01:00:03Z",
+  worker_id: null,
+  attempt_count: 1,
+  max_attempts: 1,
+  cancellation_requested_at: null,
+  cancelled_at: null,
+  error_type: null,
+  error_message: null,
+  last_error_at: null
+};
+
+const workerHealthFixture = {
+  online_workers: 1,
+  total_concurrency: 1,
+  last_worker_heartbeat: "2026-07-30T01:00:00Z",
+  queued_work_has_worker: true,
+  offline_threshold_seconds: 20
 };
 
 const inventoryFixture = {

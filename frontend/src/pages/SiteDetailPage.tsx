@@ -4,12 +4,15 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import {
   addManualUrls,
+  cancelSourceRefresh,
   createSource,
   deleteSite,
   deleteSource,
   discoverRobots,
+  getWorkerHealth,
   getSite,
   listInventory,
+  listJobs,
   listSources,
   refreshSource,
   updateSite
@@ -22,8 +25,9 @@ import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { classificationLabel } from "../types/siteClassifications";
+import type { Job, WorkerHealth } from "../types/jobs";
 import type { InventoryItem, Site, UrlSource } from "../types/scans";
-import { formatDate, plural } from "../utils/format";
+import { formatDate, formatStatus, isTerminalStatus, plural } from "../utils/format";
 
 export function SiteDetailPage() {
   const { siteId = "" } = useParams();
@@ -147,6 +151,19 @@ function SourcesTab({ site }: { site: Site }) {
   const [sitemapUrl, setSitemapUrl] = useState("");
   const [manualUrls, setManualUrls] = useState("");
   const sources = useQuery({ queryKey: ["sources", String(site.id)], queryFn: () => listSources(String(site.id), "?active_state=all&limit=100") });
+  const sourceJobs = useQuery({
+    queryKey: ["jobs", "site-sources", String(site.id)],
+    queryFn: () => listJobs(`?website_property_id=${site.id}&job_type=source_refresh&limit=50`),
+    refetchInterval: (query) => query.state.data?.items.some((job) => !isTerminalStatus(job.status)) ? 1500 : false,
+    placeholderData: (previous) => previous
+  });
+  const workerHealth = useQuery({
+    queryKey: ["worker-health"],
+    queryFn: getWorkerHealth,
+    enabled: Boolean(sourceJobs.data?.items.some((job) => !isTerminalStatus(job.status))),
+    refetchInterval: 5000,
+    placeholderData: (previous) => previous
+  });
   const addSitemap = useMutation({
     mutationFn: () => createSource(String(site.id), { source_type: "sitemap", name: sitemapUrl, source_url: sitemapUrl, is_active: true, discovery_mode: "configured", settings_json: {} }),
     onSuccess: async () => {
@@ -159,11 +176,22 @@ function SourcesTab({ site }: { site: Site }) {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
       await queryClient.invalidateQueries({ queryKey: ["inventory", String(site.id)] });
+      await queryClient.invalidateQueries({ queryKey: ["jobs", "site-sources", String(site.id)] });
     }
   });
   const robots = useMutation({
     mutationFn: () => discoverRobots(String(site.id)),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
+      await queryClient.invalidateQueries({ queryKey: ["jobs", "site-sources", String(site.id)] });
+    }
+  });
+  const cancelRefresh = useMutation({
+    mutationFn: (job: Job) => cancelSourceRefresh(String(job.source_refresh_id)),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
+      await queryClient.invalidateQueries({ queryKey: ["jobs", "site-sources", String(site.id)] });
+    }
   });
   const manual = useMutation({
     mutationFn: () => addManualUrls(String(site.id), manualUrls),
@@ -185,7 +213,12 @@ function SourcesTab({ site }: { site: Site }) {
 
   return (
     <div className="space-y-5">
-      {addSitemap.error || refresh.error || robots.error || manual.error || remove.error ? <ErrorBanner error={addSitemap.error ?? refresh.error ?? robots.error ?? manual.error ?? remove.error} title="Source request failed" /> : null}
+      {addSitemap.error || refresh.error || robots.error || manual.error || remove.error || cancelRefresh.error ? <ErrorBanner error={addSitemap.error ?? refresh.error ?? robots.error ?? manual.error ?? remove.error ?? cancelRefresh.error} title="Source request failed" /> : null}
+      {sourceJobs.data?.items.some((job) => job.presentation_status === "waiting_for_worker") ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+          Source refresh work is queued and waiting for a background worker.
+        </div>
+      ) : null}
       <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-end">
           <form onSubmit={submitSitemap} className="flex flex-1 flex-col gap-2 md:flex-row md:items-end">
@@ -206,7 +239,7 @@ function SourcesTab({ site }: { site: Site }) {
       <section className="rounded-md border border-stone-200 bg-white shadow-sm">
         <h2 className="p-4 text-base font-semibold">Sources</h2>
         {sources.isLoading ? <LoadingBlock label="Loading sources..." /> : null}
-        {sources.data?.items.length ? <SourceTable sources={sources.data.items} onRefresh={(source) => refresh.mutate(source)} onDelete={(source) => {
+        {sources.data?.items.length ? <SourceTable sources={sources.data.items} jobs={sourceJobs.data?.items ?? []} workerHealth={workerHealth.data} onRefresh={(source) => refresh.mutate(source)} onCancel={(job) => cancelRefresh.mutate(job)} onDelete={(source) => {
           if (window.confirm(`Delete source ${source.name}? Scan history will be preserved.`)) remove.mutate(source);
         }} /> : !sources.isLoading ? <EmptyState title="No sources" message="Add a sitemap, discover from robots.txt, or paste manual URLs." /> : null}
       </section>
@@ -214,25 +247,56 @@ function SourcesTab({ site }: { site: Site }) {
   );
 }
 
-function SourceTable({ sources, onRefresh, onDelete }: { sources: UrlSource[]; onRefresh: (source: UrlSource) => void; onDelete: (source: UrlSource) => void }) {
+function SourceTable({
+  sources,
+  jobs,
+  workerHealth,
+  onRefresh,
+  onCancel,
+  onDelete
+}: {
+  sources: UrlSource[];
+  jobs: Job[];
+  workerHealth?: WorkerHealth;
+  onRefresh: (source: UrlSource) => void;
+  onCancel: (job: Job) => void;
+  onDelete: (source: UrlSource) => void;
+}) {
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Source", "Type", "Status", "URLs", "Actions"].map((header) => <th key={header} className="px-3 py-2">{header}</th>)}</tr></thead>
         <tbody>
-          {sources.map((source) => (
-            <tr key={source.id} className="border-t border-stone-100">
-              <td className="max-w-md px-3 py-2"><span className="block font-medium">{source.name}</span><span className="block truncate font-mono text-xs text-stone-500">{source.source_url ?? "Manual collection"}</span></td>
-              <td className="px-3 py-2 capitalize">{source.source_type}</td>
-              <td className="px-3 py-2"><StatusBadge status={source.last_refresh_status ?? "queued"} label={source.last_refresh_status ?? "Never refreshed"} /></td>
-              <td className="px-3 py-2">{source.current_entry_count}</td>
-              <td className="px-3 py-2"><div className="flex gap-2"><button type="button" className="underline" onClick={() => onRefresh(source)}>Refresh</button><button type="button" className="text-red-700 underline" onClick={() => onDelete(source)}>Delete</button></div></td>
-            </tr>
-          ))}
+          {sources.map((source) => {
+            const activeJob = activeSourceJob(jobs, source.id);
+            const displayStatus = activeJob?.presentation_status ?? source.last_refresh_status ?? "never_refreshed";
+            const waiting = activeJob?.presentation_status === "waiting_for_worker" || (activeJob?.status === "queued" && workerHealth?.queued_work_has_worker === false);
+            return (
+              <tr key={source.id} className="border-t border-stone-100">
+                <td className="max-w-md px-3 py-2"><span className="block font-medium">{source.name}</span><span className="block truncate font-mono text-xs text-stone-500">{source.source_url ?? "Manual collection"}</span></td>
+                <td className="px-3 py-2 capitalize">{source.source_type}</td>
+                <td className="px-3 py-2">
+                  <StatusBadge status={displayStatus} label={formatStatus(displayStatus)} />
+                  {activeJob?.current_operation ? <span className="mt-1 block text-xs text-stone-500">{activeJob.current_operation}</span> : null}
+                  {waiting ? <span className="mt-1 block text-xs text-amber-700">Waiting for worker</span> : null}
+                </td>
+                <td className="px-3 py-2">{source.current_entry_count}</td>
+                <td className="px-3 py-2"><div className="flex gap-2">
+                  <button type="button" className="underline disabled:text-stone-400" disabled={Boolean(activeJob)} onClick={() => onRefresh(source)}>Refresh</button>
+                  {activeJob?.source_refresh_id ? <button type="button" className="text-red-700 underline" onClick={() => onCancel(activeJob)}>Cancel</button> : null}
+                  <button type="button" className="text-red-700 underline" onClick={() => onDelete(source)}>Delete</button>
+                </div></td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
+}
+
+function activeSourceJob(jobs: Job[], sourceId: number) {
+  return jobs.find((job) => !isTerminalStatus(job.status) && Number(job.payload_json.source_id) === sourceId);
 }
 
 function InventoryTab({ site }: { site: Site }) {
