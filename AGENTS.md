@@ -1,713 +1,269 @@
 # Codex Instructions
 
-## Project
+## Project Identity
 
-This repository contains **Artsen Design Scanner**, the first implementation of a reusable website inventory and observability platform. The initial real-world target is the TechSmith website estate, but the crawler and scope model must remain generic so the application can later scan other sites.
+This repository contains **Site Ledger**.
 
-The long-term product may include page inventories, sitemaps, media and asset inventories, change history, GA4, Google Search Console, PageSpeed, international-site relationships, uptime monitoring, accessibility checks, deployment correlation, and AI-assisted investigation.
+- Repository: https://github.com/Artsen/site-ledger
+- Product tagline: A historical record of your website.
+- Repository slug: site-ledger
+- Python distribution: site-ledger-backend
+- Frontend package: site-ledger-frontend
 
-Do not attempt to build that entire product in the first pull request.
+Site Ledger is a local-first website intelligence platform that inventories Sites, preserves crawl
+evidence, and tracks Page observations over time. It is larger than a crawler: the crawler is one
+collection subsystem inside a persistent Site, Page, observation, source, graph, evidence, and
+Activity model.
 
-## Current milestone: PR 1, scoped page scanner
+Use Site Ledger in user-facing prose. Use site-ledger for repository and distribution slugs. Use
+site_ledger only when an underscore-based technical identifier is required. Do not rename the
+Python app package.
 
-Build one complete vertical slice that lets a user:
+## Product Vocabulary
 
-1. Enter a starting URL.
-2. Configure reusable crawl scope settings.
-3. Start a scan.
-4. Watch scan progress.
-5. See all discovered HTML pages.
-6. Inspect where each page link was discovered.
-7. Preserve the complete HTML response and parsed head metadata for each fetched page.
-8. Reopen completed scans after restarting the application.
+- **Site:** A saved website property with reusable scope and configuration. The internal model is
+  WebsiteProperty.
+- **Page:** A persistent normalized URL identity represented by WebResource.
+- **Observation:** One scan-specific ResourceSnapshot of a Page.
+- **Scan:** One bounded collection run that produces observations.
+- **Source:** A sitemap, robots-discovered sitemap, or manual URL source.
+- **Inventory:** Current URL candidates declared by Sources.
+- **Graph:** A scan-specific representation of observed Pages and stored links.
+- **Activity:** Durable background execution and worker status.
+- **Evidence:** Stored responses, metadata, links, redirects, source provenance, and reuse
+  provenance that support an observation.
 
-PR 1 handles pages only. It may encounter images, scripts, stylesheets, videos, fonts, documents, and iframes, but it must not inventory those resource types yet.
+Use Page instead of WebResource in product copy. Use Observation where Snapshot would be
+unnecessarily technical. Internal classes, API fields, routes, and developer documentation may use
+their exact technical names.
 
-## Required stack
+## Current Product Boundary
 
-Use this stack unless an existing implementation in the repository clearly establishes something else:
+Implemented capabilities include:
 
-- Backend: Python, FastAPI, SQLAlchemy 2, Alembic, SQLite, httpx, and lxml
-- Frontend: React, TypeScript, Vite, TanStack Query, and Tailwind CSS
-- Backend tests: pytest
-- Frontend tests: Vitest and Testing Library
-- End-to-end tests: Playwright
-- Python quality checks: Ruff and mypy
-- Frontend quality checks: ESLint and TypeScript type checking
+- Saved Sites and reusable scope.
+- Static HTML scans.
+- Durable background jobs.
+- Sitemap, robots-discovered sitemap, and manual URL Sources.
+- URL Inventory and scan-seed provenance.
+- Persistent Pages and Page observation history.
+- Conditional HTTP revalidation and parsed-result reuse.
+- Stored HTML evidence and parsed metadata.
+- Inbound and outgoing link provenance.
+- Scan-specific 2D and 3D topology graphs.
+- Scan, source, Site, and Activity lifecycle management.
 
-SQLite is the initial database, but persistence code must not depend on SQLite-only behavior when a normal SQLAlchemy solution exists. Keep the design portable to PostgreSQL.
+Browser-rendered observations, screenshots, asset inventory, complete comparisons, findings,
+accessibility and performance observations, analytics integrations, semantic analysis, and
+investigation workflow are future areas. Describe them as planned or designed to support, never as
+current behavior.
 
-The first crawler is a static HTTP crawler. Do not use browser rendering for PR 1.
+## Required Stack
 
-## Repository shape
+- Backend: Python, FastAPI, SQLAlchemy 2, Alembic, SQLite, HTTPX, and lxml.
+- Frontend: React, TypeScript, Vite, TanStack Query, and Tailwind CSS.
+- Backend tests: pytest.
+- Frontend tests: Vitest and Testing Library.
+- End-to-end tests: Playwright.
+- Python quality: Ruff and mypy.
+- Frontend quality: ESLint and TypeScript.
 
-Prefer this structure:
+SQLite is the initial database. Prefer normal portable SQLAlchemy solutions over SQLite-only
+behavior. Keep storage behind the existing content-store abstraction.
 
-```text
-backend/
-  app/
-    api/
-    crawler/
-    models/
-    schemas/
-    services/
-    storage/
-    config.py
-    database.py
-    main.py
-  alembic/
-  tests/
-  pyproject.toml
-frontend/
-  src/
-    api/
-    components/
-    features/scans/
-    pages/
-    styles/
-    types/
-  tests/
-  package.json
-data/
-  html/
-docs/
-```
+## Architecture Boundaries
 
-The `data/` directory and local database files must be ignored by Git.
+- crawler.url_normalizer owns URL normalization.
+- crawler.scope owns deterministic scope decisions.
+- crawler.security and crawler.safe_fetch own the SSRF and bounded-fetch boundary.
+- crawler.html_parser owns best-effort static HTML extraction.
+- crawler.static_crawler owns breadth-first collection and observation persistence.
+- storage.content_store owns exact compressed response evidence.
+- services.background_jobs owns queue, lease, heartbeat, progress, cancellation, and worker health.
+- services.job_handlers adapts jobs to domain execution.
+- services.site_* owns saved-Site behavior and queries.
+- services.source_* owns Sources, refresh, and Inventory.
+- services.scan_* owns scan inputs, queries, and deletion.
+- services.page_queries owns persistent Page catalogs and observation history.
+- services.cache_policy and services.parse_artifacts own conservative reuse.
+- services.graph_config owns graph capabilities and limits.
+- services.graph_queries owns scan-specific topology queries and aggregation.
+- app.api.routes exposes typed APIs.
 
-## Domain model
+Keep graph adapters and renderers separate. Keep network, parsing, normalization, scope,
+persistence, and storage concerns separate. Do not introduce speculative plugin systems or unused
+abstractions.
 
-Use generic resource-oriented names internally even though PR 1 exposes only pages.
+## Domain Stability
 
-### Scan
+Do not rename these models or their tables for branding:
 
-A scan stores:
+- WebsiteProperty
+- WebResource
+- ResourceSnapshot
+- ResourceOccurrence
+- ContentBlob
+- HtmlParseArtifact
+- Scan
+- BackgroundJob
+- UrlSource
 
-- Starting URL
-- Status
-- Complete scope configuration as JSON
-- Created, started, and finished timestamps
-- Counts for discovered, fetched, failed, and skipped pages
-- Stop reason
-- Fatal error message, when applicable
+WebResource is the persistent Page identity. ResourceSnapshot is one Page observation. Reused
+responses still create new observations and current-scan link occurrences.
 
-Supported statuses:
+Do not rename API paths, background job types, blob keys, migration IDs, stored directories, query
+parameters, database filenames, or local-storage keys solely for product language.
 
-- `queued`
-- `running`
-- `completed`
-- `completed_with_errors`
-- `failed`
-- `cancelled`
-- `interrupted`
+No Alembic migration should be added for a branding-only change. For all model changes, keep Alembic
+migrations synchronized with models and verify both upgrade and alembic check.
 
-On application startup, a scan left in `running` state must be changed to `interrupted`. PR 1 does not need scan resumption.
+## Compatibility Identifiers
 
-### WebResource
+The following legacy technical identifiers are intentionally retained:
 
-A stable normalized URL identity across scans.
+- SCANNER_ environment-variable prefix.
+- sqlite:///../data/scanner.db default database URL.
+- WebsiteScanner/0.1 default crawler user agent.
+- website-scanner.scan.preferences frontend local-storage key.
+- Historical migration names that contain scanner.
 
-Required fields include:
+Preserve these unless a dedicated compatibility migration is explicitly designed. A rename must
+never make existing local data appear missing or silently discard saved preferences.
 
-- Resource type
-- Normalized URL
-- Scheme
-- Host
-- Port
-- Path
-- Query
-- First seen
-- Last seen
+## Crawl Behavior
 
-For PR 1, the resource type is `page`.
+The crawler performs breadth-first HTTP GET traversal. It must:
 
-### ResourceSnapshot
-
-One observation of one resource during one scan.
-
-Store at least:
-
-- Scan and resource IDs
-- Requested URL
-- Final URL
-- HTTP status
-- Content type and encoding
-- Crawl depth
-- Fetch timestamp
-- Response time
-- Response headers
-- Full redirect chain
-- HTML blob reference
-- Raw HTML SHA-256
-- Head SHA-256
-- Page title
-- HTML language
-- Meta description
-- Meta robots
-- Canonical URL
-- Parsed head JSON
-- Fetch state
-- Categorized error type and message
-
-### ResourceOccurrence
-
-One resource reference found inside another resource.
-
-For every anchor occurrence, retain:
-
-- Source snapshot
-- Relation type, initially `page_link`
-- Raw `href`
-- Resolved absolute URL
-- Normalized target URL
-- Target resource ID when known
-- Anchor text
-- `title`
-- `aria-label`
-- `rel`
-- `target`
-- Compact DOM path or selector
-- In-scope boolean
-- Scope decision and exclusion reason
-- Discovery timestamp
-
-Do not collapse duplicate links into one record. Aggregation belongs in queries and the UI. Provenance is a first-class requirement.
-
-### ContentBlob
-
-Store full HTML through a content-addressed storage abstraction.
-
-Process:
-
-1. Keep the exact response bytes.
-2. Calculate SHA-256.
-3. Gzip-compress the content.
-4. Store it under a hash-derived path.
-5. Reuse an existing blob when the hash already exists.
-
-Store:
-
-- SHA-256
-- Storage key
-- Compression type
-- Content type
-- Encoding
-- Raw byte size
-- Stored byte size
-- Creation time
-
-Do not put large HTML bodies directly in the main snapshot table.
-
-The storage interface must make it possible to replace local disk storage with object storage later.
-
-## Crawl behavior
-
-Use breadth-first traversal.
-
-The crawler must:
-
-- Use `GET` requests only.
-- Never submit forms.
-- Never execute JavaScript.
-- Follow redirects while preserving the full redirect chain.
-- Re-evaluate scope after every redirect.
-- Record `nofollow` but still crawl an otherwise in-scope internal link.
-- Record `noindex` but still inventory the page.
-- Save partial results when individual pages fail.
+- Never submit forms or execute JavaScript.
+- Preserve redirect chains and re-evaluate scope after each redirect.
+- Validate each destination against SSRF protections.
+- Record nofollow and noindex without treating either as an automatic crawl exclusion.
+- Save partial observations when individual Pages fail.
 - Deduplicate fetches by normalized URL.
-- Preserve the raw discovered URL, normalized URL, requested URL, and final URL separately.
-- Respect configured page, depth, timeout, redirect, response-size, and concurrency limits.
-- Treat HTTP error statuses as fetch results, not crawler exceptions.
-- Record external and excluded links as occurrences without adding them to the crawl queue.
-- Ignore fragment-only links for crawling while retaining useful occurrence information.
-- Parse malformed HTML on a best-effort basis.
+- Keep raw discovered, normalized, requested, and final URLs distinct.
+- Enforce Page, depth, timeout, redirect, response-size, and delay limits.
+- Record external and excluded links without queueing them.
+- Preserve duplicate link occurrences and anchor provenance.
+- Treat HTTP error statuses as observations rather than crawler exceptions.
 
-A scan with page-level failures should normally finish as `completed_with_errors`, not `failed`.
+A scan with Page-level failures normally completes with errors rather than failing as a whole.
 
-## Scope configuration
+Conditional requests must use the same safe fetcher, redirect checks, scope checks, limits, and SSRF
+protections as full requests. Parse artifact identity includes content blob, parser version, parser
+configuration, and URL resolution base.
 
-Scope is data owned by each scan. Do not hardcode TechSmith rules into the crawl engine.
+Do not change crawler behavior as part of a product rebrand.
 
-Support these settings:
+## Security Requirements
 
-- Allowed host patterns
-- Excluded host patterns
-- Included path prefixes
-- Excluded path prefixes
-- Follow-subdomains behavior where useful
-- Maximum pages
-- Maximum depth
-- Respect robots.txt
-- Request timeout
-- Maximum HTML response size
-- Concurrent requests per host
-- Delay between requests
-- Custom user agent
-- Query parameters to drop
-
-Pattern matching must be deterministic and unit tested. Prefix matching is sufficient for paths in PR 1. Avoid adding regular-expression scope rules unless required by an actual failing use case.
-
-Every discovered URL must receive one explicit scope decision, such as:
-
-- `crawlable`
-- `already_seen`
-- `excluded_host`
-- `excluded_path`
-- `external`
-- `unsupported_scheme`
-- `invalid_url`
-- `robots_disallowed`
-
-### Default scope values
-
-When no allowed hosts are supplied, derive the exact starting URL hostname. Do not include sibling
-hosts or subdomains unless the user explicitly configures them.
-
-Default excluded paths:
-
-- `/wp-admin/`
-- `/wp-login.php`
-
-Default removable query parameters:
-
-- `utm_*`
-- `gclid`
-- `fbclid`
-- `msclkid`
-
-Do not discard all query strings. Preserve functional query parameters unless configured otherwise.
-
-## URL normalization
-
-Normalization must be isolated in its own module and covered by focused tests.
-
-Normalize where safe:
-
-- Hostname casing
-- Internationalized host representation
-- Default ports
-- Dot segments
-- Empty fragments
-- Configured tracking parameters
-- Retained query parameter ordering
-
-Do not automatically:
-
-- Lowercase paths
-- Remove every trailing slash
-- Treat HTTP and HTTPS as identical
-- Treat canonical URLs as resource identity
-- Remove all query parameters
-
-Canonical metadata is an observation and must not silently merge resources.
-
-## Parsed HTML and head data
-
-Preserve the complete HTML and also extract common fields for immediate filtering and display.
-
-Extract at least:
-
-- `<html lang>`
-- `<title>`
-- Meta description
-- Meta robots
-- Canonical URL
-- Character encoding
-- Viewport declaration
-- All meta tags in order
-- All head link elements in order
-- Open Graph metadata
-- Twitter metadata
-- JSON-LD script blocks
-- Ordered head representation
-
-Use both normalized columns for common fields and a generic JSON structure for complete head data.
-
-Stored HTML must never execute inside the dashboard. Display it as escaped source text. Raw HTML endpoints must return `text/plain` or a download attachment.
-
-## Error categories
-
-Use structured error types rather than one generic error string.
-
-Include at least:
-
-- `dns_error`
-- `connection_error`
-- `connection_timeout`
-- `read_timeout`
-- `tls_error`
-- `redirect_loop`
-- `too_many_redirects`
-- `response_too_large`
-- `invalid_url`
-- `parse_error`
-- `robots_disallowed`
-- `scope_excluded`
-- `unsafe_destination`
-- `unsupported_scheme`
-- `unsupported_content_type`
-
-HTTP statuses such as 404, 429, 500, and 503 are successful HTTP observations and should still create snapshots where possible.
-
-## Security requirements
-
-A crawler is an SSRF boundary. PR 1 must:
+Treat crawling and source refresh as SSRF boundaries:
 
 - Allow only HTTP and HTTPS.
-- Reject file, FTP, data, JavaScript, and other unsupported schemes.
 - Block loopback, link-local, and private network destinations by default.
-- Recheck resolved IP addresses after redirects.
-- Enforce redirect, timeout, response-size, page-count, and depth limits.
-- Never forward browser cookies or user credentials.
+- Recheck resolved destinations after redirects.
+- Never forward browser cookies or credentials.
+- Enforce timeout, redirect, response-size, Page, depth, and source-expansion limits.
+- Parse sitemap XML without networked DTD or entity loading.
+- Bound compressed-source decompression.
 - Never execute scanned HTML.
-- Prevent redirects from escaping the configured allowlist.
-- Use a descriptive crawler user agent.
+- Return stored HTML as escaped text or text/plain.
 
-Authenticated and private-network crawling are future features and must require explicit configuration when added.
+Authenticated and private-network crawling require explicit future design. Do not weaken these
+boundaries for local convenience.
 
-## API expectations
+## Persistence And Lifecycle
 
-Provide endpoints equivalent to:
+Exact HTML bytes are SHA-256 addressed, gzip-compressed, and deduplicated through the content store.
+Do not put large HTML bodies directly into observation rows.
 
-```text
-POST /api/scans
-GET  /api/scans
-GET  /api/scans/{scan_id}
-POST /api/scans/{scan_id}/cancel
-GET  /api/scans/{scan_id}/pages
-GET  /api/scans/{scan_id}/errors
-GET  /api/snapshots/{snapshot_id}
-GET  /api/snapshots/{snapshot_id}/links
-GET  /api/snapshots/{snapshot_id}/html
-GET  /api/resources/{resource_id}/occurrences
-```
-
-Use pagination and server-side filtering for page results. At minimum support search, status, host, path prefix, depth, error state, sorting, and pagination.
-
-An in-process asynchronous scan runner is acceptable for PR 1, but place it behind an interface so a worker queue can replace it later.
-
-Polling every one or two seconds is acceptable for scan progress. Do not add WebSockets unless there is a clear need.
-
-## UI expectations
-
-Create a clean, restrained interface inspired by the current ChatGPT layout without copying proprietary assets.
-
-PR 1 routes:
-
-- `/scans/new`
-- `/scans/:scanId`
-- `/scans/:scanId/pages/:snapshotId`
-
-Initial sidebar:
-
-- Product name
-- New Scan
-- Recent scans
-
-Do not fill the sidebar with nonfunctional future modules.
-
-The new-scan form should show:
-
-- Starting URL
-- Maximum pages
-- Maximum depth
-- Expandable advanced scope settings
-- Start button
-
-The live scan screen should show:
-
-- Status
-- Discovered count
-- Fetched count
-- Queue count
-- Error count
-- Recent or current pages
-- Cancel action
-
-Completed scan tabs:
-
-- Overview
-- Pages
-- Errors
-
-Page detail tabs:
-
-- Overview
-- Head
-- Links
-- HTML
-
-PR 3 extends this to:
-
-- `/scans` as the complete, server-paginated All Scans history route.
-- Page detail tabs named Outgoing links and Inbound links.
-- `GET /api/scans/history` for full scan history.
-- `GET /api/snapshots/{snapshot_id}/inbound-links` for same-scan direct inbound occurrences.
-- `GET /api/scans/{scan_id}/deletion-summary` and `DELETE /api/scans/{scan_id}` for terminal-only scan deletion.
-
-Inbound links are direct stored occurrences whose target resource matches the selected page resource
-inside the same scan. Do not infer inbound attribution through redirects unless a future PR adds a
-dependable final-resource identity model.
-
-Scan deletion must remain reference-aware: preserve shared HTML blobs, delete only unreferenced
-blob records and files after database cleanup commits, and remove `WebResource` rows only when no
-remaining snapshot or occurrence references them.
-
-PR 4 adds saved Sites through the internal `WebsiteProperty` model:
-
-- `/sites`, `/sites/new`, `/sites/{siteId}`, and `/sites/{siteId}/edit` are real frontend routes.
-- `POST /api/sites`, `GET /api/sites`, `GET /api/sites/{site_id}`, `PATCH /api/sites/{site_id}`,
-  `DELETE /api/sites/{site_id}`, `POST /api/sites/{site_id}/scans`, and
-  `GET /api/sites/{site_id}/scans` are the saved-site API surface.
-- `Scan.website_property_id` is optional. Ad hoc scans must keep working with `null`.
-- Saved-site scans copy the effective scope into the scan row. Updating a site must not mutate
-  existing scans.
-- Inactive sites remain inspectable, but cannot start scans and should not appear in the default
-  active-site selector.
-- Site deletion must be conservative: block deletion when scans exist, and never invoke scan
-  deletion as part of deleting a site.
-- Do not seed TechSmith data or hardcode TechSmith-specific logic in site models, APIs, services, or
-  crawler behavior.
-
-PR 6 adds URL sources and saved-site inventory:
-
-- Site detail includes Sources and Inventory tabs.
-- `UrlSource`, `SourceRefresh`, `UrlSourceEntry`, `ScanSeed`, and `ScanSeedOrigin` preserve source
-  configuration, refresh history, current URL inventory, and scan input provenance.
-- Supported source types are sitemap, robots.txt discovery, sitemap-index children, and manual URL
-  batches.
-- Sitemap and robots fetching must use the same SSRF, redirect, timeout, and response-size safety
-  boundaries as crawling.
-- Source refreshes may discover out-of-scope or invalid URLs, but those rows must remain reviewable
-  and must not be queued for crawling.
-- Saved-site scans may include current inventory entries as explicit scan seeds. Later source edits
-  must not rewrite an existing scan's seed provenance.
-- Source and scan deletion must preserve resources still referenced by snapshots, occurrences,
-  source entries, or scan seeds.
-- Do not treat source inventory as crawled page results. A URL in a source is an input candidate
-  until the crawler fetches it.
-
-PR 7 adds a scan-specific website topology graph:
-
-- The Graph tab belongs inside `/scans/{scanId}` via URL tab state. Do not add a global graph route
-  or a site-wide graph in this PR.
-- Graph nodes represent scan-specific page snapshots with IDs like `snapshot:{id}`. Optional
-  unfetched internal target nodes use `resource:{id}` and must remain visually and semantically
-  distinct.
-- Graph edges aggregate stored `page_link` occurrences from one source snapshot to one target
-  resource. Preserve duplicate occurrences through the paginated edge occurrence endpoint.
-- Graph queries must remain scan-specific. Do not use snapshots or link occurrences from another
-  scan when building nodes, edges, counts, or focused neighborhoods.
-- Keep topology, adapter, renderer, controls, inspectors, and export concerns separate. Do not let
-  force-graph or Three.js object types spread into API schemas or general app state.
-- Do not persist force-layout coordinates, camera positions, selection state, PNG exports, or
-  presentation settings.
-- Lazy-load graph renderer code. Keep the Three.js-backed 3D renderer out of the initial app
-  bundle.
-- The graph is read-only. It must not mutate scan results, snapshots, occurrences, source inventory,
-  or scan seeds.
-- Future semantic layouts, section graphs, and scan-comparison styling should reuse the graph API
-  and adapter boundaries; do not add embeddings, section tables, or comparison models as part of
-  topology work.
-
-PR 8 adds durable background jobs:
-
-- Scan creation and source refresh creation should persist a domain record and a `BackgroundJob`,
-  then return `202 Accepted`. Do not run crawls or remote source fetches inside the API request.
-- `BackgroundJob` is the execution record. `JobEvent` stores coarse lifecycle history.
-  `WorkerInstance` stores worker heartbeat and capacity for health display.
-- A job must have exactly one domain subject: either `scan_id` or `source_refresh_id`. Keep
-  `website_property_id` as filter/display metadata, not as a polymorphic subject.
-- Workers must claim jobs deterministically, write lease tokens, heartbeat while running, update
-  progress durably, and reject stale lease updates.
-- Cancellation is cooperative. Queued jobs can be cancelled immediately; running scans and source
-  refreshes must save partial results and move to `cancelled` when the handler observes the request.
-- Expired running leases must be recoverable after API or worker restarts. If the domain record is
-  terminal, reconcile the job to that state; otherwise mark both job and domain record
-  `interrupted`.
-- Deletion of scans, sources, and sites must reject active background jobs that could still mutate
-  the rows being deleted.
-- The worker queue owns execution state only. Do not move scan results, source inventory, graph
-  presentation settings, or renderer state into background job records.
-- The frontend should show queued, running, cancelling, interrupted, and waiting-for-worker states
-  using job and worker-health APIs.
-
-PR 9 hardens graph scalability:
-
-- `services.graph_config` is the authoritative graph configuration source. Do not duplicate graph
-  limits in routes, frontend controls, schemas, tests, or docs.
-- Frontend graph controls must consume `GET /api/graph/capabilities` for shared limits and supported
-  backend-owned filter capabilities.
-- Graph node filtering, ranking, exact available counts, and limiting should happen in SQL before
-  loading snapshot rows into Python.
-- Node and edge metrics should remain set-based. Do not add one query per node or one query per edge
-  patterns.
-- Edge occurrence pagination must not load the full occurrence collection to build a summary. Use a
-  SQL aggregate summary and a separate paginated row query.
-- Focus neighborhoods must validate scan ownership, expand in bounded batches per hop, avoid cycles,
-  and enforce configured hop/node/edge limits.
-- Keep graph data adaptation pure and renderer-independent. Keep 2D and 3D renderer imports lazy and
-  isolated from shared controls and adapters.
-- Document practical graph limits honestly; do not promise very large visible graphs unless covered
-  by deterministic fixtures and benchmarks.
-
-PR 10 adds persistent page history and conditional crawl reuse:
-
-- Treat `WebResource` as the persistent Page identity and `ResourceSnapshot` as one scan-specific
-  observation. Do not add a duplicate Page table unless a later PR needs page-owned attributes that
-  cannot live on the resource identity.
-- Preserve scan-specific evidence. Reused observations still need new snapshots and new current-scan
-  link occurrences with current scope decisions; do not point UI history at old scan occurrence rows
-  as if they were newly discovered.
-- Store parsed HTML artifacts by content blob, parser version, parser configuration, and URL
-  resolution base. Relative links and canonical URLs depend on the final URL base, so hash alone is
-  not a sufficient parse identity.
-- Conditional requests must go through the same safe fetcher, redirect validation, scope checks,
-  timeout limits, response-size limits, and SSRF protections as full crawl requests.
-- Reuse only when validators and cache metadata are compatible. `Cache-Control: no-store`,
-  unsupported `Vary`, missing local blobs, unsafe destinations, or redirects outside scope must fall
-  back to full fetch or a structured crawler error.
-- Store the retrieval HTTP status separately from the effective page HTTP status. A `304 Not
-  Modified` observation should remain queryable as an unchanged revalidation while still presenting
-  the effective prior page result.
-- The UI should expose saved-site page history and observation provenance without creating a global
-  page-history route. Saved-site Pages belong under the selected site.
-
-The page table should include requested URL, final URL, status, title, depth, content type, discovery source, inbound occurrence count, fetch duration, and error state.
-
-Favor clarity and density over decorative dashboard cards. The graph visualization is not part of PR 1.
-
-## Tests
-
-Do not consider the milestone complete without automated coverage.
-
-### Unit tests
-
-Cover:
-
-- Exact and wildcard host scope
-- Excluded hosts
-- Included and excluded paths
-- External and unsupported URLs
-- Redirects that leave scope
-- Fragment removal
-- Tracking parameter removal
-- Query ordering
-- Host normalization
-- Relative and protocol-relative URL resolution
-- Unicode URLs
-- Trailing-slash preservation
-- Anchor parsing
-- Empty and malformed href values
-- Canonical and metadata extraction
-- JSON-LD extraction
-- HTML hashing, compression, deduplication, and retrieval
-
-### Integration fixture site
-
-Create a deterministic local fixture site containing:
-
-- Relative and absolute links
-- Redirects
-- A 404
-- A 500
-- An external link
-- An excluded path
-- Duplicate link occurrences
-- Query parameters
-- Malformed HTML
-- A non-HTML response
-
-Verify the complete crawl result, including provenance and scope decisions.
-
-### End-to-end flow
-
-Test this user journey:
-
-1. Open the application.
-2. Enter the fixture-site URL.
-3. Configure scope.
-4. Start a scan.
-5. Wait for completion.
-6. Open page results.
-7. Select a page.
-8. View head metadata.
-9. View links and provenance.
-10. View escaped HTML.
-
-## Definition of done for PR 1
-
-The milestone is complete only when:
-
-- A scan can be created from the UI.
-- Scope is persisted with the scan.
-- Host and path rules work.
-- Internal HTML pages are recursively discovered.
-- External and excluded links are recorded but not crawled.
-- Normalized URLs are not fetched repeatedly.
-- Redirect chains are retained.
-- HTTP results and network errors are distinguished.
-- Every link occurrence retains source provenance and anchor context.
-- Full HTML is compressed and persisted.
-- Identical HTML content reuses a blob.
-- Parsed head data is persisted.
-- Scan progress is visible.
-- Results remain available after application restart.
-- Pages can be searched and filtered.
-- Page details expose overview, head, links, and raw source.
-- Stored HTML cannot execute in the dashboard.
-- Tests, linting, and type checks pass.
-- Setup and architecture are documented.
-
-## Explicit non-goals for PR 1
-
-Do not implement:
-
-- Browser-rendered crawling
-- Image, script, stylesheet, video, font, or document inventories
-- Screenshots
-- Scan-to-scan change comparison
-- GA4
-- Google Search Console
-- PageSpeed Insights or CrUX
-- Accessibility auditing
-- Scheduled scans
-- Uptime monitoring
-- WordPress, Pagely, RS, or WPML integrations
-- Authentication-protected crawling
-- Multi-user permissions
-- AI summaries or natural-language querying
-
-Keep interfaces extensible for these features, but do not create speculative implementations or unused abstractions.
-
-## Working rules for Codex
-
-- Read this file before planning or editing.
-- Inspect the repository before creating new structure.
-- Build the smallest complete vertical slice that satisfies the milestone.
-- Do not replace the required stack or introduce major dependencies without explaining the concrete need.
-- Prefer clear modules and typed boundaries over clever abstractions.
-- Do not create fake data, placeholder APIs, simulated scanners, or UI controls that do nothing.
-- Keep network, parsing, normalization, scope, persistence, and storage concerns separate.
-- Keep migrations synchronized with models.
-- Add tests with each behavior rather than postponing all tests until the end.
-- Run relevant tests, linting, and type checks after changes.
-- Fix failures caused by the change. Do not hide them by disabling checks.
-- Avoid unrelated refactors.
-- Update README and architecture documentation when commands or design decisions change.
-- Record any intentional deviation from this plan in the pull request description.
-- Never commit secrets, credentials, local databases, HTML capture data, build output, or dependency caches.
-
-## Pull request format
-
-The PR description should include:
-
-- Summary
-- User-visible behavior
-- Architecture and data-model notes
-- Security considerations
-- Tests run and results
-- Known limitations
-- Follow-up work explicitly excluded from the PR
-
-Prefer a focused PR over a large collection of partially implemented future features.
+Deletion is reference-aware. Preserve blobs and WebResource rows referenced by another observation,
+occurrence, source entry, or scan seed. Commit database cleanup before deleting physical blob files.
+Reject deletion while active background jobs can still mutate the target.
+
+Saved-site scans copy effective scope. Editing a Site must not mutate historical scans. Inventory is
+input provenance, not a replacement for scan observations.
+
+## Graph Rules
+
+The Graph is read-only and scan-specific. Nodes represent observations, with optional distinct
+unfetched Page boundary nodes. Edges aggregate stored page_link occurrences, while detailed
+occurrences remain duplicate-preserving and paginated.
+
+services.graph_config is authoritative for limits and capabilities. Filter, rank, aggregate, and
+limit in SQL before loading large object collections. Avoid one query per node or edge.
+
+Do not persist force-layout coordinates, camera state, selection, exports, or presentation settings.
+Keep 2D and 3D renderers lazy and isolated from shared graph state. Browser-rendered observations
+and semantic layouts are future features, not reasons to alter current topology semantics.
+
+## Frontend Rules
+
+Keep the dashboard restrained, dense, and operational. Reuse existing components and styling.
+Maintain visible focus states, sufficient contrast, meaningful document titles, accessible
+navigation labels, and non-canvas alternatives for graph exploration.
+
+Stored or scanned text must be rendered as escaped React text. Do not use dangerouslySetInnerHTML
+for captured content.
+
+Preserve URL-backed tab, filter, pagination, graph, and presentation state. Preserve the existing
+local-storage preference key unless a read-old/write-new migration is implemented.
+
+## Testing
+
+Add focused automated coverage with behavior changes.
+
+Backend coverage should include URL normalization, scope, safe redirects, response limits, HTML
+parsing, content storage, scan lifecycle, Sites, Sources, Inventory, jobs, graph queries, Page
+history, and reuse.
+
+Frontend coverage should include form validation, navigation, pagination, loading/error/empty
+states, Page and observation details, source workflow, worker states, graph controls, accessibility,
+and document titles. Playwright should keep major workflows reachable.
+
+Run relevant checks before completion:
+
+~~~powershell
+cd backend
+pytest
+ruff check .
+ruff format --check .
+mypy app
+alembic upgrade head
+alembic check
+~~~
+
+~~~powershell
+cd frontend
+npm run lint
+npm run typecheck
+npm run test
+npm run build
+npm run e2e
+~~~
+
+Do not disable checks or weaken tests to force passing results.
+
+## Working Rules
+
+- Read this file and inspect the repository before editing.
+- Prefer existing patterns and typed boundaries.
+- Make the smallest complete change that satisfies the request.
+- Avoid unrelated refactors and dependency upgrades.
+- Do not create fake data, placeholder APIs, or controls that do nothing.
+- Preserve database and local-data compatibility.
+- Update README and focused documentation when behavior or architecture changes.
+- Never commit secrets, credentials, local databases, captured HTML, build output, or dependency
+  caches.
+- Use the Artsen repository-local Git identity for commits in this repository.
+
+## Pull Request Format
+
+Pull requests should describe:
+
+- Summary.
+- User-visible behavior.
+- Architecture and data-model impact.
+- Compatibility and security considerations.
+- Tests and checks run.
+- Known limitations.
+- Explicitly excluded follow-up work.

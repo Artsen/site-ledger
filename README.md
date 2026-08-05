@@ -1,61 +1,145 @@
-# Website Scanner
+# Site Ledger
 
-Website Scanner is a scoped website page inventory tool. PR 1 implements a static HTML crawler that stores page snapshots, link provenance, parsed head metadata, and compressed HTML blobs.
+**A historical record of your website.**
+
+Site Ledger is a local-first website intelligence platform that records websites as structured
+historical datasets. It inventories Pages, preserves scan observations and link provenance, and
+keeps the stored evidence needed to understand what exists and how the recorded state evolves over
+time.
+
+It is useful for developers, site owners, content teams, and investigators who need a durable,
+inspectable record rather than a disposable crawl report. Persistent Page identities connect
+observations from separate scans without erasing the evidence captured by each scan.
+
+## What It Currently Does
+
+- Saves Sites with reusable scope and user-defined classification labels.
+- Runs bounded static HTML scans through durable background jobs.
+- Accepts sitemap, robots-discovered sitemap, and manual URL Sources.
+- Maintains a current URL Inventory with source provenance.
+- Preserves persistent Pages and scan-specific observation history.
+- Stores exact HTML responses as compressed, content-addressed evidence.
+- Records page metadata, redirect chains, errors, and inbound/outgoing link provenance.
+- Uses conditional HTTP revalidation and deterministic parsed-result reuse when safe.
+- Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
+- Supports scan, source, Site, and background Activity lifecycle management.
+
+Site Ledger does not currently perform browser-rendered crawling, complete website change
+detection, visual regression, accessibility or performance audits, analytics correlation, or AI
+findings.
+
+## Core Product Model
+
+- **Site:** A saved website property with reusable scope and configuration. The internal model is
+  WebsiteProperty.
+- **Page:** A persistent normalized URL identity represented internally by WebResource.
+- **Observation:** A scan-specific ResourceSnapshot of a Page.
+- **Scan:** One bounded collection run that produces observations.
+- **Source:** A sitemap, robots-discovered sitemap, or manual URL source.
+- **Inventory:** Current URL candidates declared by Sources. Inventory entries are inputs, not
+  observations.
+- **Graph:** A scan-specific representation of observed Pages and links.
+- **Activity:** Durable background execution and worker status.
+
+See [Product vision](docs/product-vision.md) for the broader model and roadmap.
+
+## Architecture Overview
+
+The backend uses FastAPI, SQLAlchemy 2, Alembic, SQLite, HTTPX, and lxml. A standalone worker claims
+durable database-backed jobs and invokes the crawler or source-refresh services. Exact response
+bytes are gzip-compressed behind a content-store abstraction.
+
+The frontend uses React, TypeScript, Vite, TanStack Query, Tailwind CSS, Vitest, Testing Library,
+and Playwright. Graph rendering is lazy-loaded so the Three.js-backed 3D renderer stays outside the
+initial application bundle.
+
+The crawler is a static HTTP subsystem. It performs breadth-first GET traversal, validates each
+redirect against scope and SSRF protections, enforces response-size and request limits, and saves
+partial evidence when individual Pages fail.
+
+Detailed boundaries are documented in [Architecture](docs/architecture.md).
 
 ## Local Setup
 
-Backend:
+The tested setup uses Windows PowerShell and Node.js 20.19.0 or newer.
 
-```powershell
+~~~powershell
+git clone https://github.com/Artsen/site-ledger.git
+cd site-ledger
+
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 alembic upgrade head
+~~~
+
+Install the frontend dependencies in a separate terminal:
+
+~~~powershell
+cd frontend
+npm install
+~~~
+
+Runtime databases and captured HTML are written under data/ and ignored by Git.
+
+## Running Locally
+
+Run the API:
+
+~~~powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload
-```
+~~~
 
-Worker:
+Run the worker in a second terminal:
 
-```powershell
+~~~powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
 python -m app.worker
-```
+~~~
 
-Frontend:
+Run the frontend in a third terminal:
 
-```powershell
+~~~powershell
 cd frontend
-npm install
 npm run dev
-```
+~~~
 
-The API defaults to `http://127.0.0.1:8000`; the Vite app defaults to `http://127.0.0.1:5173`.
-The frontend toolchain expects Node.js `20.19.0` or newer. Scans and URL source refreshes are queued
-durably by the API; keep the worker running to process queued work.
+The API defaults to http://127.0.0.1:8000 and the frontend defaults to
+http://127.0.0.1:5173. Scans and source refreshes remain queued when no worker is online.
 
-## Scanner Behavior
+## Data Storage And Privacy
 
-New scans default to the exact hostname of the starting URL. If a scan starts at
-`https://www.example.com/`, the default scope includes `www.example.com` and does not include
-`example.com`, `blog.example.com`, or other sibling/subdomain hosts unless the user explicitly
-adds allowed host patterns or enables subdomain following.
+Site Ledger is local-first. SQLite data, worker state, and captured HTML stay in the local data
+directory unless the operator deliberately moves or exports them. Stored HTML is displayed as
+escaped source text and is never executed by the dashboard. Graph PNG exports are generated in the
+browser.
 
-Redirects are handled manually. Each redirect destination is resolved, normalized, checked against
-scan scope, and validated by SSRF destination protection before the next GET request is sent.
+Content blobs are addressed by SHA-256 and compressed with gzip. Identical response bodies share a
+blob record, while every scan retains its own Page observation and link provenance. Deletion is
+reference-aware so shared evidence remains available to other scans.
 
-Response-size limits are enforced while streaming. Oversized responses are stopped before they are
-stored and are recorded as `response_too_large`.
+## Security Boundaries
 
-Robots.txt enforcement and concurrent crawling are deferred inside the static crawler. The worker
-can run more than one background job process-wide, but each crawl still performs a sequential
-request loop with an optional delay between requests. TechSmith-specific saved-site configuration
-belongs to a future PR; no site-specific host set is hardcoded in PR 1.
+The crawler is an SSRF boundary:
+
+- Only HTTP and HTTPS destinations are accepted.
+- Loopback, link-local, and private network destinations are blocked by default.
+- Redirect destinations are revalidated before each request.
+- Cookies and user credentials are not forwarded.
+- Request timeout, redirect, response-size, Page, and depth limits are enforced.
+- Scanned HTML is parsed as data and never executed in the application.
+
+Authenticated crawling and private-network crawling are not currently supported.
 
 ## Quality Checks
 
-```powershell
+Backend:
+
+~~~powershell
 cd backend
 pytest
 ruff check .
@@ -63,187 +147,47 @@ ruff format --check .
 mypy app
 alembic upgrade head
 alembic check
-```
+~~~
 
-```powershell
+Frontend:
+
+~~~powershell
 cd frontend
 npm run lint
 npm run typecheck
 npm run test
 npm run build
 npm run e2e
-```
+npm audit --omit=dev
+~~~
 
-The current Playwright test verifies the frontend route and scan form behavior. The deterministic
-crawl workflow is covered by backend integration tests using an HTTPX test transport; full
-frontend/backend/fixture orchestration remains a follow-up for PR 1 hardening.
+The Playwright workflow uses mocked API responses. Deterministic crawler behavior, redirect safety,
+storage, graph queries, background jobs, Page history, and reuse are covered by backend tests.
 
-Runtime databases and captured HTML are written under `data/` and ignored by Git.
+## Documentation
 
-## Scan Workflow UI
+- [Product vision](docs/product-vision.md)
+- [Architecture](docs/architecture.md)
+- [Background jobs](docs/background-jobs.md)
+- [Website graph](docs/website-graph.md)
+- [Graph performance](docs/graph-performance.md)
+- [Page history and reuse](docs/page-history-and-reuse.md)
 
-The new scan form accepts a bare hostname such as `example.com` and converts it to
-`https://example.com/` before submission. Client-side validation rejects missing URLs, invalid
-URLs, unsupported schemes, hostless URLs, and invalid numeric limits before the API request is sent.
-Backend validation remains the source of truth.
+## Current Limitations
 
-Advanced scope lists are edited as raw textarea content and parsed only when the scan is created.
-Use one value per line; blank lines are ignored. Non-sensitive preferences are remembered in local
-storage for maximum pages, maximum depth, and whether the advanced settings section was expanded.
-Host/path/query scope values are not reused automatically across unrelated scans.
+- The crawler observes static HTTP responses and does not render JavaScript.
+- Robots.txt enforcement and concurrent requests inside one crawl remain deferred.
+- Each crawl currently uses a sequential request loop with an optional delay.
+- Graph hard caps are 3,000 nodes and 10,000 edges; filters or focused neighborhoods are preferable
+  for dense scans.
+- The Three.js renderer is a large lazy chunk and triggers Vite's chunk-size warning.
+- SQLite can become a bottleneck for large aggregate graph queries and concurrent local work.
+- Playwright does not currently orchestrate a real API, worker, and fixture website end to end.
+- React Router production audit advisories remain an existing dependency concern.
 
-The scan detail route uses URL state for tabs and page filters. Supported page filter parameters
-include `tab`, `search`, `status`, `host`, `path_prefix`, `min_depth`, `max_depth`, `error_state`,
-`sort`, `direction`, `limit`, and `offset`. Search is debounced and sent to the existing server-side
-page API rather than filtering an incomplete client-side result set.
+## Roadmap
 
-Stored HTML is always displayed as escaped text in a monospace source viewer. The dashboard does not
-execute stored HTML and does not use `dangerouslySetInnerHTML`; the raw HTML API continues to return
-`text/plain`.
-
-The Playwright workflow test uses mocked scanner API responses to cover frontend UX behavior. It is
-not a complete real-crawler integration test; deterministic crawler behavior remains covered by the
-backend integration tests.
-
-## Scan History, Inbound Links, and Deletion
-
-The sidebar shows recent scans, and `/scans` provides server-side paginated scan history for older
-runs. The All Scans page supports search by starting URL, status filtering, sorting, rerunning a scan
-with its previous scope, and deleting terminal scans after reviewing a confirmation summary.
-
-Scan creation returns after the scan and its `BackgroundJob` are committed. The scan detail page
-polls both the scan and latest job so queued, running, cancelling, and waiting-for-worker states are
-visible after API restarts. Run `python -m app.worker --recover-only` to reconcile expired leases
-without claiming new work.
-
-Page results show scan-specific inbound link counts. Counts are limited to occurrences whose source
-page snapshot belongs to the same scan, so historical scans do not inflate each other. Total inbound
-occurrences count duplicate links individually; unique source pages count distinct linking snapshots.
-
-The page detail view has separate Outgoing links and Inbound links tabs. Inbound links are direct
-occurrences whose normalized target resource matches the selected page resource in the same scan.
-Redirect-mediated attribution is not inferred in PR 3; redirect evidence remains available on the
-snapshot overview. The inbound table preserves duplicate occurrences and exposes source page,
-status, crawl depth, anchor context, raw href, rel, scope decision, DOM location, and discovery time.
-
-Deletion is allowed only for terminal scans with no active job: `completed`,
-`completed_with_errors`, `failed`, `cancelled`, and `interrupted`. Queued or running scans return
-`409 Conflict`; active background jobs are checked before deletion.
-`GET /api/scans/{scan_id}/deletion-summary` and
-`GET /api/scans/{scan_id}/delete-preview` return the same typed summary. `DELETE /api/scans/{scan_id}`
-returns a typed result.
-
-Deleting a scan removes its snapshots, source link occurrences, unreferenced content blobs, and web
-resources no longer referenced by snapshots or remaining occurrences. HTML blobs are deleted through
-the content-store abstraction only after database cleanup commits. Shared blobs stay available for
-other scans. If a blob file is already missing or cannot be deleted after commit, the scan deletion
-still succeeds and returns a cleanup warning for later maintenance.
-
-## Saved Sites
-
-Sites are saved website properties above individual scans. A site stores a name, base URL,
-description, group, locale, platform, ownership, active state, and reusable scan scope configuration.
-Group, platform, and ownership are user-defined labels, so teams can add their own organization
-terms without a code change.
-
-Saved site scope uses the same shape as scan scope. When a scan starts from a site, the effective
-scope is copied into the scan row with `website_property_id`. Later edits to the site do not rewrite
-historical scan scope, and scan-specific overrides do not mutate the saved site. Ad hoc scans still
-work with no site relationship.
-
-`/sites` lists saved sites with server-side search, filters, sorting, and pagination. Site detail
-shows saved metadata, saved scope, latest scan, recent scans, and total scan count. Inactive sites
-remain inspectable and retain scan history, but they are excluded from the default saved-site scan
-selector and cannot start new scans.
-
-Site deletion is conservative. A site with scans returns `409 Conflict` and must keep its scan
-history intact. A site with no scans can be deleted permanently. Deleting a scan associated with a
-site leaves the site record intact and updates site aggregates on the next query.
-
-No TechSmith sites are seeded automatically. TechSmith-like records can be created manually for local
-testing, but core models, APIs, and crawler behavior remain generic.
-
-## URL Sources and Inventory
-
-Saved sites can now own reusable URL sources. PR 6 supports sitemap sources, robots.txt sitemap
-discovery, and manual URL batches. Source refreshes fetch with the same SSRF destination checks,
-redirect validation, timeout limits, and response-size limits used by crawling. Sitemap XML is parsed
-without networked DTD/entity loading, and `.gz` sitemap responses are decompressed with a bounded
-limit before parsing.
-
-The Sources tab on a site lets users add a sitemap URL, discover sitemap directives from
-`/robots.txt`, refresh a source, delete a source, or paste manual URLs one per line. The Inventory
-tab groups current source entries by normalized URL and shows their source provenance, scope
-decision, validation state, and whether the URL has been seen by scans. Out-of-scope and invalid
-source entries are preserved for review but are not queued for crawling.
-
-When starting a scan from a saved site, users can include the current URL inventory. The scan stores
-explicit `ScanSeed` rows with `ScanSeedOrigin` provenance, so later source edits do not rewrite the
-inputs used by an existing scan. Inventory seeds respect scope and page limits before being queued;
-the crawler still deduplicates fetched resources by normalized URL.
-
-Deleting a URL source removes its source entries and refresh history. Resource cleanup remains
-reference-aware: resources still referenced by scans, link occurrences, source entries, or scan seeds
-are preserved. Deleting a scan removes its scan seeds and seed origins without deleting the saved
-site or source configuration.
-
-Source refreshes now enqueue durable `source_refresh` jobs and return `202 Accepted`. The Sources
-tab shows queued, running, cancelling, failed, completed, and waiting-for-worker states. Active
-source refreshes can be cancelled cooperatively and block source deletion until they are terminal.
-
-Current npm production audit status: `npm audit --omit=dev` reports React Router advisories in the
-available registry ranges for both the existing v6 line and npm's suggested v7 targets. The
-application does not use React Router SSR/RSC features, but the audit remains a known dependency
-advisory until the package publishes or resolves a non-vulnerable compatible target.
-
-## Page History and Crawl Reuse
-
-Saved-site pages are persistent URL identities backed by `WebResource` rows. Scan-specific page
-observations remain `ResourceSnapshot` rows, so the same normalized page can be reviewed across
-multiple saved-site scans without losing per-scan evidence. Site detail includes a Pages tab, and
-`/sites/{site_id}/pages/{resource_id}` shows observation history with links back to the exact scan
-snapshot.
-
-HTML parse results are stored as reusable parse artifacts keyed by content blob, parser version,
-parser configuration, and final URL resolution base. If two observations have the same HTML hash and
-base URL, the scanner can reuse parsed head metadata and anchor extraction while still creating fresh
-snapshot and link-occurrence rows for the current scan.
-
-Repeat scans can send conditional GET headers from the latest compatible prior observation. A `304
-Not Modified` response creates a new snapshot with the previous effective HTTP status, previous HTML
-blob, previous parse artifact, and retrieval metadata that records the actual `304`. The crawler only
-uses this path for in-scope HTTP/HTTPS pages with safe cache validators and a local content blob that
-still exists.
-
-The new scan form exposes two repeat-scan options: HTTP revalidation and parsed-result reuse. Turning
-off HTTP revalidation forces full content downloads. Turning off parsed-result reuse forces a fresh
-parse pass, while the persisted artifact identity still prevents duplicate artifact rows for the same
-hash/version/base combination.
-
-## Website Topology Graph
-
-Scan detail includes a Graph tab at `/scans/{scan_id}?tab=graph`. The graph is read-only and is
-derived from the selected scan's page snapshots and stored page-link occurrences. Page snapshots are
-nodes; repeated links from the same source page to the same target page are aggregated into one
-directed edge with occurrence counts and sample anchor text. Edge occurrence details are loaded
-through a separate paginated API only after an edge is selected.
-
-Graph filters and display controls are stored in URL parameters. Users can filter by host, path,
-depth, status, errors, connectivity thresholds, self-links, and optional unfetched internal pages.
-Display controls include 2D/3D mode, node sizing, node categorization, labels, arrows, edge width,
-background, presentation mode, and PNG export. Search and the node/edge browser panels provide an
-accessible alternative to canvas-only exploration. Shared graph defaults and hard limits are exposed
-through `GET /api/graph/capabilities`, so frontend controls do not duplicate backend constants.
-
-The graph is bounded by deterministic server-side limits. The default graph returns up to 100 nodes
-and 250 edges; hard caps are 3,000 nodes and 10,000 edges. The API prioritizes the starting page,
-then shallow crawl depth, stronger connectivity, URL, and snapshot ID. Focused neighborhood mode can
-load one to three hops around a selected snapshot. Candidate node filtering and limiting happen in
-SQL before snapshot rows are loaded, and edge occurrence pages no longer load every duplicate
-occurrence merely to calculate the edge summary.
-
-The 2D and 3D graph renderers are lazy-loaded. The production build currently emits separate graph
-chunks for the 2D renderer and the Three.js-backed 3D renderer; the 3D chunk is large enough to
-trigger Vite's chunk-size warning, so it stays isolated from the initial application bundle. See
-`docs/graph-performance.md` for current measurements and practical limits.
-
+Future direction is designed to support browser-rendered observations, screenshots, asset
+inventories, deterministic scan and environment comparisons, findings, accessibility and
+performance observations, analytics integrations, semantic analysis, and investigation workflow.
+These capabilities are planned areas, not current product claims.

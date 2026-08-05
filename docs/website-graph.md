@@ -1,7 +1,7 @@
-# Website Graph
+# Site Ledger Website Graph
 
-The website graph is a read-only topology view for one scan. It visualizes pages already captured by
-the static crawler and links already stored as occurrences.
+The Site Ledger website graph is a read-only topology view for one scan. It visualizes Pages already
+captured by the static crawler and links already stored as occurrences.
 
 ## Architecture
 
@@ -134,8 +134,8 @@ thousands of visible nodes.
 
 ## Future Layouts
 
-Future semantic layouts can add page text extraction, embeddings, projection coordinates, topic
+Future semantic layouts may add Page text extraction, embeddings, projection coordinates, topic
 clusters, or similarity edges without changing current topology semantics. Future exploded page
 section graphs can add section node kinds and containment edges. Future scan comparison can decorate
 nodes and edges as added, removed, changed, or status-changed. None of those persistence models or
-algorithms are implemented in PR 7.
+algorithms are currently implemented.
