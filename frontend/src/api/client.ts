@@ -1,4 +1,4 @@
-import type { InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
+import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import { errorFromResponse } from "../utils/errors";
@@ -69,6 +69,22 @@ export const listInventory = (siteId: string, query = "") => request<InventoryLi
 export const listSitePages = (siteId: string, query = "") => request<PersistentPageList>(`/api/sites/${siteId}/pages${query}`);
 export const getSitePage = (siteId: string, resourceId: string) => request<PersistentPageDetail>(`/api/sites/${siteId}/pages/${resourceId}`);
 export const listPageObservations = (siteId: string, resourceId: string, query = "") => request<PageObservationList>(`/api/sites/${siteId}/pages/${resourceId}/observations${query}`);
+export const updatePageMetadata = (siteId: string, resourceId: string, payload: { owner_label?: string | null; workflow_status?: string; category_ids?: number[] }) => request<PersistentPageDetail>(`/api/sites/${siteId}/pages/${resourceId}/metadata`, { method: "PATCH", body: JSON.stringify(payload) });
+export const listPageCategories = (siteId: string, query = "") => request<PageCategoryList>(`/api/sites/${siteId}/page-categories${query}`);
+export const createPageCategory = (siteId: string, payload: { name: string; description?: string | null; color_key: string; sort_order?: number }) => request<PageCategory>(`/api/sites/${siteId}/page-categories`, { method: "POST", body: JSON.stringify(payload) });
+export const updatePageCategory = (siteId: string, categoryId: number, payload: Partial<Pick<PageCategory, "name" | "description" | "color_key" | "sort_order" | "is_active">>) => request<PageCategory>(`/api/sites/${siteId}/page-categories/${categoryId}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const deletePageCategory = (siteId: string, categoryId: number) => request<{ deleted_category_id: number }>(`/api/sites/${siteId}/page-categories/${categoryId}`, { method: "DELETE" });
+export const bulkPageCategories = (siteId: string, payload: { resource_ids: number[]; add_category_ids: number[]; remove_category_ids: number[] }) => request<BulkMutationResult>(`/api/sites/${siteId}/pages/bulk-categories`, { method: "POST", body: JSON.stringify(payload) });
+export const bulkPageMetadata = (siteId: string, payload: { resource_ids: number[]; owner_label?: string | null; workflow_status?: string }) => request<BulkMutationResult>(`/api/sites/${siteId}/pages/bulk-metadata`, { method: "POST", body: JSON.stringify(payload) });
+
+export const listSiteNotes = (siteId: string, query = "") => request<NoteList>(`/api/sites/${siteId}/notes${query}`);
+export const createSiteNote = (siteId: string, body: string, isPinned = false) => request<Note>(`/api/sites/${siteId}/notes`, { method: "POST", body: JSON.stringify({ body, is_pinned: isPinned }) });
+export const listScanNotes = (scanId: string, query = "") => request<NoteList>(`/api/scans/${scanId}/notes${query}`);
+export const createScanNote = (scanId: string, body: string, isPinned = false) => request<Note>(`/api/scans/${scanId}/notes`, { method: "POST", body: JSON.stringify({ body, is_pinned: isPinned }) });
+export const listPageNotes = (siteId: string, resourceId: string, query = "") => request<NoteList>(`/api/sites/${siteId}/pages/${resourceId}/notes${query}`);
+export const createPageNote = (siteId: string, resourceId: string, body: string, isPinned = false) => request<Note>(`/api/sites/${siteId}/pages/${resourceId}/notes`, { method: "POST", body: JSON.stringify({ body, is_pinned: isPinned }) });
+export const updateNote = (noteId: number, payload: { body?: string; is_pinned?: boolean }) => request<Note>(`/api/notes/${noteId}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const deleteNote = (noteId: number) => request<{ deleted_note_id: number }>(`/api/notes/${noteId}`, { method: "DELETE" });
 
 export const listScans = () => request<Scan[]>("/api/scans");
 export const listScanHistory = (query = "") => request<ScanHistory>(`/api/scans/history${query}`);
@@ -80,6 +96,7 @@ export const listPages = (scanId: string, query = "") => request<PageList>(`/api
 export const listErrors = (scanId: string) => request<Snapshot[]>(`/api/scans/${scanId}/errors`);
 export const getSnapshot = (snapshotId: string) => request<Snapshot>(`/api/snapshots/${snapshotId}`);
 export const getLinks = (snapshotId: string) => request<LinkOccurrence[]>(`/api/snapshots/${snapshotId}/links`);
+export const getOutgoingLinks = (snapshotId: string, query = "") => request<OutgoingLinkList>(`/api/snapshots/${snapshotId}/outgoing-links${query}`);
 export const getInboundLinks = (snapshotId: string, query = "") => request<InboundLinkList>(`/api/snapshots/${snapshotId}/inbound-links${query}`);
 export const listScanSeeds = (scanId: string, query = "") => request<ScanSeedList>(`/api/scans/${scanId}/seeds${query}`);
 export const getScanGraph = (scanId: string, query = "") => request<GraphResponse>(`/api/scans/${scanId}/graph${query}`);

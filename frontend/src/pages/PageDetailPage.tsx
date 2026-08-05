@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { getHtml, getInboundLinks, getLinks, getSnapshot } from "../api/client";
+import { getHtml, getInboundLinks, getLinks, getScan, getSnapshot } from "../api/client";
+import { LinkRoleBadge } from "../components/PageOrganization";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
 import { DefinitionList } from "../components/ui/DefinitionList";
@@ -22,6 +23,7 @@ export function PageDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get("tab") ?? "overview";
   const snapshot = useQuery({ queryKey: ["snapshot", snapshotId], queryFn: () => getSnapshot(snapshotId) });
+  const scan = useQuery({ queryKey: ["scan", scanId], queryFn: () => getScan(scanId) });
   useDocumentTitle(snapshot.data?.page_title ?? "Page");
   const links = useQuery({ queryKey: ["links", snapshotId], queryFn: () => getLinks(snapshotId), enabled: tab === "links" });
   const inboundQuery = useMemo(() => buildInboundQuery(searchParams), [searchParams]);
@@ -51,9 +53,7 @@ export function PageDetailPage() {
             <h1 className="truncate text-xl font-semibold text-stone-950">{snapshot.data.page_title ?? snapshot.data.requested_url}</h1>
             <div className="mt-2 min-w-0"><UrlText value={snapshot.data.final_url ?? snapshot.data.requested_url} secondary /></div>
           </div>
-          <Link to={`/scans/${scanId}?tab=pages`} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">
-            Back to page results
-          </Link>
+          <div className="flex gap-2">{scan.data?.website_property_id ? <Link to={`/sites/${scan.data.website_property_id}/pages/${snapshot.data.resource_id}`} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium">Open persistent Page</Link> : null}<Link to={`/scans/${scanId}?tab=pages`} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">Back to page results</Link></div>
         </div>
       </div>
 
@@ -106,6 +106,7 @@ function InboundLinksView({
           <input aria-label="Inbound scope decision" value={searchParams.get("scope_decision") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "scope_decision", event.target.value || null)} placeholder="Scope decision" className={inputClass()} />
           <input aria-label="Inbound source status" type="number" value={searchParams.get("source_status") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "source_status", event.target.value || null)} placeholder="Source status" className={inputClass()} />
           <input aria-label="Inbound rel filter" value={searchParams.get("rel") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "rel", event.target.value || null)} placeholder="rel contains" className={inputClass()} />
+          <select aria-label="Inbound link role" value={searchParams.get("link_role") ?? ""} onChange={(event) => updateInboundParam(setSearchParams, "link_role", event.target.value || null)} className={inputClass()}><option value="">All roles</option>{["navigation", "main_content", "footer", "sidebar", "breadcrumb", "header_utility", "download", "email", "telephone", "image", "unknown", "legacy_unclassified"].map((role) => <option key={role} value={role}>{formatStatus(role)}</option>)}</select>
         </div>
         <div className="mt-3">
           <Button type="button" variant="ghost" onClick={() => setSearchParams(tabOnly(searchParams, "inbound"))}>Clear filters</Button>
@@ -131,7 +132,7 @@ function InboundTable({ items, scanId }: { items: InboundLinkOccurrence[]; scanI
     <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
-          <tr>{["Source page", "Status", "Depth", "Anchor text", "Raw href", "rel", "Decision", "Provenance"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
+          <tr>{["Source page", "Status", "Depth", "Anchor text", "Role", "Raw href", "rel", "Scope decision", "Provenance"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
         </thead>
         <tbody>
           {items.map((link) => (
@@ -149,6 +150,7 @@ function InboundTable({ items, scanId }: { items: InboundLinkOccurrence[]; scanI
                 {link.anchor_text || link.aria_label || link.title || <span className="text-stone-500">No visible anchor text</span>}
                 {link.rel?.toLowerCase().includes("nofollow") ? <span className="mt-1 block rounded-md bg-stone-100 px-2 py-0.5 text-xs text-stone-700">nofollow</span> : null}
               </td>
+              <td className="px-3 py-2"><LinkRoleBadge role={link.link_role} label={link.link_role_label} rule={link.link_role_rule} /></td>
               <td className="max-w-sm px-3 py-2"><UrlText value={link.raw_href} secondary /></td>
               <td className="max-w-xs px-3 py-2 text-xs text-stone-600">{link.rel ?? "None"}</td>
               <td className="px-3 py-2"><StatusBadge status={link.in_scope ? "completed" : "interrupted"} label={formatScopeDecision(link.scope_decision)} /></td>
@@ -351,9 +353,10 @@ function LinksView({ links, loading, error }: { links: LinkOccurrence[]; loading
   const [search, setSearch] = useState("");
   const [decision, setDecision] = useState("all");
   const [inScopeOnly, setInScopeOnly] = useState(false);
+  const [role, setRole] = useState("all");
   const filtered = links.filter((link) => {
     const haystack = [link.resolved_url, link.normalized_target_url, link.raw_href, link.anchor_text, link.scope_decision].join(" ").toLowerCase();
-    return (!search || haystack.includes(search.toLowerCase())) && (decision === "all" || link.scope_decision === decision) && (!inScopeOnly || link.in_scope);
+    return (!search || haystack.includes(search.toLowerCase())) && (decision === "all" || link.scope_decision === decision) && (role === "all" || (link.link_role ?? "legacy_unclassified") === role) && (!inScopeOnly || link.in_scope);
   });
   const decisions = Array.from(new Set(links.map((link) => link.scope_decision))).sort();
   if (error) return <ErrorBanner error={error} title="Could not load links" />;
@@ -362,12 +365,13 @@ function LinksView({ links, loading, error }: { links: LinkOccurrence[]; loading
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
           <input aria-label="Search links" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search destination, href, or anchor text" className={inputClass()} />
           <select aria-label="Scope decision filter" value={decision} onChange={(event) => setDecision(event.target.value)} className={inputClass()}>
             <option value="all">All decisions</option>
             {decisions.map((item) => <option key={item} value={item}>{formatScopeDecision(item)}</option>)}
           </select>
+          <select aria-label="Link role filter" value={role} onChange={(event) => setRole(event.target.value)} className={inputClass()}><option value="all">All roles</option>{["navigation", "main_content", "footer", "sidebar", "breadcrumb", "header_utility", "download", "email", "telephone", "image", "unknown", "legacy_unclassified"].map((item) => <option key={item} value={item}>{formatStatus(item)}</option>)}</select>
           <label className="flex items-center gap-2 rounded-md border border-stone-200 bg-white px-3 py-2 text-sm">
             <input type="checkbox" checked={inScopeOnly} onChange={(event) => setInScopeOnly(event.target.checked)} className="size-4 rounded border-stone-300 focus:ring-neutral-900" />
             In-scope only
@@ -378,7 +382,7 @@ function LinksView({ links, loading, error }: { links: LinkOccurrence[]; loading
       <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
         <table className="min-w-full text-left text-sm">
           <thead className="bg-stone-100 text-xs uppercase text-stone-500">
-            <tr>{["Destination", "Anchor text", "Decision", "Raw href", "Attributes", "DOM path"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
+            <tr>{["Destination", "Anchor text", "Role", "Scope decision", "Raw href", "Attributes", "DOM path"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
           </thead>
           <tbody>
             {filtered.map((link) => (
@@ -388,6 +392,7 @@ function LinksView({ links, loading, error }: { links: LinkOccurrence[]; loading
                   {link.anchor_text ? <span>{link.anchor_text}</span> : <span className="text-stone-500">No visible text</span>}
                   {!link.anchor_text && link.aria_label ? <span className="mt-1 block text-xs text-stone-600">aria-label: {link.aria_label}</span> : null}
                 </td>
+                <td className="px-3 py-2"><LinkRoleBadge role={link.link_role} label={link.link_role_label} rule={link.link_role_rule} /></td>
                 <td className="px-3 py-2"><StatusBadge status={link.in_scope ? "completed" : "interrupted"} label={formatScopeDecision(link.scope_decision)} /></td>
                 <td className="max-w-sm px-3 py-2"><UrlText value={link.raw_href} secondary /></td>
                 <td className="max-w-xs px-3 py-2 text-xs text-stone-600">
@@ -490,6 +495,7 @@ function buildInboundQuery(searchParams: URLSearchParams) {
     ["scope_decision", "scope_decision"],
     ["source_status", "source_status"],
     ["rel", "rel"],
+    ["link_role", "link_role"],
     ["inbound_limit", "limit"],
     ["inbound_offset", "offset"]
   ];
@@ -522,7 +528,7 @@ function setInboundOffset(setSearchParams: ReturnType<typeof useSearchParams>[1]
 
 function tabOnly(searchParams: URLSearchParams, tab: string) {
   const next = new URLSearchParams(searchParams);
-  for (const key of ["inbound_search", "scope_decision", "source_status", "rel", "inbound_offset"]) {
+  for (const key of ["inbound_search", "scope_decision", "source_status", "rel", "link_role", "inbound_offset"]) {
     next.delete(key);
   }
   next.set("tab", tab);
@@ -530,5 +536,5 @@ function tabOnly(searchParams: URLSearchParams, tab: string) {
 }
 
 function hasInboundFilters(searchParams: URLSearchParams) {
-  return ["inbound_search", "scope_decision", "source_status", "rel"].some((key) => searchParams.has(key));
+  return ["inbound_search", "scope_decision", "source_status", "rel", "link_role"].some((key) => searchParams.has(key));
 }

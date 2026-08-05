@@ -47,6 +47,7 @@ export type GraphEdge = {
   first_discovered_at: string | null;
   last_discovered_at: string | null;
   scope_decisions: Record<string, number>;
+  role_counts?: Record<string, number>;
   dom_regions: Record<string, number>;
 };
 

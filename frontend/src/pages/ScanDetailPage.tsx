@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { cancelScan, deleteScan, getScan, getScanDeletePreview, getWorkerHealth, listErrors, listJobs, listPages, listScanSeeds } from "../api/client";
+import { cancelScan, createScanNote, deleteScan, getScan, getScanDeletePreview, getWorkerHealth, listErrors, listJobs, listPages, listScanNotes, listScanSeeds } from "../api/client";
+import { NotesPanel } from "../components/NotesPanel";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
 import { DefinitionList } from "../components/ui/DefinitionList";
@@ -109,7 +110,8 @@ export function ScanDetailPage() {
     { id: "inputs", label: "Inputs", count: seeds.data?.total },
     { id: "pages", label: "Pages", count: pageTotal },
     { id: "errors", label: "Errors", count: errors.data?.length ?? scan.data.failed_count },
-    { id: "graph", label: "Graph" }
+    { id: "graph", label: "Graph" },
+    { id: "notes", label: "Notes" }
   ];
 
   return (
@@ -190,6 +192,7 @@ export function ScanDetailPage() {
         {tab === "inputs" ? <InputsView seeds={seeds.data?.items ?? []} loading={seeds.isLoading} error={seeds.error} /> : null}
         {tab === "errors" ? <ErrorsView scanId={scanId} errors={errors.data ?? []} loading={errors.isLoading} error={errors.error} /> : null}
         {tab === "graph" ? <ScanGraphView scan={scan.data} /> : null}
+        {tab === "notes" ? <NotesPanel queryKey={["scan-notes", scanId]} list={(query) => listScanNotes(scanId, query)} create={(body, pinned) => createScanNote(scanId, body, pinned)} context={`Scan ${scanId}`} /> : null}
       </div>
     </PageFrame>
   );
