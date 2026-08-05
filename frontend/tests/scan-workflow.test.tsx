@@ -9,6 +9,7 @@ import { StatusBadge } from "../src/components/ui/StatusBadge";
 import { displayError } from "../src/utils/errors";
 import { NewScanPage } from "../src/pages/NewScanPage";
 import { PageDetailPage } from "../src/pages/PageDetailPage";
+import { PersistentPageDetailPage } from "../src/pages/PersistentPageDetailPage";
 import { ScanDetailPage } from "../src/pages/ScanDetailPage";
 import { ScansPage } from "../src/pages/ScansPage";
 import { SiteDetailPage } from "../src/pages/SiteDetailPage";
@@ -46,6 +47,9 @@ const api = vi.hoisted(() => ({
   listSourceEntries: vi.fn(),
   addManualUrls: vi.fn(),
   listInventory: vi.fn(),
+  listSitePages: vi.fn(),
+  getSitePage: vi.fn(),
+  listPageObservations: vi.fn(),
   listScanSeeds: vi.fn(),
   listJobs: vi.fn(),
   getJob: vi.fn(),
@@ -73,7 +77,9 @@ vi.mock("../src/api/client", () => ({
     user_agent: "WebsiteScanner/0.1",
     drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
     allow_private_networks: false,
-    max_redirects: 10
+    max_redirects: 10,
+    enable_http_revalidation: true,
+    enable_parse_reuse: true
   })
 }));
 
@@ -158,6 +164,9 @@ beforeEach(() => {
   api.listSourceEntries.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
   api.addManualUrls.mockResolvedValue({ source: sourceFixture, items: [], accepted_count: 1, rejected_count: 1, duplicate_count: 0 });
   api.listInventory.mockResolvedValue({ items: [inventoryFixture], total: 1, limit: 50, offset: 0 });
+  api.listSitePages.mockResolvedValue({ items: [persistentPageFixture], total: 1, limit: 50, offset: 0 });
+  api.getSitePage.mockResolvedValue({ page: persistentPageFixture, site_id: 3, site_name: "Example Site" });
+  api.listPageObservations.mockResolvedValue({ items: [pageObservationFixture], total: 1, limit: 50, offset: 0 });
   api.listScanSeeds.mockResolvedValue({ items: [seedFixture], total: 1, limit: 50, offset: 0 });
   api.listJobs.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
   api.getJob.mockResolvedValue(jobFixture);
@@ -374,6 +383,21 @@ describe("saved sites workflow", () => {
     expect(await screen.findByText("https://example.com/a")).toBeInTheDocument();
   });
 
+  it("shows persistent site pages and observation history", async () => {
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages");
+
+    expect(await screen.findByText("https://example.com/page")).toBeInTheDocument();
+    expect(screen.getByText("Observed Page")).toBeInTheDocument();
+    expect(api.listSitePages).toHaveBeenCalledWith("3", expect.stringContaining(""));
+
+    cleanup();
+    renderRoute(<PersistentPageDetailPage />, "/sites/:siteId/pages/:resourceId", "/sites/3/pages/2");
+
+    expect(await screen.findByText("Observation history")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("Revalidated unchanged").length).toBeGreaterThan(0));
+    expect(screen.getByText("from snapshot 8")).toBeInTheDocument();
+  });
+
   it("blocks saved-site scans with invalid scan-specific numeric overrides", async () => {
     renderRoute(<NewScanPage />, "/scans/new", "/scans/new?site_id=3");
 
@@ -510,7 +534,9 @@ const scanFixture: Scan = {
     user_agent: "WebsiteScanner/0.1",
     drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
     allow_private_networks: false,
-    max_redirects: 10
+    max_redirects: 10,
+    enable_http_revalidation: true,
+    enable_parse_reuse: true
   },
   created_at: "2026-07-30T01:00:00Z",
   started_at: "2026-07-30T01:00:01Z",
@@ -520,6 +546,12 @@ const scanFixture: Scan = {
   failed_count: 0,
   skipped_count: 0,
   queued_count: 0,
+  conditional_request_count: 0,
+  not_modified_count: 0,
+  parse_reuse_count: 0,
+  full_parse_count: 1,
+  network_bytes_transferred: 1200,
+  reused_content_bytes: 0,
   stop_reason: "max_pages",
   fatal_error_message: null
 };
@@ -545,7 +577,12 @@ const pageFixture = {
   inbound_source_page_count: 1,
   response_time_ms: 50,
   fetch_state: "fetched",
-  error_type: null
+  error_type: null,
+  retrieval_method: "full_fetch",
+  parse_method: "parsed",
+  retrieval_http_status: 200,
+  reused_from_snapshot_id: null,
+  network_bytes_transferred: 1200
 };
 
 const snapshotFixture: Snapshot = {
@@ -582,7 +619,19 @@ const snapshotFixture: Snapshot = {
   },
   fetch_state: "fetched",
   error_type: null,
-  error_message: null
+  error_message: null,
+  parse_artifact_id: 3,
+  reused_from_snapshot_id: null,
+  retrieval_method: "full_fetch",
+  parse_method: "parsed",
+  retrieval_http_status: 200,
+  retrieval_response_headers: {},
+  network_bytes_transferred: 1200,
+  request_variant_fingerprint: "fingerprint",
+  etag: '"abc"',
+  last_modified: "Wed, 05 Aug 2026 00:00:00 GMT",
+  cache_control: null,
+  vary_header: null
 };
 
 const linkFixtures = [
@@ -922,6 +971,53 @@ const inventoryFixture = {
   latest_scan_status: "completed",
   latest_fetch_date: "2026-07-30T01:00:02Z",
   classification: "source_and_crawl"
+};
+
+const persistentPageFixture = {
+  resource_id: 2,
+  normalized_url: "https://example.com/page",
+  host: "example.com",
+  path: "/page",
+  query: "",
+  observation_count: 2,
+  first_observed_at: "2026-07-30T01:00:02Z",
+  latest_observed_at: "2026-08-05T01:00:02Z",
+  latest_snapshot_id: 9,
+  latest_scan_id: 1,
+  latest_http_status: 200,
+  latest_title: "Observed Page",
+  latest_retrieval_method: "conditional_not_modified",
+  latest_parse_method: "reused_not_modified",
+  latest_reused_from_snapshot_id: 8
+};
+
+const pageObservationFixture = {
+  snapshot_id: 9,
+  scan_id: 1,
+  site_id: 3,
+  site_name: "Example Site",
+  scan_created_at: "2026-08-05T01:00:00Z",
+  observed_at: "2026-08-05T01:00:02Z",
+  requested_url: "https://example.com/page",
+  final_url: "https://example.com/page",
+  http_status: 200,
+  retrieval_http_status: 304,
+  fetch_state: "fetched",
+  error_type: null,
+  crawl_depth: 0,
+  response_time_ms: 30,
+  content_type: "text/html",
+  raw_html_sha256: "rawhash",
+  head_sha256: "headhash",
+  page_title: "Observed Page",
+  canonical_url: "https://example.com/page",
+  retrieval_method: "conditional_not_modified",
+  parse_method: "reused_not_modified",
+  content_blob_id: 5,
+  parse_artifact_id: 6,
+  reused_from_snapshot_id: 8,
+  network_bytes_transferred: 0,
+  parser_version: "html-parser-v1"
 };
 
 const seedFixture = {

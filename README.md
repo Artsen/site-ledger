@@ -196,6 +196,30 @@ available registry ranges for both the existing v6 line and npm's suggested v7 t
 application does not use React Router SSR/RSC features, but the audit remains a known dependency
 advisory until the package publishes or resolves a non-vulnerable compatible target.
 
+## Page History and Crawl Reuse
+
+Saved-site pages are persistent URL identities backed by `WebResource` rows. Scan-specific page
+observations remain `ResourceSnapshot` rows, so the same normalized page can be reviewed across
+multiple saved-site scans without losing per-scan evidence. Site detail includes a Pages tab, and
+`/sites/{site_id}/pages/{resource_id}` shows observation history with links back to the exact scan
+snapshot.
+
+HTML parse results are stored as reusable parse artifacts keyed by content blob, parser version,
+parser configuration, and final URL resolution base. If two observations have the same HTML hash and
+base URL, the scanner can reuse parsed head metadata and anchor extraction while still creating fresh
+snapshot and link-occurrence rows for the current scan.
+
+Repeat scans can send conditional GET headers from the latest compatible prior observation. A `304
+Not Modified` response creates a new snapshot with the previous effective HTTP status, previous HTML
+blob, previous parse artifact, and retrieval metadata that records the actual `304`. The crawler only
+uses this path for in-scope HTTP/HTTPS pages with safe cache validators and a local content blob that
+still exists.
+
+The new scan form exposes two repeat-scan options: HTTP revalidation and parsed-result reuse. Turning
+off HTTP revalidation forces full content downloads. Turning off parsed-result reuse forces a fresh
+parse pass, while the persisted artifact identity still prevents duplicate artifact rows for the same
+hash/version/base combination.
+
 ## Website Topology Graph
 
 Scan detail includes a Graph tab at `/scans/{scan_id}?tab=graph`. The graph is read-only and is

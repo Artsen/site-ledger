@@ -20,6 +20,9 @@ from app.schemas.scans import (
     InboundLinkList,
     LinkRead,
     PageList,
+    PageObservationList,
+    PersistentPageDetail,
+    PersistentPageList,
     ScanCreate,
     ScanDeletePreview,
     ScanDeleteResult,
@@ -65,6 +68,7 @@ from app.services.graph_queries import (
     get_scan_graph,
     list_graph_edge_occurrences,
 )
+from app.services.page_queries import get_site_page, list_page_observations, list_site_pages
 from app.services.scan_deletion import delete_scan as delete_scan_service
 from app.services.scan_deletion import preview_scan_deletion
 from app.services.scan_queries import (
@@ -548,6 +552,67 @@ def get_site_inventory(
     )
     if result is None:
         raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.get("/sites/{site_id}/pages", response_model=PersistentPageList)
+def get_site_pages(
+    site_id: int,
+    db: DbSession,
+    search: str | None = None,
+    host: str | None = None,
+    path_prefix: str | None = None,
+    sort: Literal["url", "observations", "first_observed", "latest_observed"] = "url",
+    direction: Literal["asc", "desc"] = "asc",
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> PersistentPageList:
+    result = list_site_pages(
+        db,
+        site_id,
+        search=search,
+        host=host,
+        path_prefix=path_prefix,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.get("/sites/{site_id}/pages/{resource_id}", response_model=PersistentPageDetail)
+def get_site_page_detail(site_id: int, resource_id: int, db: DbSession) -> PersistentPageDetail:
+    result = get_site_page(db, site_id, resource_id)
+    if result is None:
+        raise HTTPException(404, "Page not found")
+    return result
+
+
+@router.get(
+    "/sites/{site_id}/pages/{resource_id}/observations",
+    response_model=PageObservationList,
+)
+def get_site_page_observations(
+    site_id: int,
+    resource_id: int,
+    db: DbSession,
+    scope: Literal["site", "all"] = "site",
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> PageObservationList:
+    result = list_page_observations(
+        db,
+        site_id,
+        resource_id,
+        scope=scope,
+        limit=limit,
+        offset=offset,
+    )
+    if result is None:
+        raise HTTPException(404, "Page not found")
     return result
 
 

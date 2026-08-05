@@ -551,6 +551,28 @@ PR 9 hardens graph scalability:
 - Document practical graph limits honestly; do not promise very large visible graphs unless covered
   by deterministic fixtures and benchmarks.
 
+PR 10 adds persistent page history and conditional crawl reuse:
+
+- Treat `WebResource` as the persistent Page identity and `ResourceSnapshot` as one scan-specific
+  observation. Do not add a duplicate Page table unless a later PR needs page-owned attributes that
+  cannot live on the resource identity.
+- Preserve scan-specific evidence. Reused observations still need new snapshots and new current-scan
+  link occurrences with current scope decisions; do not point UI history at old scan occurrence rows
+  as if they were newly discovered.
+- Store parsed HTML artifacts by content blob, parser version, parser configuration, and URL
+  resolution base. Relative links and canonical URLs depend on the final URL base, so hash alone is
+  not a sufficient parse identity.
+- Conditional requests must go through the same safe fetcher, redirect validation, scope checks,
+  timeout limits, response-size limits, and SSRF protections as full crawl requests.
+- Reuse only when validators and cache metadata are compatible. `Cache-Control: no-store`,
+  unsupported `Vary`, missing local blobs, unsafe destinations, or redirects outside scope must fall
+  back to full fetch or a structured crawler error.
+- Store the retrieval HTTP status separately from the effective page HTTP status. A `304 Not
+  Modified` observation should remain queryable as an unchanged revalidation while still presenting
+  the effective prior page result.
+- The UI should expose saved-site page history and observation provenance without creating a global
+  page-history route. Saved-site Pages belong under the selected site.
+
 The page table should include requested URL, final URL, status, title, depth, content type, discovery source, inbound occurrence count, fetch duration, and error state.
 
 Favor clarity and density over decorative dashboard cards. The graph visualization is not part of PR 1.

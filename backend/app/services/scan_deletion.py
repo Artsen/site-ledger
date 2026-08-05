@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     BackgroundJob,
     ContentBlob,
+    HtmlParseArtifact,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -112,6 +113,7 @@ def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDele
         delete(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id.in_(snapshot_ids))
     )
     db.execute(delete(ResourceSnapshot).where(ResourceSnapshot.scan_id == scan.id))
+    _delete_unreferenced_artifacts(db)
     seed_ids = select(ScanSeed.id).where(ScanSeed.scan_id == scan.id)
     db.execute(delete(ScanSeedOrigin).where(ScanSeedOrigin.scan_seed_id.in_(seed_ids)))
     db.execute(delete(ScanSeed).where(ScanSeed.scan_id == scan.id))
@@ -276,3 +278,10 @@ def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int
     if deletable:
         db.execute(delete(WebResource).where(WebResource.id.in_(deletable)))
     return deletable
+
+
+def _delete_unreferenced_artifacts(db: Session) -> None:
+    referenced_artifacts = select(distinct(ResourceSnapshot.parse_artifact_id)).where(
+        ResourceSnapshot.parse_artifact_id.is_not(None)
+    )
+    db.execute(delete(HtmlParseArtifact).where(HtmlParseArtifact.id.not_in(referenced_artifacts)))

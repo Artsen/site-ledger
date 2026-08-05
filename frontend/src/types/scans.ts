@@ -14,6 +14,12 @@ export type Scan = {
   failed_count: number;
   skipped_count: number;
   queued_count: number;
+  conditional_request_count: number;
+  not_modified_count: number;
+  parse_reuse_count: number;
+  full_parse_count: number;
+  network_bytes_transferred: number;
+  reused_content_bytes: number;
   stop_reason: string | null;
   fatal_error_message: string | null;
 };
@@ -230,6 +236,8 @@ export type ScopeConfig = {
   drop_query_parameters: string[];
   allow_private_networks: boolean;
   max_redirects: number;
+  enable_http_revalidation: boolean;
+  enable_parse_reuse: boolean;
 };
 
 export type Page = {
@@ -247,6 +255,11 @@ export type Page = {
   response_time_ms: number | null;
   fetch_state: string;
   error_type: string | null;
+  retrieval_method: string | null;
+  parse_method: string | null;
+  retrieval_http_status: number | null;
+  reused_from_snapshot_id: number | null;
+  network_bytes_transferred: number | null;
 };
 
 export type PageList = {
@@ -283,6 +296,85 @@ export type Snapshot = {
   fetch_state: string;
   error_type: string | null;
   error_message: string | null;
+  parse_artifact_id: number | null;
+  reused_from_snapshot_id: number | null;
+  retrieval_method: string | null;
+  parse_method: string | null;
+  retrieval_http_status: number | null;
+  retrieval_response_headers: Record<string, unknown> | null;
+  network_bytes_transferred: number | null;
+  request_variant_fingerprint: string | null;
+  etag: string | null;
+  last_modified: string | null;
+  cache_control: string | null;
+  vary_header: string | null;
+};
+
+export type PersistentPage = {
+  resource_id: number;
+  normalized_url: string;
+  host: string;
+  path: string;
+  query: string;
+  observation_count: number;
+  first_observed_at: string | null;
+  latest_observed_at: string | null;
+  latest_snapshot_id: number | null;
+  latest_scan_id: number | null;
+  latest_http_status: number | null;
+  latest_title: string | null;
+  latest_retrieval_method: string | null;
+  latest_parse_method: string | null;
+  latest_reused_from_snapshot_id: number | null;
+};
+
+export type PersistentPageList = {
+  items: PersistentPage[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type PersistentPageDetail = {
+  page: PersistentPage;
+  site_id: number;
+  site_name: string;
+};
+
+export type PageObservation = {
+  snapshot_id: number;
+  scan_id: number;
+  site_id: number | null;
+  site_name: string | null;
+  scan_created_at: string;
+  observed_at: string | null;
+  requested_url: string;
+  final_url: string | null;
+  http_status: number | null;
+  retrieval_http_status: number | null;
+  fetch_state: string;
+  error_type: string | null;
+  crawl_depth: number;
+  response_time_ms: number | null;
+  content_type: string | null;
+  raw_html_sha256: string | null;
+  head_sha256: string | null;
+  page_title: string | null;
+  canonical_url: string | null;
+  retrieval_method: string | null;
+  parse_method: string | null;
+  content_blob_id: number | null;
+  parse_artifact_id: number | null;
+  reused_from_snapshot_id: number | null;
+  network_bytes_transferred: number | null;
+  parser_version: string | null;
+};
+
+export type PageObservationList = {
+  items: PageObservation[];
+  total: number;
+  limit: number;
+  offset: number;
 };
 
 export type LinkOccurrence = {

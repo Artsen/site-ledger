@@ -9,6 +9,13 @@ import httpx
 from app.crawler.security import validate_public_destination
 
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+ALLOWED_CALLER_HEADERS = {
+    "accept",
+    "accept-language",
+    "if-none-match",
+    "if-modified-since",
+}
+FORBIDDEN_CALLER_HEADERS = {"authorization", "cookie", "proxy-authorization"}
 
 RedirectValidator = Callable[[str], Awaitable[tuple[bool, str | None, str | None, str | None]]]
 DestinationValidator = Callable[[str, bool], Awaitable[None]]
@@ -52,13 +59,15 @@ class SafeHttpFetcher:
         self.redirect_validator = redirect_validator
         self.destination_validator = destination_validator
 
-    async def get(self, url: str) -> SafeFetchResult:
+    async def get(self, url: str, headers: dict[str, str] | None = None) -> SafeFetchResult:
         started = monotonic()
+        request_headers = {"User-Agent": self.limits.user_agent}
+        request_headers.update(_validated_request_headers(headers or {}))
         async with httpx.AsyncClient(
             follow_redirects=False,
             max_redirects=self.limits.max_redirects,
             timeout=self.limits.timeout_seconds,
-            headers={"User-Agent": self.limits.user_agent},
+            headers=request_headers,
             transport=self.transport,
         ) as client:
             response, content, chain = await self._get_with_validated_redirects(client, url)
@@ -222,3 +231,15 @@ class ResponseTooLargeError(Exception):
     def __init__(self, message: str, redirect_chain: list[dict[str, Any]]):
         super().__init__(message)
         self.redirect_chain = redirect_chain
+
+
+def _validated_request_headers(headers: dict[str, str]) -> dict[str, str]:
+    validated: dict[str, str] = {}
+    for key, value in headers.items():
+        normalized = key.strip().lower()
+        if normalized in FORBIDDEN_CALLER_HEADERS:
+            raise ValueError(f"Header is not allowed for crawler requests: {key}")
+        if normalized not in ALLOWED_CALLER_HEADERS:
+            raise ValueError(f"Header is not supported for crawler requests: {key}")
+        validated[key] = value
+    return validated

@@ -242,6 +242,34 @@ Frontend graph adaptation is split into pure modules for renderer types, coordin
 node categories, and edge styling. The existing `graphDataAdapter` remains the public adaptation
 entry point, and 2D/3D renderer imports remain isolated in lazy renderer modules.
 
+## PR 10 Page History and Reuse
+
+Persistent page history treats `WebResource` as the page identity and `ResourceSnapshot` as one
+scan-specific observation. No separate Page table is introduced. `services.page_queries` aggregates
+site pages from saved-site scans and returns the latest observation plus paginated observation
+history for a resource. The query surface stays site-scoped by default, with an explicit all-sites
+observation mode for comparing the same normalized URL identity outside the selected site.
+
+HTML parsing now has a durable artifact boundary. `HtmlParseArtifact` stores parser output for a
+specific content blob, parser version, parser configuration version, and URL resolution base.
+`HtmlParseAnchor` stores ordered anchor extraction for that artifact. Snapshots reference parse
+artifacts, but link occurrences are still scan-specific rows created during each crawl so current
+scope decisions and provenance remain accurate.
+
+Conditional crawl reuse is handled in `services.cache_policy` and `crawler.static_crawler`.
+The crawler derives a representation request fingerprint from crawler-controlled headers, finds a
+latest compatible prior HTML observation for the same resource, and sends `If-None-Match` and/or
+`If-Modified-Since` only through the safe fetcher's allowlisted header path. A `304 Not Modified`
+response stores a new snapshot that records the actual retrieval status separately from the reused
+effective HTTP status and points back to the snapshot it reused.
+
+Reuse is intentionally conservative. The content blob must still exist locally, the prior response
+must expose an ETag or Last-Modified validator, `Cache-Control: no-store` blocks reuse, unsupported
+`Vary` headers block reuse, and redirect/scope/SSRF checks still run through the existing safe
+fetcher. This is not a complete RFC cache implementation; it is a crawl optimization that preserves
+page observation history and avoids unnecessary HTML downloads/parsing when the origin explicitly
+reports unchanged content.
+
 ## Deferred
 
 Robots.txt enforcement and concurrent crawling remain internal configuration placeholders for a

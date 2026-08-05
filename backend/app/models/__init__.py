@@ -1,6 +1,8 @@
 from app.models.resources import (
     BackgroundJob,
     ContentBlob,
+    HtmlParseAnchor,
+    HtmlParseArtifact,
     JobEvent,
     ResourceOccurrence,
     ResourceSnapshot,
@@ -18,6 +20,8 @@ from app.models.resources import (
 __all__ = [
     "BackgroundJob",
     "ContentBlob",
+    "HtmlParseAnchor",
+    "HtmlParseArtifact",
     "JobEvent",
     "ResourceOccurrence",
     "ResourceSnapshot",

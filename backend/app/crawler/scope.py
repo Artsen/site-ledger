@@ -25,6 +25,8 @@ class ScopeConfig:
     drop_query_parameters: list[str] = field(default_factory=list)
     allow_private_networks: bool = False
     max_redirects: int = 10
+    enable_http_revalidation: bool = True
+    enable_parse_reuse: bool = True
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ScopeConfig":
@@ -52,6 +54,8 @@ class ScopeConfig:
             "drop_query_parameters": self.drop_query_parameters,
             "allow_private_networks": self.allow_private_networks,
             "max_redirects": self.max_redirects,
+            "enable_http_revalidation": self.enable_http_revalidation,
+            "enable_parse_reuse": self.enable_parse_reuse,
         }
 
 
