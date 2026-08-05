@@ -7,7 +7,9 @@ The scanner is split into explicit boundaries:
 - `crawler.html_parser` extracts head metadata and anchor provenance from best-effort parsed HTML.
 - `storage.content_store` stores exact response bytes as gzip-compressed content-addressed blobs.
 - `crawler.static_crawler` performs breadth-first HTTP GET crawling and persists partial results.
-- `services.scan_runner` keeps in-process scan execution replaceable by a later worker queue.
+- `services.background_jobs` owns durable queue state, leases, progress, cancellation, and worker
+  health.
+- `worker` claims durable jobs and dispatches scan and source-refresh handlers.
 - `api.routes` exposes scan, page, snapshot, link, HTML, and occurrence endpoints.
 - `frontend/src/components/ui` contains small shared UI primitives used by the current scanner
   workflow only. It is not intended as a speculative design system.
@@ -146,9 +148,6 @@ entries, then removes only resources no longer referenced by snapshots, occurren
 entries, or scan seeds. Scan deletion removes seed origins and seeds for that scan while preserving
 source configuration and source-owned resources still in use.
 
-Source refreshes are synchronous in PR 6. A later worker can move `refresh_source` behind a queue in
-the same way `services.scan_runner` hides crawler execution.
-
 ## PR 7 Website Graph
 
 The scan graph is derived data. It adds no persistence migration and stores no layout coordinates,
@@ -186,6 +185,38 @@ externally supplied coordinates or category keys. Future page-section graphs can
 kinds without changing current page node semantics. Future scan comparison can decorate nodes and
 edges with added/removed/changed state without treating force-layout coordinates as persisted page
 properties.
+
+## PR 8 Durable Background Jobs
+
+`BackgroundJob`, `JobEvent`, and `WorkerInstance` add durable execution state without changing scan
+results, source inventory, or graph data into job-owned records. A job has exactly one subject:
+either a `scan_id` or a `source_refresh_id`. `website_property_id` is denormalized onto the job for
+filtering and display.
+
+`services.background_jobs` is the queue boundary. It enqueues jobs, deduplicates active jobs by a
+stable key, claims queued work in deterministic priority order, writes lease tokens, accepts
+heartbeats and progress only from the lease holder, records cancellation requests, and reconciles
+expired leases. Legal status transitions are centralized in `services.job_types`.
+
+`services.job_handlers` adapts durable jobs to domain services. The scan handler invokes
+`crawler.static_crawler` with cooperative cancellation and progress callbacks. The source-refresh
+handler invokes `services.source_refresh.execute_source_refresh`, which uses the same SSRF-safe
+fetching path as crawling. These handlers do not persist force-layout state, graph presentation
+settings, source inventory mutations outside refresh execution, or speculative future job subjects.
+
+`app.worker` is a standalone process entry point. It registers a `WorkerInstance`, heartbeats while
+online, recovers expired jobs on startup, claims available jobs up to configured process
+concurrency, and attempts graceful shutdown. `python -m app.worker --once` is available for local and
+CI-style processing, and `--recover-only` reconciles leases without claiming new work.
+
+The API creates scans and source refreshes as queued domain records, enqueues the corresponding job,
+and returns `202 Accepted`. Cancellation endpoints store durable cancellation requests rather than
+cancelling an in-memory task. Deletion services reject active jobs so scans, sources, and sites
+cannot be deleted while background work can still mutate their rows.
+
+The frontend treats job state as supplemental execution state. Scan detail and source tables poll
+jobs and worker health so users can see queued, running, cancelling, interrupted, and
+waiting-for-worker states after API restarts.
 
 ## Deferred
 

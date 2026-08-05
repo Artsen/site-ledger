@@ -15,6 +15,14 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
+Worker:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m app.worker
+```
+
 Frontend:
 
 ```powershell
@@ -24,7 +32,8 @@ npm run dev
 ```
 
 The API defaults to `http://127.0.0.1:8000`; the Vite app defaults to `http://127.0.0.1:5173`.
-The frontend toolchain expects Node.js `20.19.0` or newer.
+The frontend toolchain expects Node.js `20.19.0` or newer. Scans and URL source refreshes are queued
+durably by the API; keep the worker running to process queued work.
 
 ## Scanner Behavior
 
@@ -39,9 +48,10 @@ scan scope, and validated by SSRF destination protection before the next GET req
 Response-size limits are enforced while streaming. Oversized responses are stopped before they are
 stored and are recorded as `response_too_large`.
 
-Robots.txt enforcement and concurrent crawling are deferred. The crawler is currently sequential,
-with an optional delay between requests. TechSmith-specific saved-site configuration belongs to a
-future PR; no site-specific host set is hardcoded in PR 1.
+Robots.txt enforcement and concurrent crawling are deferred inside the static crawler. The worker
+can run more than one background job process-wide, but each crawl still performs a sequential
+request loop with an optional delay between requests. TechSmith-specific saved-site configuration
+belongs to a future PR; no site-specific host set is hardcoded in PR 1.
 
 ## Quality Checks
 
@@ -101,6 +111,11 @@ The sidebar shows recent scans, and `/scans` provides server-side paginated scan
 runs. The All Scans page supports search by starting URL, status filtering, sorting, rerunning a scan
 with its previous scope, and deleting terminal scans after reviewing a confirmation summary.
 
+Scan creation returns after the scan and its `BackgroundJob` are committed. The scan detail page
+polls both the scan and latest job so queued, running, cancelling, and waiting-for-worker states are
+visible after API restarts. Run `python -m app.worker --recover-only` to reconcile expired leases
+without claiming new work.
+
 Page results show scan-specific inbound link counts. Counts are limited to occurrences whose source
 page snapshot belongs to the same scan, so historical scans do not inflate each other. Total inbound
 occurrences count duplicate links individually; unique source pages count distinct linking snapshots.
@@ -111,9 +126,10 @@ Redirect-mediated attribution is not inferred in PR 3; redirect evidence remains
 snapshot overview. The inbound table preserves duplicate occurrences and exposes source page,
 status, crawl depth, anchor context, raw href, rel, scope decision, DOM location, and discovery time.
 
-Deletion is allowed only for terminal scans: `completed`, `completed_with_errors`, `failed`,
-`cancelled`, and `interrupted`. Queued or running scans return `409 Conflict`; running worker tasks
-are checked before deletion. `GET /api/scans/{scan_id}/deletion-summary` and
+Deletion is allowed only for terminal scans with no active job: `completed`,
+`completed_with_errors`, `failed`, `cancelled`, and `interrupted`. Queued or running scans return
+`409 Conflict`; active background jobs are checked before deletion.
+`GET /api/scans/{scan_id}/deletion-summary` and
 `GET /api/scans/{scan_id}/delete-preview` return the same typed summary. `DELETE /api/scans/{scan_id}`
 returns a typed result.
 
@@ -171,8 +187,9 @@ reference-aware: resources still referenced by scans, link occurrences, source e
 are preserved. Deleting a scan removes its scan seeds and seed origins without deleting the saved
 site or source configuration.
 
-Source refreshes run synchronously in the current API request. A background refresh worker and
-progress polling are intentionally left for a later PR.
+Source refreshes now enqueue durable `source_refresh` jobs and return `202 Accepted`. The Sources
+tab shows queued, running, cancelling, failed, completed, and waiting-for-worker states. Active
+source refreshes can be cancelled cooperatively and block source deletion until they are terminal.
 
 Current npm production audit status: `npm audit --omit=dev` reports React Router advisories in the
 available registry ranges for both the existing v6 line and npm's suggested v7 targets. The
@@ -194,7 +211,7 @@ background, presentation mode, and PNG export. Search and the node/edge browser 
 accessible alternative to canvas-only exploration.
 
 The graph is bounded by deterministic server-side limits. The default graph returns up to 400 nodes
-and 1,200 edges; hard caps are 1,500 nodes and 5,000 edges. The API prioritizes the starting page,
+and 1,200 edges; hard caps are 3,000 nodes and 10,000 edges. The API prioritizes the starting page,
 then shallow crawl depth, stronger connectivity, URL, and snapshot ID. Focused neighborhood mode can
 load one to three hops around a selected snapshot.
 
