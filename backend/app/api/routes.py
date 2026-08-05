@@ -14,7 +14,7 @@ from app.models import (
     SourceRefresh,
     WebsiteProperty,
 )
-from app.schemas.graph import GraphEdgeOccurrenceList, GraphResponse
+from app.schemas.graph import GraphCapabilitiesRead, GraphEdgeOccurrenceList, GraphResponse
 from app.schemas.jobs import JobEventList, JobEventRead, JobList, JobRead, WorkerHealth
 from app.schemas.scans import (
     InboundLinkList,
@@ -58,12 +58,10 @@ from app.services.background_jobs import (
     request_cancellation,
     worker_health,
 )
+from app.services.graph_config import GRAPH_CONFIG
+from app.services.graph_filters import GraphFilters
 from app.services.graph_queries import (
-    DEFAULT_GRAPH_EDGE_LIMIT,
-    DEFAULT_GRAPH_NODE_LIMIT,
-    MAX_GRAPH_EDGE_LIMIT,
-    MAX_GRAPH_NODE_LIMIT,
-    GraphFilters,
+    get_graph_capabilities,
     get_scan_graph,
     list_graph_edge_occurrences,
 )
@@ -337,9 +335,7 @@ def remove_site(site_id: int, db: DbSession) -> SiteDeleteResult:
 
 
 @router.post("/sites/{site_id}/scans", response_model=ScanRead, status_code=202)
-def post_site_scan(
-    site_id: int, payload: SiteScanCreate, db: DbSession
-) -> Scan:
+def post_site_scan(site_id: int, payload: SiteScanCreate, db: DbSession) -> Scan:
     try:
         scan = create_scan_from_site(
             db,
@@ -684,8 +680,16 @@ def list_pages(
 def get_graph(
     scan_id: int,
     db: DbSession,
-    max_nodes: int = Query(DEFAULT_GRAPH_NODE_LIMIT, ge=1, le=MAX_GRAPH_NODE_LIMIT),
-    max_edges: int = Query(DEFAULT_GRAPH_EDGE_LIMIT, ge=0, le=MAX_GRAPH_EDGE_LIMIT),
+    max_nodes: int = Query(
+        GRAPH_CONFIG.default_node_limit,
+        ge=1,
+        le=GRAPH_CONFIG.maximum_node_limit,
+    ),
+    max_edges: int = Query(
+        GRAPH_CONFIG.default_edge_limit,
+        ge=0,
+        le=GRAPH_CONFIG.maximum_edge_limit,
+    ),
     min_depth: int | None = Query(default=None, ge=0),
     max_depth: int | None = Query(default=None, ge=0),
     host: str | None = None,
@@ -698,7 +702,11 @@ def get_graph(
     include_self_links: bool = True,
     include_unfetched: bool = False,
     focus_snapshot_id: int | None = Query(default=None, ge=1),
-    focus_hops: int = Query(1, ge=1, le=3),
+    focus_hops: int = Query(
+        GRAPH_CONFIG.default_focus_hops,
+        ge=1,
+        le=GRAPH_CONFIG.maximum_focus_hops,
+    ),
 ) -> GraphResponse:
     if min_depth is not None and max_depth is not None and min_depth > max_depth:
         raise HTTPException(422, "min_depth cannot be greater than max_depth")
@@ -729,6 +737,11 @@ def get_graph(
     if graph is None:
         raise HTTPException(404, "Scan not found")
     return graph
+
+
+@router.get("/graph/capabilities", response_model=GraphCapabilitiesRead)
+def graph_capabilities() -> GraphCapabilitiesRead:
+    return get_graph_capabilities()
 
 
 @router.get(

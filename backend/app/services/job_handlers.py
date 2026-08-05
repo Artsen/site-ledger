@@ -311,9 +311,7 @@ def _refresh_result(refresh: SourceRefresh) -> dict[str, Any]:
     }
 
 
-def _mark_domain_cancelled(
-    session_factory: Callable[[], Session], job: BackgroundJob
-) -> None:
+def _mark_domain_cancelled(session_factory: Callable[[], Session], job: BackgroundJob) -> None:
     with session_factory() as db:
         now = datetime.now(UTC)
         if job.scan_id:
