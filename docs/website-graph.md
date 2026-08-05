@@ -45,6 +45,9 @@ graph response.
 
 Edge summaries include occurrence count, unique anchor text count, nofollow/follow counts, empty
 anchor count, self-link state, sample anchors, first/last discovery time, and scope-decision counts.
+They also include bounded SQL-aggregated link-role counts. Occurrence details expose the role and
+stable classification rule from the source Page's DOM. Roles add evidence without changing edge
+identity, ranking, layout, or graph limits.
 Full occurrence details load through:
 
 ```text

@@ -3,6 +3,7 @@
 Site Ledger keeps Page identity and Page observation separate:
 
 - `WebResource` is the stable normalized page identity.
+- `SitePage` is the saved-Site association that preserves manual Page metadata across Scan deletion.
 - `ResourceSnapshot` is one observation of that page during one scan.
 - `HtmlParseArtifact` is reusable parsed HTML output for one content blob, parser version, parser
   configuration, and final URL resolution base.
@@ -55,6 +56,9 @@ A successful `304 Not Modified` response creates a fresh `ResourceSnapshot`. The
 
 The crawler then recreates link occurrences for the current scan from the parse artifact anchors and
 current scope configuration. It does not reuse old scan occurrence rows.
+
+Current parser artifacts also store occurrence-specific link role and rule evidence. Scope remains
+scan-specific and is recomputed when anchors are reused. See [Page workspaces](page-workspaces.md).
 
 ## Limits
 

@@ -21,6 +21,8 @@ The current application implements:
 - Current URL Inventory with source and scan-seed provenance.
 - Persistent Pages across saved-site scans.
 - Page observation history.
+- Site-scoped Page organization, categories, owner labels, workflow status, and plain-text notes.
+- Deterministic link roles on individual source-DOM occurrences.
 - Conditional HTTP revalidation and parsed-result reuse.
 - Stored HTML evidence and parsed head metadata.
 - Inbound and outgoing link occurrence provenance.
@@ -128,10 +130,9 @@ implemented.
 
 ### Workflow
 
-Review, investigation, ownership, notes, assignment, and resolution.
-
-This is future direction. Current Site classification labels do not constitute a multi-user
-investigation or case-management system.
+Site Ledger now provides lightweight Page organization, freeform owner labels, workflow status, and
+plain-text notes. Authenticated ownership, assignments to users, findings, investigations,
+permissions, and resolution workflow remain future direction.
 
 ## Roadmap
 

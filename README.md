@@ -18,6 +18,8 @@ observations from separate scans without erasing the evidence captured by each s
 - Accepts sitemap, robots-discovered sitemap, and manual URL Sources.
 - Maintains a current URL Inventory with source provenance.
 - Preserves persistent Pages and scan-specific observation history.
+- Provides Site-scoped Page workspaces with categories, owner labels, workflow status, and notes.
+- Classifies individual link occurrences by source-DOM role with explicit rule provenance.
 - Stores exact HTML responses as compressed, content-addressed evidence.
 - Records page metadata, redirect chains, errors, and inbound/outgoing link provenance.
 - Uses conditional HTTP revalidation and deterministic parsed-result reuse when safe.
@@ -172,6 +174,7 @@ storage, graph queries, background jobs, Page history, and reuse are covered by 
 - [Website graph](docs/website-graph.md)
 - [Graph performance](docs/graph-performance.md)
 - [Page history and reuse](docs/page-history-and-reuse.md)
+- [Page workspaces](docs/page-workspaces.md)
 
 ## Current Limitations
 
