@@ -3,6 +3,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -41,6 +42,9 @@ class Scan(Base):
     snapshots: Mapped[list["ResourceSnapshot"]] = relationship(back_populates="scan")
     website_property: Mapped["WebsiteProperty | None"] = relationship(back_populates="scans")
     seeds: Mapped[list["ScanSeed"]] = relationship(
+        back_populates="scan", cascade="all, delete-orphan"
+    )
+    jobs: Mapped[list["BackgroundJob"]] = relationship(
         back_populates="scan", cascade="all, delete-orphan"
     )
 
@@ -274,6 +278,117 @@ class SourceRefresh(Base):
     warnings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
 
     url_source: Mapped[UrlSource] = relationship(back_populates="refreshes")
+    jobs: Mapped[list["BackgroundJob"]] = relationship(
+        back_populates="source_refresh", cascade="all, delete-orphan"
+    )
+
+
+class BackgroundJob(Base):
+    __tablename__ = "background_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=100, index=True)
+    scan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scans.id", ondelete="CASCADE"), index=True
+    )
+    source_refresh_id: Mapped[int | None] = mapped_column(
+        ForeignKey("source_refreshes.id", ondelete="CASCADE"), index=True
+    )
+    website_property_id: Mapped[int | None] = mapped_column(
+        ForeignKey("website_properties.id", ondelete="SET NULL"), index=True
+    )
+    dedupe_key: Mapped[str] = mapped_column(String(255), unique=True)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    progress_version: Mapped[int] = mapped_column(Integer, default=1)
+    progress_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    current_operation: Mapped[str | None] = mapped_column(Text)
+    progress_current: Mapped[int | None] = mapped_column(Integer)
+    progress_total: Mapped[int | None] = mapped_column(Integer)
+    progress_unit: Mapped[str | None] = mapped_column(String(64))
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    worker_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    lease_token: Mapped[str | None] = mapped_column(String(128))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=1)
+    cancellation_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_type: Mapped[str | None] = mapped_column(String(64), index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    error_details_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    scan: Mapped[Scan | None] = relationship(back_populates="jobs")
+    source_refresh: Mapped[SourceRefresh | None] = relationship(back_populates="jobs")
+    website_property: Mapped[WebsiteProperty | None] = relationship()
+    events: Mapped[list["JobEvent"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "(scan_id IS NOT NULL AND source_refresh_id IS NULL) OR "
+            "(scan_id IS NULL AND source_refresh_id IS NOT NULL)",
+            name="ck_background_job_one_subject",
+        ),
+        Index(
+            "ix_background_jobs_claim",
+            "status",
+            "priority",
+            "available_at",
+            "created_at",
+            "id",
+        ),
+        Index("ix_background_jobs_type_status", "job_type", "status"),
+    )
+
+
+class JobEvent(Base):
+    __tablename__ = "job_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("background_jobs.id", ondelete="CASCADE"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    level: Mapped[str] = mapped_column(String(16), default="info", index=True)
+    message: Mapped[str] = mapped_column(Text)
+    data_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    job: Mapped[BackgroundJob] = relationship(back_populates="events")
+
+    __table_args__ = (Index("ix_job_events_job_created", "job_id", "created_at", "id"),)
+
+
+class WorkerInstance(Base):
+    __tablename__ = "worker_instances"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    worker_id: Mapped[str] = mapped_column(String(128), unique=True)
+    hostname: Mapped[str | None] = mapped_column(String(255))
+    process_id: Mapped[int | None] = mapped_column(Integer)
+    application_version: Mapped[str | None] = mapped_column(String(64))
+    concurrency: Mapped[int] = mapped_column(Integer, default=1)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32), default="online", index=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class UrlSourceEntry(Base):

@@ -1,5 +1,7 @@
 from app.models.resources import (
+    BackgroundJob,
     ContentBlob,
+    JobEvent,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -10,10 +12,13 @@ from app.models.resources import (
     UrlSourceEntry,
     WebResource,
     WebsiteProperty,
+    WorkerInstance,
 )
 
 __all__ = [
+    "BackgroundJob",
     "ContentBlob",
+    "JobEvent",
     "ResourceOccurrence",
     "ResourceSnapshot",
     "Scan",
@@ -24,4 +29,5 @@ __all__ = [
     "UrlSourceEntry",
     "WebResource",
     "WebsiteProperty",
+    "WorkerInstance",
 ]

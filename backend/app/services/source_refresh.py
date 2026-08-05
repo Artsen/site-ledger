@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -45,6 +46,15 @@ async def refresh_source(
     source_id: int,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> SourceRefresh | None:
+    refresh = create_source_refresh(db, site_id, source_id)
+    if refresh is None:
+        return None
+    return await execute_source_refresh(db, refresh.id, transport=transport)
+
+
+def create_source_refresh(
+    db: Session, site_id: int, source_id: int, *, commit: bool = True
+) -> SourceRefresh | None:
     source = db.scalar(
         select(UrlSource).where(
             UrlSource.id == source_id,
@@ -53,18 +63,61 @@ async def refresh_source(
     )
     if source is None:
         return None
+    refresh = _start_refresh(db, source, status="queued")
+    if commit:
+        db.commit()
+        db.refresh(refresh)
+    return refresh
+
+
+async def execute_source_refresh(
+    db: Session,
+    refresh_id: int,
+    transport: httpx.AsyncBaseTransport | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    progress_callback: Callable[[SourceRefresh], None] | None = None,
+) -> SourceRefresh | None:
+    refresh = db.get(SourceRefresh, refresh_id)
+    if refresh is None:
+        return None
+    source = refresh.url_source
     limits = _limits_from_site(source.website_property)
-    refresh = _start_refresh(db, source)
+    _start_existing_refresh(source, refresh)
+    db.commit()
     try:
+        _raise_if_cancelled(should_cancel)
         if source.source_type == "robots":
-            await _refresh_robots(db, source, refresh, limits, transport)
+            await _refresh_robots(
+                db,
+                source,
+                refresh,
+                limits,
+                transport,
+                should_cancel,
+                progress_callback,
+            )
         elif source.source_type == "sitemap":
-            await _refresh_sitemap(db, source, refresh, limits, transport, set(), 0)
+            await _refresh_sitemap(
+                db,
+                source,
+                refresh,
+                limits,
+                transport,
+                set(),
+                0,
+                should_cancel,
+                progress_callback,
+            )
         elif source.source_type == "manual":
             refresh.status = "completed"
             refresh.finished_at = datetime.now(UTC)
         else:
             raise ValueError(f"Unsupported source type: {source.source_type}")
+    except SourceRefreshCancelled:
+        refresh.status = "cancelled"
+        refresh.error_type = "cancelled"
+        refresh.error_message = "Refresh cancelled by user."
+        refresh.finished_at = datetime.now(UTC)
     except Exception as exc:
         refresh.status = "failed"
         refresh.error_type = _error_type(exc)
@@ -115,7 +168,19 @@ async def discover_from_robots(
     source = create_robots_source(db, site_id)
     if source is None:
         return None
-    return await refresh_source(db, site_id, source.id, transport)
+    refresh = create_source_refresh(db, site_id, source.id)
+    if refresh is None:
+        return None
+    return await execute_source_refresh(db, refresh.id, transport)
+
+
+def create_robots_discovery_refresh(
+    db: Session, site_id: int, *, commit: bool = True
+) -> SourceRefresh | None:
+    source = create_robots_source(db, site_id)
+    if source is None:
+        return None
+    return create_source_refresh(db, site_id, source.id, commit=commit)
 
 
 async def _refresh_robots(
@@ -124,10 +189,13 @@ async def _refresh_robots(
     refresh: SourceRefresh,
     limits: RefreshLimits,
     transport: httpx.AsyncBaseTransport | None,
+    should_cancel: Callable[[], bool] | None = None,
+    progress_callback: Callable[[SourceRefresh], None] | None = None,
 ) -> None:
     if not source.normalized_source_url:
         raise ValueError("Robots source URL is missing.")
     result = await _fetch(source.website_property, source.normalized_source_url, limits, transport)
+    _raise_if_cancelled(should_cancel)
     refresh.http_status = result.http_status
     refresh.fetched_url = result.requested_url
     refresh.final_url = result.final_url
@@ -137,6 +205,7 @@ async def _refresh_robots(
     refresh.discovered_entry_count = len(directives)
     child_count = 0
     for directive in directives[: limits.max_child_sources]:
+        _raise_if_cancelled(should_cancel)
         normalized = normalize_url(directive.resolved_url).normalized_url
         existing = db.scalar(
             select(UrlSource).where(
@@ -166,6 +235,7 @@ async def _refresh_robots(
     refresh.rejected_entry_count = max(0, len(directives) - limits.max_child_sources)
     refresh.status = "completed" if refresh.rejected_entry_count == 0 else "completed_with_errors"
     refresh.finished_at = datetime.now(UTC)
+    _progress(progress_callback, refresh)
 
 
 async def _refresh_sitemap(
@@ -176,7 +246,10 @@ async def _refresh_sitemap(
     transport: httpx.AsyncBaseTransport | None,
     seen_sources: set[str],
     depth: int,
+    should_cancel: Callable[[], bool] | None = None,
+    progress_callback: Callable[[SourceRefresh], None] | None = None,
 ) -> None:
+    _raise_if_cancelled(should_cancel)
     if not source.normalized_source_url:
         raise ValueError("Sitemap source URL is missing.")
     if source.normalized_source_url in seen_sources:
@@ -185,6 +258,7 @@ async def _refresh_sitemap(
         raise ValueError("Sitemap index recursion limit exceeded.")
     seen_sources.add(source.normalized_source_url)
     result = await _fetch(source.website_property, source.normalized_source_url, limits, transport)
+    _raise_if_cancelled(should_cancel)
     refresh.http_status = result.http_status
     refresh.fetched_url = result.requested_url
     refresh.final_url = result.final_url
@@ -201,6 +275,7 @@ async def _refresh_sitemap(
         seen_entries: set[str] = set()
         added = updated = accepted = rejected = 0
         for sitemap_url in parsed.urls:
+            _raise_if_cancelled(should_cancel)
             entry, state = upsert_source_entry(
                 db,
                 source,
@@ -232,10 +307,12 @@ async def _refresh_sitemap(
         refresh.entries_no_longer_current = no_longer
         refresh.status = "completed" if rejected == 0 else "completed_with_errors"
         refresh.finished_at = datetime.now(UTC)
+        _progress(progress_callback, refresh)
         return
     child_count = 0
     warnings: list[dict[str, Any]] = []
     for child in parsed.children[: limits.max_child_sources]:
+        _raise_if_cancelled(should_cancel)
         normalized = normalize_url(child.loc).normalized_url
         child_source = db.scalar(
             select(UrlSource).where(
@@ -263,7 +340,15 @@ async def _refresh_sitemap(
         child_refresh = _start_refresh(db, child_source)
         try:
             await _refresh_sitemap(
-                db, child_source, child_refresh, limits, transport, seen_sources, depth + 1
+                db,
+                child_source,
+                child_refresh,
+                limits,
+                transport,
+                seen_sources,
+                depth + 1,
+                should_cancel,
+                progress_callback,
             )
         except Exception as exc:
             child_refresh.status = "failed"
@@ -283,6 +368,7 @@ async def _refresh_sitemap(
         else "completed_with_errors"
     )
     refresh.finished_at = datetime.now(UTC)
+    _progress(progress_callback, refresh)
 
 
 async def _fetch(
@@ -318,11 +404,28 @@ async def _validate_redirect(
     return True, None, None, result.normalized.normalized_url
 
 
-def _start_refresh(db: Session, source: UrlSource) -> SourceRefresh:
+class SourceRefreshCancelled(RuntimeError):
+    pass
+
+
+def _raise_if_cancelled(should_cancel: Callable[[], bool] | None) -> None:
+    if should_cancel and should_cancel():
+        raise SourceRefreshCancelled("Cancellation requested.")
+
+
+def _progress(
+    progress_callback: Callable[[SourceRefresh], None] | None, refresh: SourceRefresh
+) -> None:
+    if progress_callback:
+        progress_callback(refresh)
+
+
+def _start_refresh(db: Session, source: UrlSource, status: str = "running") -> SourceRefresh:
+    now = datetime.now(UTC)
     refresh = SourceRefresh(
         url_source_id=source.id,
-        status="running",
-        started_at=datetime.now(UTC),
+        status=status,
+        started_at=now,
         response_bytes=0,
         discovered_entry_count=0,
         accepted_entry_count=0,
@@ -333,11 +436,22 @@ def _start_refresh(db: Session, source: UrlSource) -> SourceRefresh:
         entries_no_longer_current=0,
         warnings_json=[],
     )
-    source.last_refresh_status = "running"
-    source.last_refresh_started_at = refresh.started_at
+    source.last_refresh_status = status
+    source.last_refresh_started_at = now if status == "running" else None
     db.add(refresh)
     db.flush()
     return refresh
+
+
+def _start_existing_refresh(source: UrlSource, refresh: SourceRefresh) -> None:
+    now = datetime.now(UTC)
+    refresh.status = "running"
+    refresh.started_at = now
+    refresh.finished_at = None
+    refresh.error_type = None
+    refresh.error_message = None
+    source.last_refresh_status = "running"
+    source.last_refresh_started_at = now
 
 
 def _finish_source(source: UrlSource, refresh: SourceRefresh) -> None:

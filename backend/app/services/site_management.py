@@ -3,7 +3,7 @@ from typing import Any
 from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Scan, UrlSourceEntry, WebsiteProperty
+from app.models import BackgroundJob, Scan, UrlSourceEntry, WebsiteProperty
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate, WebsitePropertyUpdate
 from app.services.scan_seeds import create_scan_seeds
@@ -77,6 +77,14 @@ def delete_site(db: Session, site_id: int) -> int | None:
     scan_count = db.scalar(select(func.count(Scan.id)).where(Scan.website_property_id == site.id))
     if scan_count:
         raise SiteHasScansError("Delete or detach this site's scans before deleting the site.")
+    active_job_count = db.scalar(
+        select(func.count(BackgroundJob.id)).where(
+            BackgroundJob.website_property_id == site.id,
+            BackgroundJob.status.in_({"queued", "running"}),
+        )
+    )
+    if active_job_count:
+        raise SiteHasScansError("The site has active background work.")
     resource_ids = list(
         db.scalars(
             select(distinct(UrlSourceEntry.resource_id))
@@ -101,6 +109,7 @@ def create_scan_from_site(
     *,
     include_inventory: bool = False,
     source_ids: list[int] | None = None,
+    commit: bool = True,
 ) -> Scan | None:
     site = db.get(WebsiteProperty, site_id)
     if site is None:
@@ -122,8 +131,9 @@ def create_scan_from_site(
         include_inventory=include_inventory,
         source_ids=source_ids or [],
     )
-    db.commit()
-    db.refresh(scan)
+    if commit:
+        db.commit()
+        db.refresh(scan)
     return scan
 
 

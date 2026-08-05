@@ -1,12 +1,21 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.models import ResourceOccurrence, ResourceSnapshot, Scan, WebsiteProperty
+from app.models import (
+    BackgroundJob,
+    JobEvent,
+    ResourceOccurrence,
+    ResourceSnapshot,
+    Scan,
+    SourceRefresh,
+    WebsiteProperty,
+)
 from app.schemas.graph import GraphEdgeOccurrenceList, GraphResponse
+from app.schemas.jobs import JobEventList, JobEventRead, JobList, JobRead, WorkerHealth
 from app.schemas.scans import (
     InboundLinkList,
     LinkRead,
@@ -40,6 +49,15 @@ from app.schemas.sources import (
     UrlSourceRead,
     UrlSourceUpdate,
 )
+from app.services.background_jobs import (
+    active_job_for_scan,
+    active_job_for_source_refresh,
+    enqueue_scan_job,
+    enqueue_source_refresh_job,
+    presentation_status,
+    request_cancellation,
+    worker_health,
+)
 from app.services.graph_queries import (
     DEFAULT_GRAPH_EDGE_LIMIT,
     DEFAULT_GRAPH_NODE_LIMIT,
@@ -68,6 +86,7 @@ from app.services.site_management import (
 from app.services.site_queries import get_site_detail, list_site_scans, list_sites
 from app.services.source_management import (
     DuplicateSourceError,
+    SourceHasActiveJobError,
     add_manual_urls,
     create_source,
     delete_source,
@@ -80,7 +99,7 @@ from app.services.source_queries import (
     list_source_entries,
     list_sources,
 )
-from app.services.source_refresh import discover_from_robots, refresh_source
+from app.services.source_refresh import create_robots_discovery_refresh, create_source_refresh
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
 router = APIRouter(prefix="/api")
@@ -95,8 +114,95 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.post("/scans", response_model=ScanRead, status_code=201)
-async def create_scan(payload: ScanCreate, request: Request, db: DbSession) -> Scan:
+@router.get("/jobs/worker-health", response_model=WorkerHealth)
+def get_worker_health(db: DbSession) -> WorkerHealth:
+    from app.config import get_settings
+
+    return worker_health(db, get_settings().job_worker_offline_seconds)
+
+
+@router.get("/jobs", response_model=JobList)
+def list_jobs(
+    db: DbSession,
+    job_type: str | None = None,
+    status: str | None = None,
+    scan_id: int | None = None,
+    source_refresh_id: int | None = None,
+    website_property_id: int | None = None,
+    limit: ScanListLimit = 50,
+    offset: PageOffset = 0,
+) -> JobList:
+    query = select(BackgroundJob)
+    count_query = select(func.count(BackgroundJob.id))
+    if job_type:
+        query = query.where(BackgroundJob.job_type == job_type)
+        count_query = count_query.where(BackgroundJob.job_type == job_type)
+    if status:
+        query = query.where(BackgroundJob.status == status)
+        count_query = count_query.where(BackgroundJob.status == status)
+    if scan_id is not None:
+        query = query.where(BackgroundJob.scan_id == scan_id)
+        count_query = count_query.where(BackgroundJob.scan_id == scan_id)
+    if source_refresh_id is not None:
+        query = query.where(BackgroundJob.source_refresh_id == source_refresh_id)
+        count_query = count_query.where(BackgroundJob.source_refresh_id == source_refresh_id)
+    if website_property_id is not None:
+        query = query.where(BackgroundJob.website_property_id == website_property_id)
+        count_query = count_query.where(BackgroundJob.website_property_id == website_property_id)
+    total = db.scalar(count_query) or 0
+    items = list(
+        db.scalars(
+            query.order_by(BackgroundJob.created_at.desc(), BackgroundJob.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    health = get_worker_health(db)
+    return JobList(
+        items=[_job_read(job, health) for job in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/jobs/{job_id}", response_model=JobRead)
+def get_job(job_id: int, db: DbSession) -> JobRead:
+    job = db.get(BackgroundJob, job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    return _job_read(job, get_worker_health(db))
+
+
+@router.get("/jobs/{job_id}/events", response_model=JobEventList)
+def get_job_events(
+    job_id: int,
+    db: DbSession,
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> JobEventList:
+    if db.get(BackgroundJob, job_id) is None:
+        raise HTTPException(404, "Job not found")
+    total = db.scalar(select(func.count(JobEvent.id)).where(JobEvent.job_id == job_id)) or 0
+    events = list(
+        db.scalars(
+            select(JobEvent)
+            .where(JobEvent.job_id == job_id)
+            .order_by(JobEvent.created_at.asc(), JobEvent.id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    return JobEventList(
+        items=[JobEventRead.model_validate(event, from_attributes=True) for event in events],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/scans", response_model=ScanRead, status_code=202)
+def create_scan(payload: ScanCreate, db: DbSession) -> Scan:
     if payload.website_property_id is not None:
         site = db.get(WebsiteProperty, payload.website_property_id)
         if site is None:
@@ -110,9 +216,10 @@ async def create_scan(payload: ScanCreate, request: Request, db: DbSession) -> S
         scope_config=payload.scope_config.model_dump(),
     )
     db.add(scan)
+    db.flush()
+    enqueue_scan_job(db, scan)
     db.commit()
     db.refresh(scan)
-    await request.app.state.scan_runner.queue(scan.id)
     return scan
 
 
@@ -229,9 +336,9 @@ def remove_site(site_id: int, db: DbSession) -> SiteDeleteResult:
     return SiteDeleteResult(deleted_site_id=deleted)
 
 
-@router.post("/sites/{site_id}/scans", response_model=ScanRead, status_code=201)
-async def post_site_scan(
-    site_id: int, payload: SiteScanCreate, request: Request, db: DbSession
+@router.post("/sites/{site_id}/scans", response_model=ScanRead, status_code=202)
+def post_site_scan(
+    site_id: int, payload: SiteScanCreate, db: DbSession
 ) -> Scan:
     try:
         scan = create_scan_from_site(
@@ -240,12 +347,15 @@ async def post_site_scan(
             payload.scope_config,
             include_inventory=payload.include_inventory,
             source_ids=payload.source_ids,
+            commit=False,
         )
     except InactiveSiteError as exc:
         raise HTTPException(409, str(exc)) from exc
     if scan is None:
         raise HTTPException(404, "Site not found")
-    await request.app.state.scan_runner.queue(scan.id)
+    enqueue_scan_job(db, scan)
+    db.commit()
+    db.refresh(scan)
     return scan
 
 
@@ -296,7 +406,10 @@ def patch_site_source(
 
 @router.delete("/sites/{site_id}/sources/{source_id}")
 def delete_site_source(site_id: int, source_id: int, db: DbSession) -> dict[str, int]:
-    deleted = delete_source(db, site_id, source_id)
+    try:
+        deleted = delete_source(db, site_id, source_id)
+    except SourceHasActiveJobError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if deleted is None:
         raise HTTPException(404, "Source not found")
     return {"deleted_source_id": deleted}
@@ -305,24 +418,30 @@ def delete_site_source(site_id: int, source_id: int, db: DbSession) -> dict[str,
 @router.post(
     "/sites/{site_id}/sources/{source_id}/refresh",
     response_model=SourceRefreshRead,
-    status_code=201,
+    status_code=202,
 )
-async def post_source_refresh(site_id: int, source_id: int, db: DbSession) -> SourceRefreshRead:
-    refresh = await refresh_source(db, site_id, source_id)
+def post_source_refresh(site_id: int, source_id: int, db: DbSession) -> SourceRefreshRead:
+    refresh = create_source_refresh(db, site_id, source_id, commit=False)
     if refresh is None:
         raise HTTPException(404, "Source not found")
+    enqueue_source_refresh_job(db, refresh)
+    db.commit()
+    db.refresh(refresh)
     return SourceRefreshRead.model_validate(refresh, from_attributes=True)
 
 
 @router.post(
     "/sites/{site_id}/sources/discover-robots",
     response_model=SourceRefreshRead,
-    status_code=201,
+    status_code=202,
 )
-async def post_robots_discovery(site_id: int, db: DbSession) -> SourceRefreshRead:
-    refresh = await discover_from_robots(db, site_id)
+def post_robots_discovery(site_id: int, db: DbSession) -> SourceRefreshRead:
+    refresh = create_robots_discovery_refresh(db, site_id, commit=False)
     if refresh is None:
         raise HTTPException(404, "Site not found")
+    enqueue_source_refresh_job(db, refresh)
+    db.commit()
+    db.refresh(refresh)
     return SourceRefreshRead.model_validate(refresh, from_attributes=True)
 
 
@@ -369,6 +488,23 @@ def get_source_refreshes(
     if result is None:
         raise HTTPException(404, "Source not found")
     return result
+
+
+@router.post("/source-refreshes/{refresh_id}/cancel", response_model=SourceRefreshRead)
+def cancel_source_refresh(refresh_id: int, db: DbSession) -> SourceRefreshRead:
+    refresh = db.get(SourceRefresh, refresh_id)
+    if refresh is None:
+        raise HTTPException(404, "Source refresh not found")
+    job = active_job_for_source_refresh(db, refresh_id)
+    if job:
+        request_cancellation(db, job)
+        if job.status == "cancelled":
+            refresh.status = "cancelled"
+            refresh.error_type = "cancelled"
+            refresh.error_message = "Refresh cancelled by user."
+            db.commit()
+    db.refresh(refresh)
+    return SourceRefreshRead.model_validate(refresh, from_attributes=True)
 
 
 @router.post("/sites/{site_id}/manual-urls", response_model=ManualUrlBatchResult, status_code=201)
@@ -467,11 +603,17 @@ def get_scan(scan_id: int, db: DbSession) -> Scan:
 
 
 @router.post("/scans/{scan_id}/cancel", response_model=ScanRead)
-async def cancel_scan(scan_id: int, request: Request, db: DbSession) -> Scan:
-    await request.app.state.scan_runner.cancel(scan_id)
+def cancel_scan(scan_id: int, db: DbSession) -> Scan:
     scan = db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(404, "Scan not found")
+    job = active_job_for_scan(db, scan_id)
+    if job:
+        request_cancellation(db, job)
+        if job.status == "cancelled":
+            scan.status = "cancelled"
+            scan.stop_reason = "cancelled_by_user"
+            db.commit()
     db.refresh(scan)
     return scan
 
@@ -491,7 +633,7 @@ def get_deletion_summary(scan_id: int, db: DbSession) -> ScanDeletePreview:
 
 @router.delete("/scans/{scan_id}", response_model=ScanDeleteResult)
 def delete_scan(scan_id: int, request: Request, db: DbSession) -> ScanDeleteResult:
-    if request.app.state.scan_runner.is_active(scan_id):
+    if active_job_for_scan(db, scan_id):
         raise HTTPException(409, "The scan must finish or be cancelled before it can be deleted.")
     store: LocalContentStore = request.app.state.content_store
     try:
@@ -699,4 +841,41 @@ def get_resource_occurrences(resource_id: int, db: DbSession) -> list[ResourceOc
         db.scalars(
             select(ResourceOccurrence).where(ResourceOccurrence.target_resource_id == resource_id)
         )
+    )
+
+
+def _job_read(job: BackgroundJob, health: WorkerHealth) -> JobRead:
+    return JobRead(
+        id=job.id,
+        job_type=job.job_type,
+        status=job.status,
+        presentation_status=presentation_status(job, health),
+        priority=job.priority,
+        scan_id=job.scan_id,
+        source_refresh_id=job.source_refresh_id,
+        website_property_id=job.website_property_id,
+        dedupe_key=job.dedupe_key,
+        payload_json=job.payload_json,
+        progress_version=job.progress_version,
+        progress_json=job.progress_json,
+        current_operation=job.current_operation,
+        progress_current=job.progress_current,
+        progress_total=job.progress_total,
+        progress_unit=job.progress_unit,
+        result_json=job.result_json,
+        created_at=job.created_at,
+        available_at=job.available_at,
+        claimed_at=job.claimed_at,
+        started_at=job.started_at,
+        heartbeat_at=job.heartbeat_at,
+        lease_expires_at=job.lease_expires_at,
+        finished_at=job.finished_at,
+        worker_id=job.worker_id,
+        attempt_count=job.attempt_count,
+        max_attempts=job.max_attempts,
+        cancellation_requested_at=job.cancellation_requested_at,
+        cancelled_at=job.cancelled_at,
+        error_type=job.error_type,
+        error_message=job.error_message,
+        last_error_at=job.last_error_at,
     )
