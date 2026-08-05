@@ -73,6 +73,22 @@ export type GraphResponse = {
   effective_filters: Record<string, string | number | boolean | null>;
 };
 
+export type GraphCapabilities = {
+  default_node_limit: number;
+  maximum_node_limit: number;
+  default_edge_limit: number;
+  maximum_edge_limit: number;
+  default_focus_hops: number;
+  maximum_focus_hops: number;
+  sample_anchor_limit: number;
+  occurrence_page_default: number;
+  occurrence_page_maximum: number;
+  supported_status_filters: string[];
+  supported_error_filters: string[];
+  supported_node_size_modes: string[];
+  supported_node_category_modes: string[];
+};
+
 export type GraphEdgeOccurrence = LinkOccurrence & {
   source_snapshot_id: number;
   target_snapshot_id: number | null;

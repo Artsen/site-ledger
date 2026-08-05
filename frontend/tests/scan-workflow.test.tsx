@@ -50,6 +50,7 @@ const api = vi.hoisted(() => ({
   listJobs: vi.fn(),
   getJob: vi.fn(),
   getWorkerHealth: vi.fn(),
+  getGraphCapabilities: vi.fn(),
   getScanGraph: vi.fn(),
   getGraphEdgeOccurrences: vi.fn()
 }));
@@ -161,6 +162,7 @@ beforeEach(() => {
   api.listJobs.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
   api.getJob.mockResolvedValue(jobFixture);
   api.getWorkerHealth.mockResolvedValue(workerHealthFixture);
+  api.getGraphCapabilities.mockResolvedValue(graphCapabilitiesFixture);
   api.getScanGraph.mockResolvedValue(graphFixture);
   api.getGraphEdgeOccurrences.mockResolvedValue(edgeOccurrenceFixture);
 });
@@ -261,7 +263,7 @@ describe("scan results workflow", () => {
 
     fireEvent.change(screen.getByLabelText("Graph mode"), { target: { value: "3d" } });
     await waitFor(() => {
-      expect(api.getScanGraph.mock.calls.some((call) => call[0] === "1" && String(call[1]).includes("max_nodes=300") && String(call[1]).includes("max_edges=1000"))).toBe(true);
+      expect(api.getScanGraph.mock.calls.some((call) => call[0] === "1" && String(call[1]).includes("max_nodes=100") && String(call[1]).includes("max_edges=250"))).toBe(true);
     });
     expect(screen.getByLabelText("Graph mode")).toHaveValue("3d");
 
@@ -715,6 +717,22 @@ const graphFixture = {
     }
   ],
   effective_filters: {}
+};
+
+const graphCapabilitiesFixture = {
+  default_node_limit: 100,
+  maximum_node_limit: 3000,
+  default_edge_limit: 250,
+  maximum_edge_limit: 10000,
+  default_focus_hops: 1,
+  maximum_focus_hops: 3,
+  sample_anchor_limit: 5,
+  occurrence_page_default: 50,
+  occurrence_page_maximum: 200,
+  supported_status_filters: ["any", "2xx", "3xx", "4xx", "5xx", "none"],
+  supported_error_filters: ["any", "with_errors", "without_errors"],
+  supported_node_size_modes: ["uniform", "inbound_sources", "inbound_occurrences", "outbound_targets", "outbound_occurrences", "response_time", "depth_inverse"],
+  supported_node_category_modes: ["status", "fetch_state", "depth", "host", "path", "error", "seed"]
 };
 
 const edgeOccurrenceFixture = {

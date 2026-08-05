@@ -224,6 +224,10 @@ async function mockApi(page: Page) {
     });
   });
 
+  await page.route("**/api/graph/capabilities", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(graphCapabilities) });
+  });
+
   await page.route(/\/api\/scans\/1\/graph(?:\?.*)?$/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(graph) });
   });
@@ -452,6 +456,22 @@ const graph = {
     }
   ],
   effective_filters: {}
+};
+
+const graphCapabilities = {
+  default_node_limit: 100,
+  maximum_node_limit: 3000,
+  default_edge_limit: 250,
+  maximum_edge_limit: 10000,
+  default_focus_hops: 1,
+  maximum_focus_hops: 3,
+  sample_anchor_limit: 5,
+  occurrence_page_default: 50,
+  occurrence_page_maximum: 200,
+  supported_status_filters: ["any", "2xx", "3xx", "4xx", "5xx", "none"],
+  supported_error_filters: ["any", "with_errors", "without_errors"],
+  supported_node_size_modes: ["uniform", "inbound_sources", "inbound_occurrences", "outbound_targets", "outbound_occurrences", "response_time", "depth_inverse"],
+  supported_node_category_modes: ["status", "fetch_state", "depth", "host", "path", "error", "seed"]
 };
 
 const snapshot = {
