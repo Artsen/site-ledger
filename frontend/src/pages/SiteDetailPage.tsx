@@ -13,6 +13,7 @@ import {
   getSite,
   listInventory,
   listJobs,
+  listSitePages,
   listSources,
   refreshSource,
   updateSite
@@ -26,7 +27,7 @@ import { LoadingBlock } from "../components/ui/Loading";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { classificationLabel } from "../types/siteClassifications";
 import type { Job, WorkerHealth } from "../types/jobs";
-import type { InventoryItem, Site, UrlSource } from "../types/scans";
+import type { InventoryItem, PersistentPage, Site, UrlSource } from "../types/scans";
 import { formatDate, formatStatus, isTerminalStatus, plural } from "../utils/format";
 
 export function SiteDetailPage() {
@@ -77,15 +78,80 @@ export function SiteDetailPage() {
       </div>
       {toggleActive.error || remove.error ? <ErrorBanner error={toggleActive.error ?? remove.error} title="Site action failed" /> : null}
       <div className="mb-5 flex gap-2 border-b border-stone-200 text-sm">
-        {["overview", "scans", "sources", "inventory"].map((item) => (
+        {["overview", "scans", "pages", "sources", "inventory"].map((item) => (
           <button key={item} type="button" onClick={() => setTab(setSearchParams, item)} className={`border-b-2 px-3 py-2 capitalize ${tab === item ? "border-neutral-900 text-neutral-900" : "border-transparent text-stone-500"}`}>{item}</button>
         ))}
       </div>
       {tab === "overview" ? <OverviewTab site={site.data} /> : null}
       {tab === "scans" ? <ScansTab site={site.data} /> : null}
+      {tab === "pages" ? <PagesTab site={site.data} /> : null}
       {tab === "sources" ? <SourcesTab site={site.data} /> : null}
       {tab === "inventory" ? <InventoryTab site={site.data} /> : null}
     </PageFrame>
+  );
+}
+
+function PagesTab({ site }: { site: Site }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = new URLSearchParams();
+  for (const key of ["search", "host", "path_prefix", "sort", "direction", "offset"]) {
+    const value = searchParams.get(key);
+    if (value) query.set(key, value);
+  }
+  const pages = useQuery({
+    queryKey: ["site-pages", String(site.id), query.toString()],
+    queryFn: () => listSitePages(String(site.id), `?${query.toString()}`)
+  });
+  return (
+    <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <input aria-label="Search site pages" value={searchParams.get("search") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "search", event.target.value)} placeholder="Search pages" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
+        <input aria-label="Page host" value={searchParams.get("host") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "host", event.target.value)} placeholder="Host" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
+        <input aria-label="Page path prefix" value={searchParams.get("path_prefix") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "path_prefix", event.target.value)} placeholder="Path prefix" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
+      </div>
+      {pages.error ? <ErrorBanner error={pages.error} title="Could not load pages" /> : null}
+      {pages.isLoading ? <LoadingBlock label="Loading pages..." /> : null}
+      {pages.data?.items.length ? <SitePagesTable siteId={site.id} pages={pages.data.items} /> : !pages.isLoading ? <EmptyState title="No observed pages" message="Run a scan for this site to build a persistent Page catalog." /> : null}
+      {pages.data ? <Pagination total={pages.data.total} limit={pages.data.limit} offset={pages.data.offset} setSearchParams={setSearchParams} searchParams={searchParams} /> : null}
+    </section>
+  );
+}
+
+function SitePagesTable({ siteId, pages }: { siteId: number; pages: PersistentPage[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-left text-sm">
+        <thead className="bg-stone-100 text-xs uppercase text-stone-500">
+          <tr>{["Page", "Observations", "First observed", "Latest observation", "Reuse", "Actions"].map((header) => <th key={header} scope="col" className="px-3 py-2">{header}</th>)}</tr>
+        </thead>
+        <tbody>
+          {pages.map((page) => (
+            <tr key={page.resource_id} className="border-t border-stone-100 align-top">
+              <td className="max-w-xl px-3 py-2">
+                <Link to={`/sites/${siteId}/pages/${page.resource_id}`} className="block truncate font-mono text-xs underline">{page.normalized_url}</Link>
+                <span className="mt-1 block text-xs text-stone-500">{page.latest_title ?? "Untitled"}</span>
+              </td>
+              <td className="px-3 py-2">{plural(page.observation_count, "scan")}</td>
+              <td className="px-3 py-2">{formatDate(page.first_observed_at)}</td>
+              <td className="px-3 py-2">
+                {page.latest_http_status ? <StatusBadge status={String(page.latest_http_status)} label={String(page.latest_http_status)} /> : "Not available"}
+                <span className="mt-1 block text-xs text-stone-500">{formatDate(page.latest_observed_at)}</span>
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <span className="block">{retrievalLabel(page.latest_retrieval_method)}</span>
+                <span className="block text-stone-500">{parseLabel(page.latest_parse_method)}</span>
+              </td>
+              <td className="px-3 py-2">
+                <div className="flex flex-col gap-1 text-xs">
+                  <Link className="underline" to={`/sites/${siteId}/pages/${page.resource_id}`}>Open Page</Link>
+                  {page.latest_scan_id && page.latest_snapshot_id ? <Link className="underline" to={`/scans/${page.latest_scan_id}/pages/${page.latest_snapshot_id}`}>Latest observation</Link> : null}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -363,6 +429,48 @@ function setTab(setSearchParams: ReturnType<typeof useSearchParams>[1], tab: str
     next.set("tab", tab);
     return next;
   });
+}
+
+function Pagination({ total, limit, offset, setSearchParams, searchParams }: { total: number; limit: number; offset: number; setSearchParams: ReturnType<typeof useSearchParams>[1]; searchParams: URLSearchParams }) {
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
+      <span>{plural(total, "item")}</span>
+      <div className="flex gap-2">
+        <Button type="button" disabled={offset <= 0} onClick={() => setOffset(setSearchParams, searchParams, Math.max(0, offset - limit))}>Previous</Button>
+        <Button type="button" disabled={offset + limit >= total} onClick={() => setOffset(setSearchParams, searchParams, offset + limit)}>Next</Button>
+      </div>
+    </div>
+  );
+}
+
+function setOffset(setSearchParams: ReturnType<typeof useSearchParams>[1], searchParams: URLSearchParams, offset: number) {
+  setSearchParams(() => {
+    const next = new URLSearchParams(searchParams);
+    next.set("offset", String(offset));
+    return next;
+  });
+}
+
+function retrievalLabel(value: string | null) {
+  const labels: Record<string, string> = {
+    full_fetch: "Full download",
+    full_fetch_after_revalidation_fallback: "Full download",
+    conditional_not_modified: "Revalidated",
+    non_html: "Non-HTML",
+    failed: "Failed"
+  };
+  return value ? labels[value] ?? value : "Legacy observation";
+}
+
+function parseLabel(value: string | null) {
+  const labels: Record<string, string> = {
+    parsed: "Full parse",
+    reused_exact_hash: "Parsed result reused",
+    reused_not_modified: "Parsed result reused",
+    not_applicable: "No parse",
+    failed: "Parse failed"
+  };
+  return value ? labels[value] ?? value : "Legacy parse state";
 }
 
 function setSearchParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string) {

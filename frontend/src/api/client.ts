@@ -1,4 +1,4 @@
-import type { InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, PageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
+import type { InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import { errorFromResponse } from "../utils/errors";
@@ -32,7 +32,9 @@ export const defaultScope = (): ScopeConfig => ({
   user_agent: "WebsiteScanner/0.1",
   drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
   allow_private_networks: false,
-  max_redirects: 10
+  max_redirects: 10,
+  enable_http_revalidation: true,
+  enable_parse_reuse: true
 });
 
 export function createScan(startingUrl: string, scopeConfig: ScopeConfig, websitePropertyId?: number | null) {
@@ -64,6 +66,9 @@ export const cancelSourceRefresh = (refreshId: string) => request<SourceRefresh>
 export const listSourceEntries = (siteId: string, sourceId: string, query = "") => request<UrlSourceEntryList>(`/api/sites/${siteId}/sources/${sourceId}/entries${query}`);
 export const addManualUrls = (siteId: string, urlsText: string) => request<ManualUrlBatchResult>(`/api/sites/${siteId}/manual-urls`, { method: "POST", body: JSON.stringify({ urls_text: urlsText }) });
 export const listInventory = (siteId: string, query = "") => request<InventoryList>(`/api/sites/${siteId}/inventory${query}`);
+export const listSitePages = (siteId: string, query = "") => request<PersistentPageList>(`/api/sites/${siteId}/pages${query}`);
+export const getSitePage = (siteId: string, resourceId: string) => request<PersistentPageDetail>(`/api/sites/${siteId}/pages/${resourceId}`);
+export const listPageObservations = (siteId: string, resourceId: string, query = "") => request<PageObservationList>(`/api/sites/${siteId}/pages/${resourceId}/observations${query}`);
 
 export const listScans = () => request<Scan[]>("/api/scans");
 export const listScanHistory = (query = "") => request<ScanHistory>(`/api/scans/history${query}`);

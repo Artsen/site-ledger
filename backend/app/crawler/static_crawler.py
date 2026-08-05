@@ -9,7 +9,6 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.crawler.html_parser import parse_html
 from app.crawler.safe_fetch import (
     FetchLimits,
     RedirectFailureError,
@@ -21,6 +20,13 @@ from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.security import UnsafeDestinationError, validate_public_destination
 from app.crawler.url_normalizer import NormalizedUrl
 from app.models import ResourceOccurrence, ResourceSnapshot, Scan, ScanSeed
+from app.services.cache_policy import (
+    find_revalidation_candidate,
+    representation_headers,
+    request_variant_fingerprint,
+    response_header_value,
+)
+from app.services.parse_artifacts import get_or_create_artifact, load_artifact_anchors
 from app.services.repositories import get_or_create_resource
 from app.storage.content_store import LocalContentStore
 
@@ -160,6 +166,22 @@ class StaticPageCrawler:
         resource = get_or_create_resource(self.db, item.normalized)
         try:
             await validate_public_destination(item.requested_url, config.allow_private_networks)
+            request_headers = representation_headers(config.user_agent)
+            fingerprint = request_variant_fingerprint(request_headers)
+            candidate = (
+                find_revalidation_candidate(
+                    self.db,
+                    scan=scan,
+                    resource_id=resource.id,
+                    request_headers=request_headers,
+                    store=self.store,
+                )
+                if config.enable_http_revalidation
+                else None
+            )
+            fetch_headers = {"Accept": request_headers["accept"]}
+            if candidate is not None:
+                fetch_headers.update(candidate.request_headers)
             fetcher = SafeHttpFetcher(
                 FetchLimits(
                     timeout_seconds=config.request_timeout_seconds,
@@ -172,15 +194,122 @@ class StaticPageCrawler:
                 redirect_validator=lambda url: _validate_redirect(scope, url),
                 destination_validator=validate_public_destination,
             )
-            result = await fetcher.get(item.requested_url)
+            result = await fetcher.get(item.requested_url, headers=fetch_headers)
+            if candidate is not None:
+                scan.conditional_request_count += 1
+            if candidate is not None and result.http_status == 304:
+                if result.final_url == candidate.snapshot.final_url and candidate.snapshot.blob:
+                    artifact_result = (
+                        get_or_create_artifact(
+                            self.db,
+                            blob=candidate.snapshot.blob,
+                            content=self.store.get(candidate.snapshot.blob),
+                            resolution_base_url=candidate.snapshot.final_url
+                            or candidate.snapshot.requested_url,
+                        )
+                        if candidate.snapshot.parse_artifact_id is None
+                        else None
+                    )
+                    artifact = (
+                        artifact_result.artifact
+                        if artifact_result
+                        else candidate.snapshot.parse_artifact
+                    )
+                    anchors = (
+                        artifact_result.anchors
+                        if artifact_result
+                        else load_artifact_anchors(self.db, artifact)
+                        if artifact
+                        else []
+                    )
+                    snapshot = ResourceSnapshot(
+                        scan_id=scan.id,
+                        resource_id=resource.id,
+                        requested_url=item.requested_url,
+                        final_url=candidate.snapshot.final_url,
+                        http_status=candidate.snapshot.http_status,
+                        content_type=candidate.snapshot.content_type,
+                        encoding=candidate.snapshot.encoding,
+                        crawl_depth=item.depth,
+                        fetched_at=datetime.now(UTC),
+                        response_time_ms=result.response_time_ms,
+                        response_headers=candidate.snapshot.response_headers,
+                        redirect_chain=result.redirect_chain,
+                        html_blob_id=candidate.snapshot.html_blob_id,
+                        parse_artifact_id=artifact.id if artifact else None,
+                        reused_from_snapshot_id=candidate.snapshot.id,
+                        raw_html_sha256=candidate.snapshot.raw_html_sha256,
+                        head_sha256=artifact.head_sha256
+                        if artifact
+                        else candidate.snapshot.head_sha256,
+                        page_title=artifact.page_title
+                        if artifact
+                        else candidate.snapshot.page_title,
+                        html_language=artifact.html_language
+                        if artifact
+                        else candidate.snapshot.html_language,
+                        meta_description=artifact.meta_description
+                        if artifact
+                        else candidate.snapshot.meta_description,
+                        meta_robots=artifact.meta_robots
+                        if artifact
+                        else candidate.snapshot.meta_robots,
+                        canonical_url=artifact.canonical_url
+                        if artifact
+                        else candidate.snapshot.canonical_url,
+                        parsed_head_json=artifact.parsed_head_json
+                        if artifact
+                        else candidate.snapshot.parsed_head_json,
+                        fetch_state="fetched",
+                        error_type=None,
+                        error_message=None,
+                        retrieval_method="conditional_not_modified",
+                        parse_method="reused_not_modified",
+                        retrieval_http_status=304,
+                        retrieval_response_headers=result.headers,
+                        network_bytes_transferred=0,
+                        request_variant_fingerprint=candidate.fingerprint,
+                        etag=candidate.snapshot.etag,
+                        last_modified=candidate.snapshot.last_modified,
+                        cache_control=candidate.snapshot.cache_control,
+                        vary_header=candidate.snapshot.vary_header,
+                    )
+                    self.db.add(snapshot)
+                    self.db.flush()
+                    scan.not_modified_count += 1
+                    scan.parse_reuse_count += 1
+                    scan.reused_content_bytes += candidate.snapshot.blob.raw_byte_size
+                    return snapshot, anchors
+                result = await fetcher.get(
+                    item.requested_url,
+                    headers={"Accept": request_headers["accept"]},
+                )
             content_type = result.content_type
             is_html = "text/html" in (content_type or "").lower() or not content_type
-            parsed = parse_html(result.content, result.final_url) if is_html else None
             blob = (
                 self.store.put_html(self.db, result.content, content_type, result.encoding)
                 if is_html
                 else None
             )
+            artifact_result = (
+                get_or_create_artifact(
+                    self.db,
+                    blob=blob,
+                    content=result.content,
+                    resolution_base_url=result.final_url,
+                    force_parse=not config.enable_parse_reuse,
+                )
+                if blob
+                else None
+            )
+            artifact = artifact_result.artifact if artifact_result else None
+            anchors = artifact_result.anchors if artifact_result else []
+            if artifact_result:
+                if artifact_result.parsed:
+                    scan.full_parse_count += 1
+                else:
+                    scan.parse_reuse_count += 1
+            scan.network_bytes_transferred += len(result.content)
             snapshot = ResourceSnapshot(
                 scan_id=scan.id,
                 resource_id=resource.id,
@@ -195,23 +324,38 @@ class StaticPageCrawler:
                 response_headers=result.headers,
                 redirect_chain=result.redirect_chain,
                 html_blob_id=blob.id if blob else None,
+                parse_artifact_id=artifact.id if artifact else None,
                 raw_html_sha256=blob.sha256 if blob else None,
-                head_sha256=parsed.head_sha256 if parsed else None,
-                page_title=parsed.title if parsed else None,
-                html_language=parsed.html_language if parsed else None,
-                meta_description=parsed.meta_description if parsed else None,
-                meta_robots=parsed.meta_robots if parsed else None,
-                canonical_url=parsed.canonical_url if parsed else None,
-                parsed_head_json=parsed.head_json if parsed else None,
+                head_sha256=artifact.head_sha256 if artifact else None,
+                page_title=artifact.page_title if artifact else None,
+                html_language=artifact.html_language if artifact else None,
+                meta_description=artifact.meta_description if artifact else None,
+                meta_robots=artifact.meta_robots if artifact else None,
+                canonical_url=artifact.canonical_url if artifact else None,
+                parsed_head_json=artifact.parsed_head_json if artifact else None,
                 fetch_state="fetched" if is_html else "skipped",
                 error_type=None if is_html else "unsupported_content_type",
                 error_message=None if is_html else "Response was not HTML",
+                retrieval_method="full_fetch_after_revalidation_fallback"
+                if candidate is not None
+                else "full_fetch"
+                if is_html
+                else "non_html",
+                parse_method=artifact_result.parse_method if artifact_result else "not_applicable",
+                retrieval_http_status=result.http_status,
+                retrieval_response_headers=result.headers,
+                network_bytes_transferred=len(result.content),
+                request_variant_fingerprint=fingerprint,
+                etag=response_header_value(result.headers, "etag"),
+                last_modified=response_header_value(result.headers, "last-modified"),
+                cache_control=response_header_value(result.headers, "cache-control"),
+                vary_header=response_header_value(result.headers, "vary"),
             )
             self.db.add(snapshot)
             self.db.flush()
             if not is_html:
                 scan.skipped_count += 1
-            return snapshot, parsed.anchors if parsed else []
+            return snapshot, anchors
         except httpx.TooManyRedirects as exc:
             return self._record_failure(scan, item, "too_many_redirects", str(exc)), []
         except ResponseTooLargeError as exc:

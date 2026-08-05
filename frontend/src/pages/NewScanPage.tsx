@@ -77,8 +77,8 @@ export function NewScanPage() {
   useEffect(() => {
     if (!selectedSite || mode !== "site") return;
     setStartingUrl(selectedSite.base_url);
-    setScope(selectedSite.scope_config);
-    setListFields(listsFromScope(selectedSite.scope_config));
+    setScope(hydrateScope(selectedSite.scope_config));
+    setListFields(listsFromScope(hydrateScope(selectedSite.scope_config)));
     setSelectedSourceIds([]);
     setSourceSelectionTouched(false);
   }, [selectedSite, mode]);
@@ -196,8 +196,8 @@ export function NewScanPage() {
                     </div>
                   ) : null}
                   <Button type="button" className="mt-3" onClick={() => {
-                    setScope(selectedSite.scope_config);
-                    setListFields(listsFromScope(selectedSite.scope_config));
+                    setScope(hydrateScope(selectedSite.scope_config));
+                    setListFields(listsFromScope(hydrateScope(selectedSite.scope_config)));
                   }}>Reset to saved site configuration</Button>
                 </div>
               ) : null}
@@ -240,6 +240,35 @@ export function NewScanPage() {
             <Field id="max-depth" label="Maximum depth" error={validation.maxDepth} helper="Depth 0 scans only the starting URL.">
               <input id="max-depth" type="number" min={0} max={50} value={numberInputValue(scope.max_depth)} onChange={(event) => updateNumber("max_depth", event.target.value)} className={inputClass(Boolean(validation.maxDepth))} />
             </Field>
+          </div>
+          <div className="mt-5 rounded-md border border-stone-200 bg-stone-50 p-3">
+            <div className="text-sm font-medium text-stone-900">Repeat-scan optimization</div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="flex items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={scope.enable_http_revalidation}
+                  onChange={(event) => setScope({ ...scope, enable_http_revalidation: event.target.checked })}
+                  className="mt-0.5 size-4 rounded border-stone-300"
+                />
+                <span>
+                  <span className="block font-medium text-stone-900">Use HTTP revalidation</span>
+                  <span className="block text-xs leading-5 text-stone-600">Send ETag and Last-Modified validators when a compatible prior observation exists. Turn off to force full content downloads.</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={scope.enable_parse_reuse}
+                  onChange={(event) => setScope({ ...scope, enable_parse_reuse: event.target.checked })}
+                  className="mt-0.5 size-4 rounded border-stone-300"
+                />
+                <span>
+                  <span className="block font-medium text-stone-900">Reuse parsed results</span>
+                  <span className="block text-xs leading-5 text-stone-600">Reuse deterministic metadata and links for identical HTML. Turn off to force a full parse.</span>
+                </span>
+              </label>
+            </div>
           </div>
         </div>
 
@@ -420,8 +449,12 @@ function scopeFromQuery(searchParams: URLSearchParams) {
   const raw = searchParams.get("scope");
   if (!raw) return defaultScope();
   try {
-    return { ...defaultScope(), ...(JSON.parse(raw) as Partial<ScopeConfig>) };
+    return hydrateScope(JSON.parse(raw) as Partial<ScopeConfig>);
   } catch {
     return defaultScope();
   }
+}
+
+function hydrateScope(scope: Partial<ScopeConfig>): ScopeConfig {
+  return { ...defaultScope(), ...scope };
 }

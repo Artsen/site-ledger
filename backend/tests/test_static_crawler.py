@@ -6,7 +6,7 @@ from starlette.routing import Route
 
 from app.crawler.scope import ScopeConfig
 from app.crawler.static_crawler import StaticPageCrawler
-from app.models import ContentBlob, ResourceOccurrence, ResourceSnapshot, Scan
+from app.models import ContentBlob, HtmlParseArtifact, ResourceOccurrence, ResourceSnapshot, Scan
 from app.storage.content_store import LocalContentStore
 
 
@@ -270,6 +270,69 @@ async def test_response_size_limits_are_enforced_while_streaming(db_session, tmp
     assert len(oversized) == 2
     assert all(snapshot.html_blob_id is None for snapshot in oversized)
     assert db_session.query(ContentBlob).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_repeat_scan_revalidates_and_reuses_parse_artifact(db_session, tmp_path) -> None:
+    requests: list[httpx.Request] = []
+    html = b"""
+      <html><head><title>Cached</title><link rel="canonical" href="/canonical"></head>
+      <body><a href="/next">Next</a></body></html>
+    """
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.headers.get("if-none-match") == '"v1"':
+            return httpx.Response(
+                304,
+                headers={
+                    "etag": '"v1"',
+                    "last-modified": "Wed, 05 Aug 2026 00:00:00 GMT",
+                },
+            )
+        return httpx.Response(
+            200,
+            content=html,
+            headers={
+                "content-type": "text/html; charset=utf-8",
+                "etag": '"v1"',
+                "last-modified": "Wed, 05 Aug 2026 00:00:00 GMT",
+            },
+        )
+
+    store = LocalContentStore(tmp_path)
+    config = ScopeConfig(
+        allowed_host_patterns=["fixture.test"],
+        allow_private_networks=True,
+        max_pages=1,
+    )
+    first = _scan(db_session, config)
+    await StaticPageCrawler(db_session, store, transport=httpx.MockTransport(handler)).run(first)
+    second = _scan(db_session, config)
+    await StaticPageCrawler(db_session, store, transport=httpx.MockTransport(handler)).run(second)
+
+    snapshots = db_session.query(ResourceSnapshot).order_by(ResourceSnapshot.id).all()
+    assert len(snapshots) == 2
+    assert snapshots[0].retrieval_method == "full_fetch"
+    assert snapshots[0].parse_method == "parsed"
+    assert snapshots[1].retrieval_method == "conditional_not_modified"
+    assert snapshots[1].parse_method == "reused_not_modified"
+    assert snapshots[1].retrieval_http_status == 304
+    assert snapshots[1].http_status == 200
+    assert snapshots[1].html_blob_id == snapshots[0].html_blob_id
+    assert snapshots[1].parse_artifact_id == snapshots[0].parse_artifact_id
+    assert snapshots[1].reused_from_snapshot_id == snapshots[0].id
+    assert second.conditional_request_count == 1
+    assert second.not_modified_count == 1
+    assert second.parse_reuse_count == 1
+    assert second.network_bytes_transferred == 0
+    assert (
+        db_session.query(ResourceOccurrence).filter_by(source_snapshot_id=snapshots[1].id).count()
+        == 1
+    )
+    assert db_session.query(ContentBlob).count() == 1
+    assert db_session.query(HtmlParseArtifact).count() == 1
+    assert requests[-1].headers["if-none-match"] == '"v1"'
 
 
 def _scan(

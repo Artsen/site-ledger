@@ -5,6 +5,7 @@ import { Navigate, RouterProvider, createBrowserRouter } from "react-router-dom"
 
 import { AppShell } from "./components/AppShell";
 import { PageDetailPage } from "./pages/PageDetailPage";
+import { PersistentPageDetailPage } from "./pages/PersistentPageDetailPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
 import { ScansPage } from "./pages/ScansPage";
 import { SiteDetailPage } from "./pages/SiteDetailPage";
@@ -22,6 +23,7 @@ const router = createBrowserRouter([
       { path: "sites", element: <SitesPage /> },
       { path: "sites/new", element: <SiteFormPage mode="create" /> },
       { path: "sites/:siteId", element: <SiteDetailPage /> },
+      { path: "sites/:siteId/pages/:resourceId", element: <PersistentPageDetailPage /> },
       { path: "sites/:siteId/edit", element: <SiteFormPage mode="edit" /> },
       { path: "scans", element: <ScansPage /> },
       { path: "scans/new", element: <NewScanPage /> },

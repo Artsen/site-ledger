@@ -21,6 +21,8 @@ class ScopeConfigPayload(BaseModel):
     drop_query_parameters: list[str] = Field(default_factory=list)
     allow_private_networks: bool = False
     max_redirects: int = 10
+    enable_http_revalidation: bool = True
+    enable_parse_reuse: bool = True
 
 
 class ScanCreate(BaseModel):
@@ -45,6 +47,12 @@ class ScanRead(BaseModel):
     failed_count: int
     skipped_count: int
     queued_count: int
+    conditional_request_count: int = 0
+    not_modified_count: int = 0
+    parse_reuse_count: int = 0
+    full_parse_count: int = 0
+    network_bytes_transferred: int = 0
+    reused_content_bytes: int = 0
     stop_reason: str | None
     fatal_error_message: str | None
 
@@ -66,10 +74,82 @@ class PageRead(BaseModel):
     response_time_ms: int | None
     fetch_state: str
     error_type: str | None
+    retrieval_method: str | None = None
+    parse_method: str | None = None
+    retrieval_http_status: int | None = None
+    reused_from_snapshot_id: int | None = None
+    network_bytes_transferred: int | None = None
 
 
 class PageList(BaseModel):
     items: list[PageRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class PersistentPageRead(BaseModel):
+    resource_id: int
+    normalized_url: str
+    host: str
+    path: str
+    query: str
+    observation_count: int
+    first_observed_at: datetime | None
+    latest_observed_at: datetime | None
+    latest_snapshot_id: int | None
+    latest_scan_id: int | None
+    latest_http_status: int | None
+    latest_title: str | None
+    latest_retrieval_method: str | None
+    latest_parse_method: str | None
+    latest_reused_from_snapshot_id: int | None
+
+
+class PersistentPageList(BaseModel):
+    items: list[PersistentPageRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class PersistentPageDetail(BaseModel):
+    page: PersistentPageRead
+    site_id: int
+    site_name: str
+
+
+class PageObservationRead(BaseModel):
+    snapshot_id: int
+    scan_id: int
+    site_id: int | None
+    site_name: str | None
+    scan_created_at: datetime
+    observed_at: datetime | None
+    requested_url: str
+    final_url: str | None
+    http_status: int | None
+    retrieval_http_status: int | None
+    fetch_state: str
+    error_type: str | None
+    crawl_depth: int
+    response_time_ms: int | None
+    content_type: str | None
+    raw_html_sha256: str | None
+    head_sha256: str | None
+    page_title: str | None
+    canonical_url: str | None
+    retrieval_method: str | None
+    parse_method: str | None
+    content_blob_id: int | None
+    parse_artifact_id: int | None
+    reused_from_snapshot_id: int | None
+    network_bytes_transferred: int | None
+    parser_version: str | None
+
+
+class PageObservationList(BaseModel):
+    items: list[PageObservationRead]
     total: int
     limit: int
     offset: int
@@ -101,6 +181,18 @@ class SnapshotRead(BaseModel):
     fetch_state: str
     error_type: str | None
     error_message: str | None
+    parse_artifact_id: int | None = None
+    reused_from_snapshot_id: int | None = None
+    retrieval_method: str | None = None
+    parse_method: str | None = None
+    retrieval_http_status: int | None = None
+    retrieval_response_headers: dict[str, Any] | None = None
+    network_bytes_transferred: int | None = None
+    request_variant_fingerprint: str | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    cache_control: str | None = None
+    vary_header: str | None = None
 
     model_config = {"from_attributes": True}
 

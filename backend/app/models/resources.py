@@ -36,6 +36,12 @@ class Scan(Base):
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
     skipped_count: Mapped[int] = mapped_column(Integer, default=0)
     queued_count: Mapped[int] = mapped_column(Integer, default=0)
+    conditional_request_count: Mapped[int] = mapped_column(Integer, default=0)
+    not_modified_count: Mapped[int] = mapped_column(Integer, default=0)
+    parse_reuse_count: Mapped[int] = mapped_column(Integer, default=0)
+    full_parse_count: Mapped[int] = mapped_column(Integer, default=0)
+    network_bytes_transferred: Mapped[int] = mapped_column(Integer, default=0)
+    reused_content_bytes: Mapped[int] = mapped_column(Integer, default=0)
     stop_reason: Mapped[str | None] = mapped_column(String(128))
     fatal_error_message: Mapped[str | None] = mapped_column(Text)
 
@@ -122,6 +128,72 @@ class ContentBlob(Base):
     stored_byte_size: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    parse_artifacts: Mapped[list["HtmlParseArtifact"]] = relationship(back_populates="content_blob")
+
+
+class HtmlParseArtifact(Base):
+    __tablename__ = "html_parse_artifacts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    content_blob_id: Mapped[int] = mapped_column(
+        ForeignKey("content_blobs.id", ondelete="CASCADE"), index=True
+    )
+    parser_version: Mapped[str] = mapped_column(String(64))
+    parser_config_version: Mapped[str] = mapped_column(String(64))
+    resolution_base_url: Mapped[str] = mapped_column(Text)
+    page_title: Mapped[str | None] = mapped_column(Text)
+    html_language: Mapped[str | None] = mapped_column(String(64))
+    meta_description: Mapped[str | None] = mapped_column(Text)
+    meta_robots: Mapped[str | None] = mapped_column(Text)
+    canonical_url: Mapped[str | None] = mapped_column(Text)
+    document_encoding: Mapped[str | None] = mapped_column(String(64))
+    viewport: Mapped[str | None] = mapped_column(Text)
+    head_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    parsed_head_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    anchor_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    content_blob: Mapped[ContentBlob] = relationship(back_populates="parse_artifacts")
+    anchors: Mapped[list["HtmlParseAnchor"]] = relationship(
+        back_populates="parse_artifact", cascade="all, delete-orphan"
+    )
+    snapshots: Mapped[list["ResourceSnapshot"]] = relationship(back_populates="parse_artifact")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "content_blob_id",
+            "parser_version",
+            "parser_config_version",
+            "resolution_base_url",
+            name="uq_html_parse_artifact_identity",
+        ),
+    )
+
+
+class HtmlParseAnchor(Base):
+    __tablename__ = "html_parse_anchors"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    parse_artifact_id: Mapped[int] = mapped_column(
+        ForeignKey("html_parse_artifacts.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    raw_href: Mapped[str | None] = mapped_column(Text)
+    resolved_url: Mapped[str | None] = mapped_column(Text)
+    anchor_text: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)
+    aria_label: Mapped[str | None] = mapped_column(Text)
+    rel: Mapped[str | None] = mapped_column(Text)
+    target: Mapped[str | None] = mapped_column(String(128))
+    dom_path: Mapped[str | None] = mapped_column(Text)
+
+    parse_artifact: Mapped[HtmlParseArtifact] = relationship(back_populates="anchors")
+
+    __table_args__ = (
+        UniqueConstraint("parse_artifact_id", "position", name="uq_parse_anchor_position"),
+        Index("ix_parse_anchor_artifact_position", "parse_artifact_id", "position"),
+    )
+
 
 class ResourceSnapshot(Base):
     __tablename__ = "resource_snapshots"
@@ -140,6 +212,12 @@ class ResourceSnapshot(Base):
     response_headers: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     redirect_chain: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     html_blob_id: Mapped[int | None] = mapped_column(ForeignKey("content_blobs.id"))
+    parse_artifact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("html_parse_artifacts.id", ondelete="SET NULL"), index=True
+    )
+    reused_from_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("resource_snapshots.id", ondelete="SET NULL"), index=True
+    )
     raw_html_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
     head_sha256: Mapped[str | None] = mapped_column(String(64))
     page_title: Mapped[str | None] = mapped_column(Text)
@@ -151,13 +229,32 @@ class ResourceSnapshot(Base):
     fetch_state: Mapped[str] = mapped_column(String(32), index=True)
     error_type: Mapped[str | None] = mapped_column(String(64), index=True)
     error_message: Mapped[str | None] = mapped_column(Text)
+    retrieval_method: Mapped[str | None] = mapped_column(String(64), index=True)
+    parse_method: Mapped[str | None] = mapped_column(String(64), index=True)
+    retrieval_http_status: Mapped[int | None] = mapped_column(Integer, index=True)
+    retrieval_response_headers: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    network_bytes_transferred: Mapped[int | None] = mapped_column(Integer)
+    request_variant_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
+    etag: Mapped[str | None] = mapped_column(Text)
+    last_modified: Mapped[str | None] = mapped_column(Text)
+    cache_control: Mapped[str | None] = mapped_column(Text)
+    vary_header: Mapped[str | None] = mapped_column(Text)
 
     scan: Mapped[Scan] = relationship(back_populates="snapshots")
     resource: Mapped[WebResource] = relationship(back_populates="snapshots")
     blob: Mapped[ContentBlob | None] = relationship()
+    parse_artifact: Mapped[HtmlParseArtifact | None] = relationship(
+        back_populates="snapshots", foreign_keys=[parse_artifact_id]
+    )
+    reused_from_snapshot: Mapped["ResourceSnapshot | None"] = relationship(
+        remote_side=[id], foreign_keys=[reused_from_snapshot_id]
+    )
     occurrences: Mapped[list["ResourceOccurrence"]] = relationship(back_populates="source_snapshot")
 
-    __table_args__ = (Index("ix_snapshot_scan_resource", "scan_id", "resource_id"),)
+    __table_args__ = (
+        Index("ix_snapshot_scan_resource", "scan_id", "resource_id"),
+        Index("ix_snapshot_resource_fetched", "resource_id", "fetched_at", "id"),
+    )
 
 
 class ResourceOccurrence(Base):
