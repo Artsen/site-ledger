@@ -343,6 +343,25 @@ describe("saved sites workflow", () => {
     expect(api.updateSite).not.toHaveBeenCalled();
   });
 
+  it("selects all URL inventory sources for a saved-site scan", async () => {
+    renderRoute(<NewScanPage />, "/scans/new", "/scans/new?site_id=3");
+
+    expect(await screen.findByLabelText("Site")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Include current URL inventory"));
+
+    const selectAll = await screen.findByLabelText("Select all sources");
+    await waitFor(() => expect(selectAll).toBeChecked());
+    fireEvent.click(selectAll);
+
+    expect(screen.getByText("Select at least one source, or turn off inventory.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start scan" })).toBeDisabled();
+
+    fireEvent.click(selectAll);
+    fireEvent.click(screen.getByRole("button", { name: "Start scan" }));
+
+    await waitFor(() => expect(api.createSiteScan).toHaveBeenCalledWith("3", expect.any(Object), true, [4]));
+  });
+
   it("shows source and inventory tools on site detail", async () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=sources");
 
