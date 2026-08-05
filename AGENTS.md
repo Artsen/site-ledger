@@ -532,6 +532,25 @@ PR 8 adds durable background jobs:
 - The frontend should show queued, running, cancelling, interrupted, and waiting-for-worker states
   using job and worker-health APIs.
 
+PR 9 hardens graph scalability:
+
+- `services.graph_config` is the authoritative graph configuration source. Do not duplicate graph
+  limits in routes, frontend controls, schemas, tests, or docs.
+- Frontend graph controls must consume `GET /api/graph/capabilities` for shared limits and supported
+  backend-owned filter capabilities.
+- Graph node filtering, ranking, exact available counts, and limiting should happen in SQL before
+  loading snapshot rows into Python.
+- Node and edge metrics should remain set-based. Do not add one query per node or one query per edge
+  patterns.
+- Edge occurrence pagination must not load the full occurrence collection to build a summary. Use a
+  SQL aggregate summary and a separate paginated row query.
+- Focus neighborhoods must validate scan ownership, expand in bounded batches per hop, avoid cycles,
+  and enforce configured hop/node/edge limits.
+- Keep graph data adaptation pure and renderer-independent. Keep 2D and 3D renderer imports lazy and
+  isolated from shared controls and adapters.
+- Document practical graph limits honestly; do not promise very large visible graphs unless covered
+  by deterministic fixtures and benchmarks.
+
 The page table should include requested URL, final URL, status, title, depth, content type, discovery source, inbound occurrence count, fetch duration, and error state.
 
 Favor clarity and density over decorative dashboard cards. The graph visualization is not part of PR 1.

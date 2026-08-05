@@ -89,6 +89,22 @@ class GraphResponse(BaseModel):
     effective_filters: dict[str, str | int | bool | None]
 
 
+class GraphCapabilitiesRead(BaseModel):
+    default_node_limit: int
+    maximum_node_limit: int
+    default_edge_limit: int
+    maximum_edge_limit: int
+    default_focus_hops: int
+    maximum_focus_hops: int
+    sample_anchor_limit: int
+    occurrence_page_default: int
+    occurrence_page_maximum: int
+    supported_status_filters: list[str]
+    supported_error_filters: list[str]
+    supported_node_size_modes: list[str]
+    supported_node_category_modes: list[str]
+
+
 class GraphEdgeOccurrenceRead(LinkRead):
     source_snapshot_id: int
     target_snapshot_id: int | None = None

@@ -218,6 +218,30 @@ The frontend treats job state as supplemental execution state. Scan detail and s
 jobs and worker health so users can see queued, running, cancelling, interrupted, and
 waiting-for-worker states after API restarts.
 
+## PR 9 Graph Scalability
+
+Graph configuration is centralized in `services.graph_config` and exposed through
+`GET /api/graph/capabilities`. Routes use the same configuration for validation, and frontend graph
+controls load capabilities rather than duplicating backend limit constants.
+
+`services.graph_queries` still provides the public graph service facade for routes, but candidate
+node filtering, ranking, exact available counts, and limiting now happen in SQL before ORM snapshot
+rows are loaded. Metric subqueries participate in filtering and ranking, and detailed metrics are
+loaded only for selected node resources.
+
+Focused neighborhood traversal expands incoming and outgoing page-link relationships with one
+batched query per hop instead of one query per visited node. Traversal remains scan-specific,
+cycle-aware, and bounded by configured focus hops and graph node limits.
+
+The graph edge occurrence endpoint now builds edge summaries with SQL aggregates and fetches only
+the requested occurrence page. Duplicate-heavy edges remain bounded in response size and memory:
+stored occurrences stay duplicate-preserving, but paginated graph occurrence rows are not loaded
+wholesale for summaries.
+
+Frontend graph adaptation is split into pure modules for renderer types, coordinates, node sizing,
+node categories, and edge styling. The existing `graphDataAdapter` remains the public adaptation
+entry point, and 2D/3D renderer imports remain isolated in lazy renderer modules.
+
 ## Deferred
 
 Robots.txt enforcement and concurrent crawling remain internal configuration placeholders for a

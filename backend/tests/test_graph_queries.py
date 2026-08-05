@@ -3,7 +3,12 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from app.models import ResourceOccurrence, ResourceSnapshot, Scan, ScanSeed, WebResource
-from app.services.graph_queries import GraphFilters, get_scan_graph, list_graph_edge_occurrences
+from app.services.graph_filters import GraphFilters
+from app.services.graph_queries import (
+    get_graph_capabilities,
+    get_scan_graph,
+    list_graph_edge_occurrences,
+)
 
 
 def test_graph_nodes_and_edges_are_scan_specific_and_aggregated(db_session: Session) -> None:
@@ -27,6 +32,21 @@ def test_graph_nodes_and_edges_are_scan_specific_and_aggregated(db_session: Sess
     scan_b_graph = get_scan_graph(db_session, scan_b.id, GraphFilters())
     assert scan_b_graph is not None
     assert scan_b_graph.summary.total_occurrences == 1
+
+
+def test_graph_capabilities_are_backend_owned() -> None:
+    capabilities = get_graph_capabilities()
+
+    assert capabilities.default_node_limit == 100
+    assert capabilities.maximum_node_limit == 3000
+    assert capabilities.default_edge_limit == 250
+    assert capabilities.maximum_edge_limit == 10000
+    assert capabilities.default_focus_hops == 1
+    assert capabilities.maximum_focus_hops == 3
+    assert capabilities.occurrence_page_default == 50
+    assert capabilities.occurrence_page_maximum == 200
+    assert "2xx" in capabilities.supported_status_filters
+    assert "inbound_occurrences" in capabilities.supported_node_size_modes
 
 
 def test_graph_filters_self_links_unfetched_and_connectivity(db_session: Session) -> None:
@@ -107,6 +127,9 @@ def test_graph_limiting_focus_and_edge_occurrences(db_session: Session) -> None:
         )
         is None
     )
+    assert (
+        list_graph_edge_occurrences(db_session, scan.id, f"{source.id}-999999", None, 10, 0) is None
+    )
     with pytest.raises(ValueError):
         get_scan_graph(db_session, scan.id, GraphFilters(focus_snapshot_id=999999))
 
@@ -125,7 +148,63 @@ def test_graph_query_count_is_bounded(db_session: Session) -> None:
         event.remove(db_session.bind, "before_cursor_execute", before_cursor_execute)
 
     assert graph is not None
-    assert len(queries) <= 11
+    assert len(queries) <= 13
+
+
+def test_duplicate_heavy_edge_occurrence_page_stays_bounded(db_session: Session) -> None:
+    scan = _scan(db_session, "https://example.com/")
+    source_resource = _resource(db_session, "https://example.com/", "/")
+    target_resource = _resource(db_session, "https://example.com/target", "/target")
+    source = _snapshot(db_session, scan, source_resource, source_resource.normalized_url, "Home", 0)
+    _snapshot(db_session, scan, target_resource, target_resource.normalized_url, "Target", 1)
+    db_session.bulk_insert_mappings(
+        ResourceOccurrence,
+        [
+            {
+                "source_snapshot_id": source.id,
+                "relation_type": "page_link",
+                "raw_href": "/target",
+                "resolved_url": target_resource.normalized_url,
+                "normalized_target_url": target_resource.normalized_url,
+                "target_resource_id": target_resource.id,
+                "anchor_text": "" if index % 20 == 0 else f"Anchor {index % 11:02d}",
+                "rel": "nofollow" if index % 10 == 0 else None,
+                "dom_path": "html > body > nav > a" if index % 3 == 0 else "html > body > main > a",
+                "in_scope": True,
+                "scope_decision": "crawlable",
+            }
+            for index in range(10_000)
+        ],
+    )
+    db_session.commit()
+    queries: list[str] = []
+
+    def before_cursor_execute(*args) -> None:
+        queries.append(str(args[2]))
+
+    event.listen(db_session.bind, "before_cursor_execute", before_cursor_execute)
+    try:
+        occurrences = list_graph_edge_occurrences(
+            db_session,
+            scan.id,
+            f"{source.id}-{target_resource.id}",
+            search=None,
+            limit=50,
+            offset=0,
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", before_cursor_execute)
+
+    assert occurrences is not None
+    assert occurrences.total == 10_000
+    assert len(occurrences.items) == 50
+    assert occurrences.edge is not None
+    assert occurrences.edge.occurrence_count == 10_000
+    assert occurrences.edge.nofollow_occurrence_count == 1_000
+    assert occurrences.edge.empty_anchor_occurrence_count == 500
+    assert len(occurrences.edge.sample_anchor_texts) <= 5
+    assert occurrences.edge.scope_decisions == {"crawlable": 10_000}
+    assert len(queries) <= 6
 
 
 def _graph_fixture(

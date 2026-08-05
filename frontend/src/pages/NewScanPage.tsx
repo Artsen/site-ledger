@@ -47,6 +47,7 @@ export function NewScanPage() {
   const [listFields, setListFields] = useState<ListFieldText>(() => listsFromScope(initialScope));
   const [includeInventory, setIncludeInventory] = useState(false);
   const [selectedSourceIds, setSelectedSourceIds] = useState<number[]>([]);
+  const [sourceSelectionTouched, setSourceSelectionTouched] = useState(false);
   const submittingRef = useRef(false);
   const urlValidation = useMemo(() => normalizeStartingUrlInput(startingUrl), [startingUrl]);
   const effectiveScope = useMemo(() => scopeFromForm(scope, listFields), [scope, listFields]);
@@ -57,6 +58,10 @@ export function NewScanPage() {
     queryFn: () => listSources(selectedSiteId, "?active_state=active&limit=100"),
     enabled: mode === "site" && Boolean(selectedSiteId)
   });
+  const sourceItems = useMemo(() => sources.data?.items ?? [], [sources.data?.items]);
+  const sourceIds = useMemo(() => sourceItems.map((source) => source.id), [sourceItems]);
+  const allSourcesSelected = sourceIds.length > 0 && sourceIds.every((id) => selectedSourceIds.includes(id));
+  const sourceSelectionError = includeInventory && sourceIds.length > 0 && selectedSourceIds.length === 0 ? "Select at least one source, or turn off inventory." : null;
   const mutation = useMutation({
     mutationFn: () => mode === "site" && selectedSite ? createSiteScan(String(selectedSite.id), effectiveScope, includeInventory, selectedSourceIds) : createScan(urlValidation.normalizedUrl, effectiveScope),
     onSuccess: async (scan) => {
@@ -67,7 +72,7 @@ export function NewScanPage() {
       submittingRef.current = false;
     }
   });
-  const canStart = mode === "site" ? Boolean(selectedSite) && !validation.hasErrors && !mutation.isPending : !validation.hasErrors && !mutation.isPending;
+  const canStart = mode === "site" ? Boolean(selectedSite) && !validation.hasErrors && !sourceSelectionError && !mutation.isPending : !validation.hasErrors && !mutation.isPending;
 
   useEffect(() => {
     if (!selectedSite || mode !== "site") return;
@@ -75,7 +80,13 @@ export function NewScanPage() {
     setScope(selectedSite.scope_config);
     setListFields(listsFromScope(selectedSite.scope_config));
     setSelectedSourceIds([]);
+    setSourceSelectionTouched(false);
   }, [selectedSite, mode]);
+
+  useEffect(() => {
+    if (!includeInventory || sourceSelectionTouched || sourceIds.length === 0) return;
+    setSelectedSourceIds(sourceIds);
+  }, [includeInventory, sourceIds, sourceSelectionTouched]);
 
   useEffect(() => {
     writePreferences({
@@ -133,24 +144,55 @@ export function NewScanPage() {
                   <div className="font-medium">{selectedSite.name}</div>
                   <div className="mt-1 font-mono text-xs text-stone-600">{selectedSite.base_url}</div>
                   <label className="mt-3 flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={includeInventory} onChange={(event) => setIncludeInventory(event.target.checked)} className="size-4 rounded border-stone-300" />
+                    <input
+                      type="checkbox"
+                      checked={includeInventory}
+                      onChange={(event) => {
+                        setIncludeInventory(event.target.checked);
+                        if (!event.target.checked) {
+                          setSelectedSourceIds([]);
+                          setSourceSelectionTouched(false);
+                        }
+                      }}
+                      className="size-4 rounded border-stone-300"
+                    />
                     Include current URL inventory
                   </label>
                   {includeInventory ? (
                     <div className="mt-3 rounded-md border border-stone-200 bg-white p-3">
-                      <div className="mb-2 text-xs font-medium text-stone-600">Sources</div>
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs font-medium text-stone-600">Sources</div>
+                        {sourceIds.length ? (
+                          <label className="flex items-center gap-2 text-xs font-medium text-stone-700">
+                            <input
+                              type="checkbox"
+                              checked={allSourcesSelected}
+                              onChange={(event) => {
+                                setSourceSelectionTouched(true);
+                                setSelectedSourceIds(event.target.checked ? sourceIds : []);
+                              }}
+                              className="size-4 rounded border-stone-300"
+                            />
+                            Select all sources
+                          </label>
+                        ) : null}
+                      </div>
                       {sources.isLoading ? <LoadingBlock label="Loading sources..." /> : null}
-                      {sources.data?.items.length ? sources.data.items.map((source) => (
+                      {sourceItems.length ? sourceItems.map((source) => (
                         <label key={source.id} className="flex items-center gap-2 py-1 text-xs">
                           <input
                             type="checkbox"
                             checked={selectedSourceIds.includes(source.id)}
-                            onChange={(event) => setSelectedSourceIds((current) => event.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id))}
+                            onChange={(event) => {
+                              setSourceSelectionTouched(true);
+                              setSelectedSourceIds((current) => event.target.checked ? [...new Set([...current, source.id])] : current.filter((id) => id !== source.id));
+                            }}
                             className="size-4 rounded border-stone-300"
                           />
                           <span>{source.name} · {source.current_entry_count} URLs</span>
                         </label>
                       )) : !sources.isLoading ? <div className="text-xs text-stone-500">No active sources yet. All current active sources will be used when available.</div> : null}
+                      {sourceSelectionError ? <div className="mt-2 text-xs text-red-700">{sourceSelectionError}</div> : null}
                     </div>
                   ) : null}
                   <Button type="button" className="mt-3" onClick={() => {

@@ -10,6 +10,7 @@ flowchart LR
   Snapshots[ResourceSnapshot rows] --> Queries[services.graph_queries]
   Occurrences[ResourceOccurrence rows] --> Queries
   Seeds[ScanSeed rows] --> Queries
+  Config[services.graph_config] --> API[Graph capabilities API]
   Queries --> API[Graph API schemas and routes]
   API --> Client[frontend graph API client]
   Client --> Adapter[graphDataAdapter]
@@ -19,9 +20,10 @@ flowchart LR
   Controls --> Export[Local PNG export]
 ```
 
-`services.graph_queries` owns SQL and topology assembly. Route handlers validate query parameters and
-return typed responses only. Frontend code uses application-owned graph types and converts them into
-renderer data in `graphDataAdapter`.
+`services.graph_config` owns shared graph limits and capabilities. `services.graph_queries` owns SQL
+and topology assembly. Route handlers validate query parameters and return typed responses only.
+Frontend code loads capabilities once through TanStack Query, uses application-owned graph types, and
+converts them into renderer data through the graph adapter modules.
 
 ## Node Semantics
 
@@ -65,19 +67,21 @@ Defaults:
 
 Hard caps:
 
-- `max_nodes=1500`
-- `max_edges=5000`
+- `max_nodes=3000`
+- `max_edges=10000`
 - `focus_hops=1..3`
 
 When limits apply, ordering is deterministic: starting page first, then lower crawl depth, stronger
-inbound and outbound connectivity, normalized URL, and snapshot ID. Edges are returned only when both
-endpoints are included. The graph summary reports truncation reasons.
+inbound and outbound connectivity, normalized URL, and snapshot ID. Candidate filtering, exact
+available-node counts, ranking, and limiting happen in SQL before snapshot rows are loaded into
+Python. Edges are returned only when both endpoints are included. The graph summary reports
+truncation reasons.
 
 ## Neighborhoods
 
 When `focus_snapshot_id` is supplied, the backend verifies that snapshot belongs to the selected
-scan. It includes incoming and outgoing neighbors up to `focus_hops`, preserves edge direction, and
-still enforces hard node and edge limits.
+scan. It includes incoming and outgoing neighbors up to `focus_hops` with one batched query per hop,
+preserves edge direction, and still enforces hard node and edge limits.
 
 ## Rendering
 
@@ -118,15 +122,15 @@ page-detail routes. Text from scanned pages is rendered as escaped React text, n
 
 The graph tab lazy-loads renderer modules. The production build emits separate chunks for the 2D and
 3D renderers, keeping Three.js-backed 3D code out of the initial application bundle. The 3D chunk is
-large and currently triggers Vite's chunk-size warning; this is expected for PR 7 and should be
-revisited if more graph renderers or overlays are added.
+large and currently triggers Vite's chunk-size warning. Current chunk measurements and dependency
+tree notes are tracked in `docs/graph-performance.md`.
 
 ## Performance Expectations
 
 The default graph size is intended for interactive inspection of hundreds of pages and low thousands
-of edges. The hard cap is 1,500 nodes and 5,000 edges. Larger scans should use filters or focused
-neighborhood mode. PR 7 does not claim support for very large site-wide graphs with tens of thousands
-of visible nodes.
+of edges. The hard cap is 3,000 nodes and 10,000 edges. Larger scans should use filters or focused
+neighborhood mode. The graph does not claim support for very large site-wide graphs with tens of
+thousands of visible nodes.
 
 ## Future Layouts
 

@@ -208,14 +208,18 @@ Graph filters and display controls are stored in URL parameters. Users can filte
 depth, status, errors, connectivity thresholds, self-links, and optional unfetched internal pages.
 Display controls include 2D/3D mode, node sizing, node categorization, labels, arrows, edge width,
 background, presentation mode, and PNG export. Search and the node/edge browser panels provide an
-accessible alternative to canvas-only exploration.
+accessible alternative to canvas-only exploration. Shared graph defaults and hard limits are exposed
+through `GET /api/graph/capabilities`, so frontend controls do not duplicate backend constants.
 
-The graph is bounded by deterministic server-side limits. The default graph returns up to 400 nodes
-and 1,200 edges; hard caps are 3,000 nodes and 10,000 edges. The API prioritizes the starting page,
+The graph is bounded by deterministic server-side limits. The default graph returns up to 100 nodes
+and 250 edges; hard caps are 3,000 nodes and 10,000 edges. The API prioritizes the starting page,
 then shallow crawl depth, stronger connectivity, URL, and snapshot ID. Focused neighborhood mode can
-load one to three hops around a selected snapshot.
+load one to three hops around a selected snapshot. Candidate node filtering and limiting happen in
+SQL before snapshot rows are loaded, and edge occurrence pages no longer load every duplicate
+occurrence merely to calculate the edge summary.
 
 The 2D and 3D graph renderers are lazy-loaded. The production build currently emits separate graph
 chunks for the 2D renderer and the Three.js-backed 3D renderer; the 3D chunk is large enough to
-trigger Vite's chunk-size warning, so it stays isolated from the initial application bundle.
+trigger Vite's chunk-size warning, so it stays isolated from the initial application bundle. See
+`docs/graph-performance.md` for current measurements and practical limits.
 

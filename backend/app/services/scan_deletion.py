@@ -210,9 +210,7 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         else {}
     )
     deletable_blobs = [
-        blob
-        for blob in referenced_blobs
-        if outside_blob_references.get(blob.id, 0) == 0
+        blob for blob in referenced_blobs if outside_blob_references.get(blob.id, 0) == 0
     ]
     return DeletionImpact(
         scan=scan,

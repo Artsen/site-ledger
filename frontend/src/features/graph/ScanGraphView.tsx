@@ -2,13 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { getGraphEdgeOccurrences, getScanGraph } from "../../api/client";
+import { getGraphCapabilities, getGraphEdgeOccurrences, getScanGraph } from "../../api/client";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
 import { LoadingBlock } from "../../components/ui/Loading";
 import { inputClass } from "../../components/ui/styles";
-import type { GraphDisplaySettings, GraphEdge } from "../../types/graph";
+import type { GraphCapabilities, GraphDisplaySettings, GraphEdge } from "../../types/graph";
 import type { Scan } from "../../types/scans";
 import { formatDate, formatStatus, isTerminalStatus, plural } from "../../utils/format";
 import type { GraphRendererHandle } from "./GraphRendererTypes";
@@ -16,30 +16,31 @@ import { adaptGraphData, type RendererEdge, type RendererNode } from "./graphDat
 
 const TwoDimensionalGraphRenderer = lazy(() => import("./TwoDimensionalGraphRenderer").then((module) => ({ default: module.TwoDimensionalGraphRenderer })));
 const ThreeDimensionalGraphRenderer = lazy(() => import("./ThreeDimensionalGraphRenderer").then((module) => ({ default: module.ThreeDimensionalGraphRenderer })));
-const GRAPH_LIMITS = {
-  "2d": { nodes: 3000, edges: 10000 },
-  "3d": { nodes: 3000, edges: 10000 }
-} as const;
-
 export function ScanGraphView({ scan }: { scan: Scan }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchText, setSearchText] = useState("");
   const [rendererError, setRendererError] = useState<Error | null>(null);
   const rendererRef = useRef<GraphRendererHandle | null>(null);
   const settings = useMemo(() => displaySettings(searchParams), [searchParams]);
-  const graphQuery = useMemo(() => buildGraphQuery(searchParams), [searchParams]);
+  const capabilities = useQuery({
+    queryKey: ["graph-capabilities"],
+    queryFn: getGraphCapabilities,
+    staleTime: 60 * 60 * 1000
+  });
+  const graphQuery = useMemo(() => capabilities.data ? buildGraphQuery(searchParams, capabilities.data) : "", [capabilities.data, searchParams]);
   const selectedNodeId = searchParams.get("selected_node");
   const selectedEdgeId = searchParams.get("selected_edge");
   const graph = useQuery({
     queryKey: ["scan-graph", scan.id, graphQuery],
     queryFn: () => getScanGraph(String(scan.id), graphQuery),
+    enabled: Boolean(capabilities.data),
     refetchInterval: !isTerminalStatus(scan.status) && searchParams.get("graph_auto_refresh") === "summary" ? 5000 : false,
     placeholderData: (previous) => previous
   });
   const rendererData = useMemo(() => graph.data ? adaptGraphData(graph.data, settings, selectedNodeId, selectedEdgeId) : null, [graph.data, settings, selectedEdgeId, selectedNodeId]);
   const selectedNode = rendererData?.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedEdge = rendererData?.links.find((edge) => edge.id === selectedEdgeId) ?? null;
-  const occurrenceQuery = selectedEdge ? buildOccurrenceQuery(searchParams) : "";
+  const occurrenceQuery = selectedEdge && capabilities.data ? buildOccurrenceQuery(searchParams, capabilities.data) : "";
   const occurrences = useQuery({
     queryKey: ["graph-edge-occurrences", scan.id, selectedEdge?.id, occurrenceQuery],
     queryFn: () => getGraphEdgeOccurrences(String(scan.id), selectedEdge?.id ?? "", occurrenceQuery),
@@ -57,22 +58,25 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
   const presentation = searchParams.get("presentation") === "1";
 
   useEffect(() => {
-    const limits = GRAPH_LIMITS[settings.mode];
-    const maxNodes = boundedNumber(searchParams.get("max_nodes"), limits.nodes, 1, limits.nodes);
-    const maxEdges = boundedNumber(searchParams.get("max_edges"), limits.edges, 0, limits.edges);
+    if (!capabilities.data) return;
+    const maxNodes = boundedNumber(searchParams.get("max_nodes"), capabilities.data.default_node_limit, 1, capabilities.data.maximum_node_limit);
+    const maxEdges = boundedNumber(searchParams.get("max_edges"), capabilities.data.default_edge_limit, 0, capabilities.data.maximum_edge_limit);
+    const focusHops = boundedNumber(searchParams.get("focus_hops"), capabilities.data.default_focus_hops, 1, capabilities.data.maximum_focus_hops);
     if (
       searchParams.get("max_nodes") !== String(maxNodes)
       || searchParams.get("max_edges") !== String(maxEdges)
+      || (searchParams.has("focus_hops") && searchParams.get("focus_hops") !== String(focusHops))
     ) {
       setSearchParams((current) => {
         const next = new URLSearchParams(current);
         next.set("tab", "graph");
         next.set("max_nodes", String(maxNodes));
         next.set("max_edges", String(maxEdges));
+        if (next.has("focus_hops")) next.set("focus_hops", String(focusHops));
         return next;
       }, { replace: true });
     }
-  }, [searchParams, setSearchParams, settings.mode]);
+  }, [capabilities.data, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (selectedNodeId && rendererData && !rendererData.nodes.some((node) => node.id === selectedNodeId)) {
@@ -83,6 +87,10 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
     }
   }, [rendererData, selectedEdgeId, selectedNodeId, setSearchParams]);
 
+  if (capabilities.error) return <ErrorBanner error={capabilities.error} title="Could not load graph configuration" />;
+  if (capabilities.isLoading) return <LoadingBlock label="Loading graph configuration..." />;
+  if (!capabilities.data) return <LoadingBlock label="Loading graph configuration..." />;
+  const graphCapabilities = capabilities.data;
   if (graph.error) return <ErrorBanner error={graph.error} title="Could not load graph" />;
 
   return (
@@ -103,7 +111,7 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
           </div>
         ) : null}
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-          <GraphControls searchParams={searchParams} setSearchParams={setSearchParams} settings={settings} />
+          <GraphControls searchParams={searchParams} setSearchParams={setSearchParams} settings={settings} capabilities={graphCapabilities} />
           <section className={`min-h-[640px] overflow-hidden rounded-md border border-stone-200 ${settings.background === "dark" ? "bg-stone-950" : "bg-white"} shadow-sm`}>
             {graph.isLoading ? <LoadingBlock label="Loading graph topology..." /> : null}
             {!graph.isLoading && graph.data && graph.data.nodes.length === 0 ? <EmptyState title="No graph nodes" message="This scan has no page snapshots, or current filters removed every page." /> : null}
@@ -164,7 +172,7 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
             {rendererData ? <EdgeBrowser edges={rendererData.links.filter((edge) => edge.selectable).slice(0, 20)} onSelect={(edge) => selectEdge(setSearchParams, edge)} /> : null}
             {rendererData ? <Legend data={rendererData} /> : null}
             {selectedNode ? <NodeInspector scanId={String(scan.id)} node={selectedNode} setSearchParams={setSearchParams} /> : null}
-            {selectedEdge ? <EdgeInspector scanId={String(scan.id)} edge={selectedEdge} occurrences={occurrences.data} loading={occurrences.isLoading} error={occurrences.error} searchParams={searchParams} setSearchParams={setSearchParams} /> : null}
+            {selectedEdge ? <EdgeInspector scanId={String(scan.id)} edge={selectedEdge} occurrences={occurrences.data} loading={occurrences.isLoading} error={occurrences.error} searchParams={searchParams} setSearchParams={setSearchParams} capabilities={graphCapabilities} /> : null}
           </aside>
         </div>
       </div>
@@ -191,8 +199,7 @@ function GraphHeader({ scan, summary, loading, onRefresh, presentation, setSearc
   );
 }
 
-function GraphControls({ searchParams, setSearchParams, settings }: { searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1]; settings: GraphDisplaySettings }) {
-  const limits = GRAPH_LIMITS[settings.mode];
+function GraphControls({ searchParams, setSearchParams, settings, capabilities }: { searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1]; settings: GraphDisplaySettings; capabilities: GraphCapabilities }) {
   return (
     <aside className="space-y-4 rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <section className="space-y-3">
@@ -214,8 +221,8 @@ function GraphControls({ searchParams, setSearchParams, settings }: { searchPara
           <input aria-label="Minimum outbound links" type="number" min={0} value={searchParams.get("min_outbound") ?? ""} onChange={(event) => updateGraphParam(setSearchParams, "min_outbound", event.target.value || null)} placeholder="Min outbound" className={inputClass()} />
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <input aria-label="Maximum graph nodes" type="number" min={1} max={limits.nodes} value={searchParams.get("max_nodes") ?? String(limits.nodes)} onChange={(event) => updateGraphParam(setSearchParams, "max_nodes", event.target.value || null)} className={inputClass()} />
-          <input aria-label="Maximum graph edges" type="number" min={0} max={limits.edges} value={searchParams.get("max_edges") ?? String(limits.edges)} onChange={(event) => updateGraphParam(setSearchParams, "max_edges", event.target.value || null)} className={inputClass()} />
+          <input aria-label="Maximum graph nodes" type="number" min={1} max={capabilities.maximum_node_limit} value={searchParams.get("max_nodes") ?? String(capabilities.default_node_limit)} onChange={(event) => updateGraphParam(setSearchParams, "max_nodes", event.target.value || null)} className={inputClass()} />
+          <input aria-label="Maximum graph edges" type="number" min={0} max={capabilities.maximum_edge_limit} value={searchParams.get("max_edges") ?? String(capabilities.default_edge_limit)} onChange={(event) => updateGraphParam(setSearchParams, "max_edges", event.target.value || null)} className={inputClass()} />
         </div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={searchParams.get("unfetched") === "1"} onChange={(event) => updateGraphParam(setSearchParams, "unfetched", event.target.checked ? "1" : null)} /> Show unfetched internal pages</label>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={searchParams.get("self_links") !== "0"} onChange={(event) => updateGraphParam(setSearchParams, "self_links", event.target.checked ? null : "0")} /> Show self-links</label>
@@ -346,8 +353,12 @@ function NodeInspector({ scanId, node, setSearchParams }: { scanId: string; node
   );
 }
 
-function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams, setSearchParams }: { scanId: string; edge: RendererEdge; occurrences?: { items: Array<{ id: number; anchor_text: string | null; raw_href: string | null; dom_path: string | null; rel: string | null; scope_decision: string; discovered_at: string }>; total: number; limit: number; offset: number }; loading: boolean; error: unknown; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {
+function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams, setSearchParams, capabilities }: { scanId: string; edge: RendererEdge; occurrences?: { items: Array<{ id: number; anchor_text: string | null; raw_href: string | null; dom_path: string | null; rel: string | null; scope_decision: string; discovered_at: string }>; total: number; limit: number; offset: number }; loading: boolean; error: unknown; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1]; capabilities: GraphCapabilities }) {
   const search = searchParams.get("edge_search") ?? "";
+  const limit = occurrences?.limit ?? capabilities.occurrence_page_default;
+  const offset = occurrences?.offset ?? Number(searchParams.get("edge_offset") ?? 0);
+  const total = occurrences?.total ?? 0;
+  const end = Math.min(total, offset + (occurrences?.items.length ?? 0));
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 text-sm shadow-sm">
       <h3 className="mb-2 font-semibold">Selected edge</h3>
@@ -358,6 +369,7 @@ function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams
         {edge.target_snapshot_id ? <Link className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium" to={`/scans/${scanId}/pages/${edge.target_snapshot_id}`}>Target page</Link> : null}
       </div>
       <input aria-label="Search edge occurrences" value={search} onChange={(event) => updateGraphParam(setSearchParams, "edge_search", event.target.value || null, { edge_offset: null })} placeholder="Search occurrences" className={`${inputClass()} mt-3`} />
+      {occurrences ? <div className="mt-2 text-xs text-stone-500">Showing {total ? offset + 1 : 0}-{end} of {total} matching occurrences. Edge summary remains based on all {edge.occurrence_count} stored occurrences.</div> : null}
       {error ? <ErrorBanner error={error} title="Could not load edge occurrences" /> : null}
       {loading ? <LoadingBlock label="Loading edge occurrences..." /> : null}
       <div className="mt-3 max-h-72 overflow-auto divide-y divide-stone-100">
@@ -369,6 +381,12 @@ function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams
           </div>
         ))}
       </div>
+      {occurrences ? (
+        <div className="mt-3 flex gap-2">
+          <Button type="button" disabled={offset <= 0} onClick={() => updateGraphParam(setSearchParams, "edge_offset", String(Math.max(0, offset - limit)))}>Previous</Button>
+          <Button type="button" disabled={offset + limit >= total} onClick={() => updateGraphParam(setSearchParams, "edge_offset", String(offset + limit))}>Next</Button>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -377,27 +395,28 @@ function TruncationWarning({ reasons }: { reasons: string[] }) {
   return <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">Graph data was limited: {reasons.join(", ")}. Increase limits or use neighborhood focus for a smaller deterministic view.</div>;
 }
 
-function buildGraphQuery(searchParams: URLSearchParams) {
+function buildGraphQuery(searchParams: URLSearchParams, capabilities: GraphCapabilities) {
   const params = new URLSearchParams();
   for (const [sourceKey, targetKey = sourceKey] of [["max_nodes"], ["max_edges"], ["min_depth"], ["max_depth"], ["host"], ["path_prefix"], ["fetch_state"], ["error_state"], ["min_inbound"], ["min_outbound"], ["focus_snapshot_id"], ["focus_hops"], ["graph_status", "status"]] as Array<[string, string?]>) {
     const value = searchParams.get(sourceKey);
     if (value) params.set(targetKey, value);
   }
-  const mode = graphMode(searchParams);
-  const limits = GRAPH_LIMITS[mode];
-  params.set("max_nodes", String(boundedNumber(params.get("max_nodes"), limits.nodes, 1, limits.nodes)));
-  params.set("max_edges", String(boundedNumber(params.get("max_edges"), limits.edges, 0, limits.edges)));
+  params.set("max_nodes", String(boundedNumber(params.get("max_nodes"), capabilities.default_node_limit, 1, capabilities.maximum_node_limit)));
+  params.set("max_edges", String(boundedNumber(params.get("max_edges"), capabilities.default_edge_limit, 0, capabilities.maximum_edge_limit)));
+  params.set("focus_hops", String(boundedNumber(params.get("focus_hops"), capabilities.default_focus_hops, 1, capabilities.maximum_focus_hops)));
   params.set("include_self_links", searchParams.get("self_links") === "0" ? "false" : "true");
   params.set("include_unfetched", searchParams.get("unfetched") === "1" ? "true" : "false");
   return `?${params.toString()}`;
 }
 
-function buildOccurrenceQuery(searchParams: URLSearchParams) {
+function buildOccurrenceQuery(searchParams: URLSearchParams, capabilities: GraphCapabilities) {
   const params = new URLSearchParams();
   const search = searchParams.get("edge_search");
   if (search) params.set("search", search);
   const offset = searchParams.get("edge_offset");
   if (offset) params.set("offset", offset);
+  const limit = boundedNumber(searchParams.get("edge_limit"), capabilities.occurrence_page_default, 1, capabilities.occurrence_page_maximum);
+  params.set("limit", String(limit));
   return `?${params.toString()}`;
 }
 

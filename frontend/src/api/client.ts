@@ -1,5 +1,5 @@
 import type { InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, PageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
-import type { GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
+import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import { errorFromResponse } from "../utils/errors";
 
@@ -79,6 +79,7 @@ export const getInboundLinks = (snapshotId: string, query = "") => request<Inbou
 export const listScanSeeds = (scanId: string, query = "") => request<ScanSeedList>(`/api/scans/${scanId}/seeds${query}`);
 export const getScanGraph = (scanId: string, query = "") => request<GraphResponse>(`/api/scans/${scanId}/graph${query}`);
 export const getGraphEdgeOccurrences = (scanId: string, edgeId: string, query = "") => request<GraphEdgeOccurrenceList>(`/api/scans/${scanId}/graph/edges/${edgeId}/occurrences${query}`);
+export const getGraphCapabilities = () => request<GraphCapabilities>("/api/graph/capabilities");
 export const listJobs = (query = "") => request<JobList>(`/api/jobs${query}`);
 export const getJob = (jobId: string) => request<Job>(`/api/jobs/${jobId}`);
 export const getWorkerHealth = () => request<WorkerHealth>("/api/jobs/worker-health");
