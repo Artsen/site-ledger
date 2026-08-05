@@ -1,8 +1,22 @@
 import { expect, test, type Page } from "@playwright/test";
 
-test("mocked scan workflow supports creation, filtering, details, inbound links, and deletion", async ({ page }) => {
+test("Site Ledger workflow supports creation, filtering, details, inbound links, and deletion", async ({ page }) => {
   test.setTimeout(90_000);
   await mockApi(page);
+
+  await page.goto("/");
+  await expect(page).toHaveTitle("New Scan | Site Ledger");
+  await expect(page.getByText("Site Ledger", { exact: true })).toBeVisible();
+  await expect(page.getByText("A historical record of your website.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Site Ledger home" })).toBeVisible();
+  await page.getByRole("link", { name: "Sites", exact: true }).click();
+  await expect(page).toHaveURL(/\/sites$/);
+  await expect(page).toHaveTitle("Sites | Site Ledger");
+  await page.getByRole("link", { name: "All Scans", exact: true }).click();
+  await expect(page).toHaveURL(/\/scans$/);
+  await expect(page).toHaveTitle("All Scans | Site Ledger");
+  await page.getByRole("link", { name: "New Scan", exact: true }).click();
+  await expect(page).toHaveURL(/\/scans\/new$/);
 
   await page.goto("/sites");
   await expect(page.getByRole("heading", { name: "Saved sites" })).toBeVisible();
@@ -93,7 +107,7 @@ test("mocked scan workflow supports creation, filtering, details, inbound links,
   await page.getByRole("link", { name: "Back to page results" }).click();
   await expect(page).toHaveURL(/\/scans\/1\?tab=pages/);
 
-  await page.getByRole("link", { name: "All scans" }).click();
+  await page.getByRole("link", { name: "All Scans" }).click();
   await page.getByLabel("Search scans").fill("example");
   await page.getByLabel("Scan status").selectOption("completed");
   await expect(page).toHaveURL(/search=example/);
