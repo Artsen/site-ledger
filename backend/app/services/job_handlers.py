@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.crawler.static_crawler import StaticPageCrawler
+from app.database import is_transient_database_lock
 from app.models import BackgroundJob, Scan, SourceRefresh
 from app.services import background_jobs
 from app.services.job_types import (
@@ -21,6 +24,8 @@ from app.services.job_types import (
 )
 from app.services.source_refresh import execute_source_refresh
 from app.storage.content_store import LocalContentStore
+
+logger = logging.getLogger("site_ledger.jobs")
 
 
 class JobCancelled(RuntimeError):
@@ -80,18 +85,23 @@ class JobExecutionContext:
         unit: str | None = None,
         counters: dict[str, int] | None = None,
     ) -> None:
-        with self.session_factory() as db:
-            background_jobs.update_progress(
-                db,
-                job_id=self.job_id,
-                lease_token=self.lease_token,
-                phase=phase,
-                current_operation=current_operation,
-                current=current,
-                total=total,
-                unit=unit,
-                counters=counters,
-            )
+        try:
+            with self.session_factory() as db:
+                background_jobs.update_progress(
+                    db,
+                    job_id=self.job_id,
+                    lease_token=self.lease_token,
+                    phase=phase,
+                    current_operation=current_operation,
+                    current=current,
+                    total=total,
+                    unit=unit,
+                    counters=counters,
+                )
+        except OperationalError as exc:
+            if not is_transient_database_lock(exc):
+                raise
+            logger.warning("job progress delayed by database lock", extra={"job_id": self.job_id})
 
     def event(
         self,
@@ -288,7 +298,14 @@ async def run_claimed_job(
 async def _job_heartbeat_loop(context: JobExecutionContext) -> None:
     while True:
         await asyncio.sleep(max(1.0, context.lease_seconds / 3))
-        context.heartbeat()
+        try:
+            context.heartbeat()
+        except OperationalError as exc:
+            if not is_transient_database_lock(exc):
+                raise
+            logger.warning(
+                "job heartbeat delayed by database lock", extra={"job_id": context.job_id}
+            )
 
 
 def _scan_result(scan: Scan) -> dict[str, Any]:

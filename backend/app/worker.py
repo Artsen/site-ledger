@@ -8,10 +8,11 @@ import uuid
 from collections.abc import Callable
 from contextlib import suppress
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.database import SessionLocal
+from app.database import SessionLocal, is_transient_database_lock
 from app.product import PRODUCT_NAME
 from app.services import background_jobs
 from app.services.job_handlers import build_handler_registry, run_claimed_job
@@ -70,7 +71,7 @@ class WorkerService:
                         await asyncio.gather(*self._running)
                     return
                 await asyncio.sleep(self.poll_interval_seconds)
-                self._recover()
+                self._recover_if_idle()
         finally:
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
@@ -92,18 +93,34 @@ class WorkerService:
         logger.info("worker registered", extra={"worker_id": self.worker_id})
 
     def _recover(self) -> None:
-        with self.session_factory() as db:
-            recovered = background_jobs.recover_expired_jobs(db)
+        try:
+            with self.session_factory() as db:
+                recovered = background_jobs.recover_expired_jobs(db)
+        except OperationalError as exc:
+            if not is_transient_database_lock(exc):
+                raise
+            logger.warning("job recovery delayed by database lock")
+            return
         if recovered:
             logger.warning("recovered expired jobs", extra={"recovered": recovered})
 
+    def _recover_if_idle(self) -> None:
+        if not self._running:
+            self._recover()
+
     def _claim(self) -> background_jobs.ClaimedJob | None:
-        with self.session_factory() as db:
-            claimed = background_jobs.claim_next_job(
-                db,
-                worker_id=self.worker_id,
-                lease_seconds=self.lease_seconds,
-            )
+        try:
+            with self.session_factory() as db:
+                claimed = background_jobs.claim_next_job(
+                    db,
+                    worker_id=self.worker_id,
+                    lease_seconds=self.lease_seconds,
+                )
+        except OperationalError as exc:
+            if not is_transient_database_lock(exc):
+                raise
+            logger.warning("job claim delayed by database lock")
+            return None
         if claimed:
             logger.info(
                 "claimed job",
@@ -113,8 +130,13 @@ class WorkerService:
 
     async def _heartbeat_loop(self) -> None:
         while True:
-            with self.session_factory() as db:
-                background_jobs.heartbeat_worker(db, self.worker_id)
+            try:
+                with self.session_factory() as db:
+                    background_jobs.heartbeat_worker(db, self.worker_id)
+            except OperationalError as exc:
+                if not is_transient_database_lock(exc):
+                    raise
+                logger.warning("worker heartbeat delayed by database lock")
             await asyncio.sleep(self.heartbeat_seconds)
 
     def _stop_worker(self) -> None:

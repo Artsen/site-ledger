@@ -1,8 +1,10 @@
+import sqlite3
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, event
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -38,6 +40,13 @@ def _set_sqlite_pragma(dbapi_connection: Any, _connection_record: object) -> Non
 
 def _is_memory_sqlite(database_url: str) -> bool:
     return database_url in {"sqlite://", "sqlite:///:memory:"} or database_url.endswith(":memory:")
+
+
+def is_transient_database_lock(error: OperationalError) -> bool:
+    if not isinstance(error.orig, sqlite3.OperationalError):
+        return False
+    message = str(error.orig).lower()
+    return "database is locked" in message or "database table is locked" in message
 
 
 def get_db() -> Generator[Session, None, None]:
