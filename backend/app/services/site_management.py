@@ -3,7 +3,7 @@ from typing import Any
 from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.models import BackgroundJob, Scan, UrlSourceEntry, WebsiteProperty
+from app.models import BackgroundJob, Scan, SitePage, UrlSourceEntry, WebsiteProperty
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate, WebsitePropertyUpdate
 from app.services.scan_seeds import create_scan_seeds
@@ -85,7 +85,7 @@ def delete_site(db: Session, site_id: int) -> int | None:
     )
     if active_job_count:
         raise SiteHasScansError("The site has active background work.")
-    resource_ids = list(
+    source_resource_ids = list(
         db.scalars(
             select(distinct(UrlSourceEntry.resource_id))
             .join(UrlSourceEntry.url_source)
@@ -95,9 +95,13 @@ def delete_site(db: Session, site_id: int) -> int | None:
             )
         )
     )
+    site_page_resource_ids = list(
+        db.scalars(select(SitePage.resource_id).where(SitePage.website_property_id == site.id))
+    )
     db.delete(site)
     db.flush()
-    _delete_unreferenced_resources_after_site_delete(db, [item for item in resource_ids if item])
+    resource_ids = set(item for item in source_resource_ids if item) | set(site_page_resource_ids)
+    _delete_unreferenced_resources_after_site_delete(db, list(resource_ids))
     db.commit()
     return site_id
 
@@ -160,6 +164,7 @@ def _delete_unreferenced_resources_after_site_delete(db: Session, resource_ids: 
         ResourceOccurrence,
         ResourceSnapshot,
         ScanSeed,
+        SitePage,
         UrlSourceEntry,
         WebResource,
     )
@@ -172,6 +177,7 @@ def _delete_unreferenced_resources_after_site_delete(db: Session, resource_ids: 
             )
             + _reference_count(db, UrlSourceEntry, UrlSourceEntry.resource_id, resource_id)
             + _reference_count(db, ScanSeed, ScanSeed.resource_id, resource_id)
+            + _reference_count(db, SitePage, SitePage.resource_id, resource_id)
         )
         if has_reference == 0:
             resource = db.get(WebResource, resource_id)

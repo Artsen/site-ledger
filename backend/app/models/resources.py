@@ -53,6 +53,7 @@ class Scan(Base):
     jobs: Mapped[list["BackgroundJob"]] = relationship(
         back_populates="scan", cascade="all, delete-orphan"
     )
+    notes: Mapped[list["Note"]] = relationship(back_populates="scan", cascade="all, delete-orphan")
 
     @property
     def website_property_name(self) -> str | None:
@@ -86,6 +87,15 @@ class WebsiteProperty(Base):
     url_sources: Mapped[list["UrlSource"]] = relationship(
         back_populates="website_property", cascade="all, delete-orphan"
     )
+    site_pages: Mapped[list["SitePage"]] = relationship(
+        back_populates="website_property", cascade="all, delete-orphan"
+    )
+    page_categories: Mapped[list["PageCategory"]] = relationship(
+        back_populates="website_property", cascade="all, delete-orphan"
+    )
+    notes: Mapped[list["Note"]] = relationship(
+        back_populates="website_property", cascade="all, delete-orphan"
+    )
 
 
 class WebResource(Base):
@@ -109,6 +119,7 @@ class WebResource(Base):
     snapshots: Mapped[list["ResourceSnapshot"]] = relationship(back_populates="resource")
     source_entries: Mapped[list["UrlSourceEntry"]] = relationship(back_populates="resource")
     scan_seeds: Mapped[list["ScanSeed"]] = relationship(back_populates="resource")
+    site_pages: Mapped[list["SitePage"]] = relationship(back_populates="resource")
 
     __table_args__ = (
         UniqueConstraint("resource_type", "normalized_url", name="uq_resource_type_url"),
@@ -186,6 +197,9 @@ class HtmlParseAnchor(Base):
     rel: Mapped[str | None] = mapped_column(Text)
     target: Mapped[str | None] = mapped_column(String(128))
     dom_path: Mapped[str | None] = mapped_column(Text)
+    link_role: Mapped[str | None] = mapped_column(String(32))
+    link_role_rule: Mapped[str | None] = mapped_column(String(64))
+    link_context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     parse_artifact: Mapped[HtmlParseArtifact] = relationship(back_populates="anchors")
 
@@ -280,6 +294,9 @@ class ResourceOccurrence(Base):
     in_scope: Mapped[bool] = mapped_column(default=False)
     scope_decision: Mapped[str] = mapped_column(String(64), index=True)
     exclusion_reason: Mapped[str | None] = mapped_column(Text)
+    link_role: Mapped[str | None] = mapped_column(String(32))
+    link_role_rule: Mapped[str | None] = mapped_column(String(64))
+    link_context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     discovered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -289,6 +306,134 @@ class ResourceOccurrence(Base):
 
     __table_args__ = (
         Index("ix_occurrence_source_target", "source_snapshot_id", "target_resource_id"),
+        Index("ix_occurrence_source_role", "source_snapshot_id", "link_role"),
+        Index("ix_occurrence_target_role", "target_resource_id", "link_role"),
+    )
+
+    @property
+    def link_role_label(self) -> str:
+        if self.link_role is None:
+            return "Unclassified legacy link"
+        from app.crawler.link_roles import LINK_ROLE_LABELS
+
+        return LINK_ROLE_LABELS.get(self.link_role, "Unknown")
+
+
+class SitePage(Base):
+    __tablename__ = "site_pages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    website_property_id: Mapped[int] = mapped_column(
+        ForeignKey("website_properties.id", ondelete="CASCADE"), index=True
+    )
+    resource_id: Mapped[int] = mapped_column(ForeignKey("web_resources.id"), index=True)
+    owner_label: Mapped[str | None] = mapped_column(String(128))
+    workflow_status: Mapped[str] = mapped_column(String(32), default="unreviewed", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    website_property: Mapped[WebsiteProperty] = relationship(back_populates="site_pages")
+    resource: Mapped[WebResource] = relationship(back_populates="site_pages")
+    category_assignments: Mapped[list["PageCategoryAssignment"]] = relationship(
+        back_populates="site_page", cascade="all, delete-orphan"
+    )
+    notes: Mapped[list["Note"]] = relationship(
+        back_populates="site_page", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("website_property_id", "resource_id", name="uq_site_page_resource"),
+        Index("ix_site_page_site_workflow", "website_property_id", "workflow_status"),
+    )
+
+
+class PageCategory(Base):
+    __tablename__ = "page_categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    website_property_id: Mapped[int] = mapped_column(
+        ForeignKey("website_properties.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    normalized_name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str | None] = mapped_column(Text)
+    color_key: Mapped[str] = mapped_column(String(16), default="stone")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    website_property: Mapped[WebsiteProperty] = relationship(back_populates="page_categories")
+    assignments: Mapped[list["PageCategoryAssignment"]] = relationship(
+        back_populates="category", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "website_property_id", "normalized_name", name="uq_site_category_normalized_name"
+        ),
+        Index("ix_page_category_site_active", "website_property_id", "is_active"),
+    )
+
+
+class PageCategoryAssignment(Base):
+    __tablename__ = "page_category_assignments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    site_page_id: Mapped[int] = mapped_column(
+        ForeignKey("site_pages.id", ondelete="CASCADE"), index=True
+    )
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("page_categories.id", ondelete="CASCADE"), index=True
+    )
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    site_page: Mapped[SitePage] = relationship(back_populates="category_assignments")
+    category: Mapped[PageCategory] = relationship(back_populates="assignments")
+
+    __table_args__ = (
+        UniqueConstraint("site_page_id", "category_id", name="uq_site_page_category"),
+    )
+
+
+class Note(Base):
+    __tablename__ = "notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    website_property_id: Mapped[int | None] = mapped_column(
+        ForeignKey("website_properties.id", ondelete="CASCADE")
+    )
+    scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"))
+    site_page_id: Mapped[int | None] = mapped_column(
+        ForeignKey("site_pages.id", ondelete="CASCADE")
+    )
+    body: Mapped[str] = mapped_column(Text)
+    is_pinned: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    website_property: Mapped[WebsiteProperty | None] = relationship(back_populates="notes")
+    scan: Mapped[Scan | None] = relationship(back_populates="notes")
+    site_page: Mapped[SitePage | None] = relationship(back_populates="notes")
+
+    __table_args__ = (
+        CheckConstraint(
+            "(website_property_id IS NOT NULL AND scan_id IS NULL AND site_page_id IS NULL) OR "
+            "(website_property_id IS NULL AND scan_id IS NOT NULL AND site_page_id IS NULL) OR "
+            "(website_property_id IS NULL AND scan_id IS NULL AND site_page_id IS NOT NULL)",
+            name="ck_note_exactly_one_target",
+        ),
+        Index("ix_note_site_updated", "website_property_id", "updated_at"),
+        Index("ix_note_scan_updated", "scan_id", "updated_at"),
+        Index("ix_note_site_page_updated", "site_page_id", "updated_at"),
     )
 
 

@@ -3,6 +3,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.schemas.page_workspaces import PageCategoryRead
+
 
 class ScopeConfigPayload(BaseModel):
     allowed_host_patterns: list[str] = Field(default_factory=list)
@@ -55,6 +57,7 @@ class ScanRead(BaseModel):
     reused_content_bytes: int = 0
     stop_reason: str | None
     fatal_error_message: str | None
+    note_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -89,11 +92,18 @@ class PageList(BaseModel):
 
 
 class PersistentPageRead(BaseModel):
+    site_page_id: int
     resource_id: int
     normalized_url: str
     host: str
     path: str
     query: str
+    owner_label: str | None
+    workflow_status: str
+    categories: list[PageCategoryRead] = Field(default_factory=list)
+    category_count: int = 0
+    note_count: int = 0
+    associated_at: datetime
     observation_count: int
     first_observed_at: datetime | None
     latest_observed_at: datetime | None
@@ -104,6 +114,9 @@ class PersistentPageRead(BaseModel):
     latest_retrieval_method: str | None
     latest_parse_method: str | None
     latest_reused_from_snapshot_id: int | None
+    latest_fetch_state: str | None = None
+    latest_error_type: str | None = None
+    latest_error_message: str | None = None
 
 
 class PersistentPageList(BaseModel):
@@ -125,6 +138,9 @@ class PageObservationRead(BaseModel):
     site_id: int | None
     site_name: str | None
     scan_created_at: datetime
+    scan_status: str
+    scan_started_at: datetime | None
+    scan_finished_at: datetime | None
     observed_at: datetime | None
     requested_url: str
     final_url: str | None
@@ -212,9 +228,28 @@ class LinkRead(BaseModel):
     in_scope: bool
     scope_decision: str
     exclusion_reason: str | None
+    link_role: str | None = None
+    link_role_label: str = "Unclassified legacy link"
+    link_role_rule: str | None = None
+    link_context_json: dict[str, Any] | None = None
     discovered_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class OutgoingLinkSummary(BaseModel):
+    total_occurrences: int
+    nofollow_occurrences: int
+    in_scope_occurrences: int
+    role_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class OutgoingLinkList(BaseModel):
+    items: list[LinkRead]
+    total: int
+    limit: int
+    offset: int
+    summary: OutgoingLinkSummary
 
 
 class InboundLinkRead(BaseModel):
@@ -239,6 +274,9 @@ class InboundLinkRead(BaseModel):
     in_scope: bool
     scope_decision: str
     exclusion_reason: str | None
+    link_role: str | None = None
+    link_role_label: str = "Unclassified legacy link"
+    link_role_rule: str | None = None
     discovered_at: datetime
     is_self_link: bool
 
@@ -249,6 +287,7 @@ class InboundLinkSummary(BaseModel):
     unique_anchor_texts: int
     nofollow_occurrences: int
     self_link_occurrences: int
+    role_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class InboundLinkList(BaseModel):

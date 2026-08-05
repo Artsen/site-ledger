@@ -12,6 +12,7 @@ from app.models import (
     Scan,
     ScanSeed,
     ScanSeedOrigin,
+    SitePage,
     UrlSourceEntry,
     WebResource,
 )
@@ -268,12 +269,20 @@ def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int
             )
         )
     )
+    still_site_pages = set(
+        db.scalars(
+            select(distinct(SitePage.resource_id)).where(
+                SitePage.resource_id.in_(candidate_resource_ids)
+            )
+        )
+    )
     deletable = sorted(
         set(candidate_resource_ids)
         - still_snapshotted
         - still_targeted
         - still_source_entry
         - still_seeded
+        - still_site_pages
     )
     if deletable:
         db.execute(delete(WebResource).where(WebResource.id.in_(deletable)))
