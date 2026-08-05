@@ -4,6 +4,7 @@ from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    BackgroundJob,
     ContentBlob,
     ResourceOccurrence,
     ResourceSnapshot,
@@ -17,6 +18,7 @@ from app.schemas.scans import ScanDeletePreview, ScanDeleteResult
 from app.storage.content_store import LocalContentStore
 
 TERMINAL_STATUSES = {"completed", "completed_with_errors", "failed", "cancelled", "interrupted"}
+ACTIVE_JOB_STATUSES = {"queued", "running"}
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,23 @@ def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None
             stored_html_bytes_reclaimable=0,
             reason="The scan must finish or be cancelled before it can be deleted.",
         )
+    if _has_active_scan_job(db, scan.id):
+        return ScanDeletePreview(
+            scan_id=scan.id,
+            starting_url=scan.starting_url,
+            can_delete=False,
+            status=scan.status,
+            snapshots=0,
+            link_occurrences=0,
+            unique_resources=0,
+            html_blobs_referenced=0,
+            exclusive_html_blobs=0,
+            shared_html_blobs=0,
+            html_blobs_deleted=0,
+            raw_html_bytes_reclaimable=0,
+            stored_html_bytes_reclaimable=0,
+            reason="The scan still has an active background job.",
+        )
     impact = _deletion_impact(db, scan)
     return ScanDeletePreview(
         scan_id=scan.id,
@@ -83,6 +102,8 @@ def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDele
         return None
     if scan.status not in TERMINAL_STATUSES:
         raise ValueError("The scan must finish or be cancelled before it can be deleted.")
+    if _has_active_scan_job(db, scan.id):
+        raise ValueError("The scan still has an active background job.")
     impact = _deletion_impact(db, scan)
     deleted_blob_ids = [blob.id for blob in impact.deletable_blobs]
     candidate_resource_ids = impact.resource_ids
@@ -202,6 +223,18 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         deletable_blobs=deletable_blobs,
         shared_blob_count=len(referenced_blobs) - len(deletable_blobs),
     )
+
+
+def _has_active_scan_job(db: Session, scan_id: int) -> bool:
+    return (
+        db.scalar(
+            select(func.count(BackgroundJob.id)).where(
+                BackgroundJob.scan_id == scan_id,
+                BackgroundJob.status.in_(ACTIVE_JOB_STATUSES),
+            )
+        )
+        or 0
+    ) > 0
 
 
 def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int]) -> list[int]:

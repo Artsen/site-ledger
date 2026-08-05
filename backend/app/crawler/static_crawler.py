@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -37,10 +38,14 @@ class StaticPageCrawler:
         db: Session,
         store: LocalContentStore,
         transport: httpx.AsyncBaseTransport | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+        progress_callback: Callable[[Scan], None] | None = None,
     ):
         self.db = db
         self.store = store
         self.transport = transport
+        self.should_cancel = should_cancel
+        self.progress_callback = progress_callback
 
     async def run(self, scan: Scan) -> None:
         config = ScopeConfig.from_dict(scan.scope_config)
@@ -63,6 +68,9 @@ class StaticPageCrawler:
         self.db.commit()
 
         while queue and scan.status != "cancelled" and len(fetched) < config.max_pages:
+            if self._cancel_requested():
+                scan.status = "cancelled"
+                break
             item = queue.popleft()
             scan.queued_count = len(queue)
             self.db.commit()
@@ -120,6 +128,7 @@ class StaticPageCrawler:
                         )
                 self._update_counts(scan, len(seen), len(fetched), len(queue))
                 self.db.commit()
+                self._progress(scan)
             except Exception as exc:  # page-level failures are persisted, not fatal scan failures
                 had_errors = True
                 self._record_failure(scan, item, "connection_error", str(exc))
@@ -127,8 +136,9 @@ class StaticPageCrawler:
                 self._mark_seed(scan.id, item.normalized.normalized_url, "failed")
                 self._update_counts(scan, len(seen), len(fetched), len(queue))
                 self.db.commit()
+                self._progress(scan)
             if config.delay_between_requests_ms:
-                await asyncio.sleep(config.delay_between_requests_ms / 1000)
+                await self._sleep_with_cancellation(config.delay_between_requests_ms / 1000, scan)
 
         if scan.status == "cancelled":
             scan.stop_reason = "cancelled_by_user"
@@ -138,6 +148,7 @@ class StaticPageCrawler:
         scan.finished_at = datetime.now(UTC)
         scan.queued_count = len(queue)
         self.db.commit()
+        self._progress(scan)
 
     async def _fetch_one(
         self,
@@ -319,6 +330,23 @@ class StaticPageCrawler:
         )
         if seed:
             seed.queue_state = state
+
+    def _cancel_requested(self) -> bool:
+        return bool(self.should_cancel and self.should_cancel())
+
+    def _progress(self, scan: Scan) -> None:
+        if self.progress_callback:
+            self.progress_callback(scan)
+
+    async def _sleep_with_cancellation(self, seconds: float, scan: Scan) -> None:
+        remaining = seconds
+        while remaining > 0:
+            if self._cancel_requested():
+                scan.status = "cancelled"
+                return
+            interval = min(0.25, remaining)
+            await asyncio.sleep(interval)
+            remaining -= interval
 
 
 async def _validate_redirect(

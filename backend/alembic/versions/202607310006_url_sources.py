@@ -8,6 +8,7 @@ Create Date: 2026-07-31 01:45:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "202607310006"
@@ -37,11 +38,17 @@ def upgrade() -> None:
         sa.Column("last_http_status", sa.Integer(), nullable=True),
         sa.Column("last_error_type", sa.String(length=64), nullable=True),
         sa.Column("last_error_message", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["parent_source_id"], ["url_sources.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["root_source_id"], ["url_sources.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["website_property_id"], ["website_properties.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["website_property_id"], ["website_properties.id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "website_property_id",
@@ -95,8 +102,15 @@ def upgrade() -> None:
         sa.Column("resource_id", sa.Integer(), nullable=True),
         sa.Column("normalized_url", sa.Text(), nullable=True),
         sa.Column("raw_url", sa.Text(), nullable=False),
-        sa.Column("first_seen_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("last_seen_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "first_seen_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "last_seen_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.Column("last_refresh_id", sa.Integer(), nullable=True),
         sa.Column("is_current", sa.Boolean(), nullable=False),
         sa.Column("sitemap_lastmod", sa.Text(), nullable=True),
@@ -106,8 +120,12 @@ def upgrade() -> None:
         sa.Column("validation_state", sa.String(length=32), nullable=False),
         sa.Column("validation_message", sa.Text(), nullable=True),
         sa.Column("scope_decision", sa.String(length=64), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["last_refresh_id"], ["source_refreshes.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["resource_id"], ["web_resources.id"]),
         sa.ForeignKeyConstraint(["url_source_id"], ["url_sources.id"], ondelete="CASCADE"),
@@ -116,12 +134,22 @@ def upgrade() -> None:
     )
     op.create_index("ix_url_source_entries_url_source_id", "url_source_entries", ["url_source_id"])
     op.create_index("ix_url_source_entries_resource_id", "url_source_entries", ["resource_id"])
-    op.create_index("ix_url_source_entries_normalized_url", "url_source_entries", ["normalized_url"])
-    op.create_index("ix_url_source_entries_last_refresh_id", "url_source_entries", ["last_refresh_id"])
+    op.create_index(
+        "ix_url_source_entries_normalized_url", "url_source_entries", ["normalized_url"]
+    )
+    op.create_index(
+        "ix_url_source_entries_last_refresh_id", "url_source_entries", ["last_refresh_id"]
+    )
     op.create_index("ix_url_source_entries_is_current", "url_source_entries", ["is_current"])
-    op.create_index("ix_url_source_entries_validation_state", "url_source_entries", ["validation_state"])
-    op.create_index("ix_url_source_entries_scope_decision", "url_source_entries", ["scope_decision"])
-    op.create_index("ix_source_entry_source_current", "url_source_entries", ["url_source_id", "is_current"])
+    op.create_index(
+        "ix_url_source_entries_validation_state", "url_source_entries", ["validation_state"]
+    )
+    op.create_index(
+        "ix_url_source_entries_scope_decision", "url_source_entries", ["scope_decision"]
+    )
+    op.create_index(
+        "ix_source_entry_source_current", "url_source_entries", ["url_source_id", "is_current"]
+    )
 
     op.create_table(
         "scan_seeds",
@@ -134,7 +162,9 @@ def upgrade() -> None:
         sa.Column("queue_state", sa.String(length=32), nullable=False),
         sa.Column("scope_decision", sa.String(length=64), nullable=False),
         sa.Column("exclusion_reason", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["resource_id"], ["web_resources.id"]),
         sa.ForeignKeyConstraint(["scan_id"], ["scans.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -157,8 +187,12 @@ def upgrade() -> None:
         sa.Column("raw_url", sa.Text(), nullable=True),
         sa.Column("metadata_json", sa.JSON(), nullable=False),
         sa.ForeignKeyConstraint(["scan_seed_id"], ["scan_seeds.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["source_refresh_id"], ["source_refreshes.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["url_source_entry_id"], ["url_source_entries.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(
+            ["source_refresh_id"], ["source_refreshes.id"], ondelete="SET NULL"
+        ),
+        sa.ForeignKeyConstraint(
+            ["url_source_entry_id"], ["url_source_entries.id"], ondelete="SET NULL"
+        ),
         sa.ForeignKeyConstraint(["url_source_id"], ["url_sources.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )

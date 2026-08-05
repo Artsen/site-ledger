@@ -6,7 +6,14 @@ from sqlalchemy.orm import Session
 
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.url_normalizer import UrlNormalizationError, normalize_url
-from app.models import UrlSource, UrlSourceEntry, WebResource, WebsiteProperty
+from app.models import (
+    BackgroundJob,
+    SourceRefresh,
+    UrlSource,
+    UrlSourceEntry,
+    WebResource,
+    WebsiteProperty,
+)
 from app.schemas.sources import UrlSourceCreate, UrlSourceUpdate
 from app.services.repositories import get_or_create_resource
 
@@ -16,6 +23,10 @@ class DuplicateSourceError(ValueError):
 
 
 class SourceNotFoundError(ValueError):
+    pass
+
+
+class SourceHasActiveJobError(ValueError):
     pass
 
 
@@ -72,6 +83,17 @@ def delete_source(db: Session, site_id: int, source_id: int) -> int | None:
     source = _get_site_source(db, site_id, source_id)
     if source is None:
         return None
+    active_job = db.scalar(
+        select(BackgroundJob.id)
+        .join(SourceRefresh, BackgroundJob.source_refresh_id == SourceRefresh.id)
+        .where(
+            SourceRefresh.url_source_id == source.id,
+            BackgroundJob.status.in_({"queued", "running"}),
+        )
+        .limit(1)
+    )
+    if active_job is not None:
+        raise SourceHasActiveJobError("The source has an active refresh job.")
     resource_ids = [
         resource_id
         for resource_id in db.scalars(

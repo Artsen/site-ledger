@@ -510,6 +510,28 @@ PR 7 adds a scan-specific website topology graph:
   and adapter boundaries; do not add embeddings, section tables, or comparison models as part of
   topology work.
 
+PR 8 adds durable background jobs:
+
+- Scan creation and source refresh creation should persist a domain record and a `BackgroundJob`,
+  then return `202 Accepted`. Do not run crawls or remote source fetches inside the API request.
+- `BackgroundJob` is the execution record. `JobEvent` stores coarse lifecycle history.
+  `WorkerInstance` stores worker heartbeat and capacity for health display.
+- A job must have exactly one domain subject: either `scan_id` or `source_refresh_id`. Keep
+  `website_property_id` as filter/display metadata, not as a polymorphic subject.
+- Workers must claim jobs deterministically, write lease tokens, heartbeat while running, update
+  progress durably, and reject stale lease updates.
+- Cancellation is cooperative. Queued jobs can be cancelled immediately; running scans and source
+  refreshes must save partial results and move to `cancelled` when the handler observes the request.
+- Expired running leases must be recoverable after API or worker restarts. If the domain record is
+  terminal, reconcile the job to that state; otherwise mark both job and domain record
+  `interrupted`.
+- Deletion of scans, sources, and sites must reject active background jobs that could still mutate
+  the rows being deleted.
+- The worker queue owns execution state only. Do not move scan results, source inventory, graph
+  presentation settings, or renderer state into background job records.
+- The frontend should show queued, running, cancelling, interrupted, and waiting-for-worker states
+  using job and worker-health APIs.
+
 The page table should include requested URL, final URL, status, title, depth, content type, discovery source, inbound occurrence count, fetch duration, and error state.
 
 Favor clarity and density over decorative dashboard cards. The graph visualization is not part of PR 1.

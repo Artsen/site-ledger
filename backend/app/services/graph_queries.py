@@ -1,6 +1,7 @@
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 
 from sqlalchemy import and_, case, distinct, func, or_, select, tuple_
 from sqlalchemy.orm import Session, aliased, joinedload
@@ -553,8 +554,8 @@ def _edge_from_aggregate(
     unique_anchor_text_count: int,
     nofollow_occurrence_count: int,
     empty_anchor_occurrence_count: int,
-    first_discovered_at,
-    last_discovered_at,
+    first_discovered_at: datetime | None,
+    last_discovered_at: datetime | None,
     dom_regions: dict[str, int],
     detail: dict[str, object],
 ) -> GraphEdgeRead:
@@ -585,7 +586,7 @@ def _edge_from_aggregate(
     )
 
 
-def _dom_regions_from_row(row) -> dict[str, int]:
+def _dom_regions_from_row(row: Any) -> dict[str, int]:
     region_counts = {
         "header": row.header_dom_count or 0,
         "footer": row.footer_dom_count or 0,
