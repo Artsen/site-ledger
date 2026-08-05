@@ -52,6 +52,21 @@ const api = vi.hoisted(() => ({
   listSitePages: vi.fn(),
   getSitePage: vi.fn(),
   listPageObservations: vi.fn(),
+  updatePageMetadata: vi.fn(),
+  listPageCategories: vi.fn(),
+  createPageCategory: vi.fn(),
+  updatePageCategory: vi.fn(),
+  deletePageCategory: vi.fn(),
+  bulkPageCategories: vi.fn(),
+  bulkPageMetadata: vi.fn(),
+  listSiteNotes: vi.fn(),
+  createSiteNote: vi.fn(),
+  listScanNotes: vi.fn(),
+  createScanNote: vi.fn(),
+  listPageNotes: vi.fn(),
+  createPageNote: vi.fn(),
+  updateNote: vi.fn(),
+  deleteNote: vi.fn(),
   listScanSeeds: vi.fn(),
   listJobs: vi.fn(),
   getJob: vi.fn(),
@@ -170,6 +185,10 @@ beforeEach(() => {
   api.listSitePages.mockResolvedValue({ items: [persistentPageFixture], total: 1, limit: 50, offset: 0 });
   api.getSitePage.mockResolvedValue({ page: persistentPageFixture, site_id: 3, site_name: "Example Site" });
   api.listPageObservations.mockResolvedValue({ items: [pageObservationFixture], total: 1, limit: 50, offset: 0 });
+  api.listPageCategories.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
+  api.listSiteNotes.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 });
+  api.listScanNotes.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 });
+  api.listPageNotes.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 });
   api.listScanSeeds.mockResolvedValue({ items: [seedFixture], total: 1, limit: 50, offset: 0 });
   api.listJobs.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
   api.getJob.mockResolvedValue(jobFixture);
@@ -431,9 +450,11 @@ describe("saved sites workflow", () => {
     cleanup();
     renderRoute(<PersistentPageDetailPage />, "/sites/:siteId/pages/:resourceId", "/sites/3/pages/2");
 
-    expect(await screen.findByText("Observation history")).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: /Scans/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Retry Page/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /Scans/ }));
     await waitFor(() => expect(screen.getAllByText("Revalidated unchanged").length).toBeGreaterThan(0));
-    expect(screen.getByText("from snapshot 8")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Observation" })).toBeInTheDocument();
   });
 
   it("blocks saved-site scans with invalid scan-specific numeric overrides", async () => {
@@ -1026,11 +1047,18 @@ const inventoryFixture = {
 };
 
 const persistentPageFixture = {
+  site_page_id: 12,
   resource_id: 2,
   normalized_url: "https://example.com/page",
   host: "example.com",
   path: "/page",
   query: "",
+  owner_label: "Documentation",
+  workflow_status: "needs_review",
+  categories: [],
+  category_count: 0,
+  note_count: 0,
+  associated_at: "2026-07-30T01:00:02Z",
   observation_count: 2,
   first_observed_at: "2026-07-30T01:00:02Z",
   latest_observed_at: "2026-08-05T01:00:02Z",
@@ -1040,7 +1068,10 @@ const persistentPageFixture = {
   latest_title: "Observed Page",
   latest_retrieval_method: "conditional_not_modified",
   latest_parse_method: "reused_not_modified",
-  latest_reused_from_snapshot_id: 8
+  latest_reused_from_snapshot_id: 8,
+  latest_fetch_state: "fetched",
+  latest_error_type: null,
+  latest_error_message: null
 };
 
 const pageObservationFixture = {
@@ -1049,6 +1080,9 @@ const pageObservationFixture = {
   site_id: 3,
   site_name: "Example Site",
   scan_created_at: "2026-08-05T01:00:00Z",
+  scan_status: "completed",
+  scan_started_at: "2026-08-05T01:00:00Z",
+  scan_finished_at: "2026-08-05T01:00:03Z",
   observed_at: "2026-08-05T01:00:02Z",
   requested_url: "https://example.com/page",
   final_url: "https://example.com/page",

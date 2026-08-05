@@ -6,7 +6,15 @@ from starlette.routing import Route
 
 from app.crawler.scope import ScopeConfig
 from app.crawler.static_crawler import StaticPageCrawler
-from app.models import ContentBlob, HtmlParseArtifact, ResourceOccurrence, ResourceSnapshot, Scan
+from app.models import (
+    ContentBlob,
+    HtmlParseArtifact,
+    ResourceOccurrence,
+    ResourceSnapshot,
+    Scan,
+    SitePage,
+    WebsiteProperty,
+)
 from app.storage.content_store import LocalContentStore
 
 
@@ -54,6 +62,48 @@ def fixture_transport() -> httpx.ASGITransport:
         ]
     )
     return httpx.ASGITransport(app=app)
+
+
+@pytest.mark.asyncio
+async def test_saved_site_failed_observation_creates_site_page(db_session, tmp_path) -> None:
+    site = WebsiteProperty(
+        name="Fixture",
+        base_url="http://fixture.test/",
+        normalized_base_url="http://fixture.test/",
+        description=None,
+        group_key="Other",
+        locale=None,
+        platform_key="Other",
+        ownership_key="Unknown",
+        scope_config={},
+        is_active=True,
+    )
+    db_session.add(site)
+    db_session.flush()
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_pages=1,
+        ),
+        website_property_id=site.id,
+    )
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline", request=request)
+
+    await StaticPageCrawler(
+        db_session,
+        LocalContentStore(tmp_path),
+        transport=httpx.MockTransport(fail),
+    ).run(scan)
+
+    snapshot = db_session.query(ResourceSnapshot).one()
+    site_page = db_session.query(SitePage).one()
+    assert snapshot.fetch_state == "failed"
+    assert site_page.resource_id == snapshot.resource_id
+    assert site_page.website_property_id == site.id
 
 
 @pytest.mark.asyncio
@@ -339,11 +389,13 @@ def _scan(
     db_session,
     config: ScopeConfig,
     starting_url: str = "http://fixture.test/",
+    website_property_id: int | None = None,
 ) -> Scan:
     scan = Scan(
         starting_url=starting_url,
         status="queued",
         scope_config=config.to_dict(),
+        website_property_id=website_property_id,
     )
     db_session.add(scan)
     db_session.commit()

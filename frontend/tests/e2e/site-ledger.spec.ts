@@ -1,14 +1,20 @@
 import { expect, test, type Page } from "@playwright/test";
 
-test("Site Ledger workflow supports creation, filtering, details, inbound links, and deletion", async ({ page }) => {
+test("Site Ledger workflow supports creation, filtering, details, inbound links, and deletion", async ({
+  page,
+}) => {
   test.setTimeout(90_000);
   await mockApi(page);
 
   await page.goto("/");
   await expect(page).toHaveTitle("New Scan | Site Ledger");
   await expect(page.getByText("Site Ledger", { exact: true })).toBeVisible();
-  await expect(page.getByText("A historical record of your website.")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Site Ledger home" })).toBeVisible();
+  await expect(
+    page.getByText("A historical record of your website."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Site Ledger home" }),
+  ).toBeVisible();
   await page.getByRole("link", { name: "Sites", exact: true }).click();
   await expect(page).toHaveURL(/\/sites$/);
   await expect(page).toHaveTitle("Sites | Site Ledger");
@@ -19,14 +25,18 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   await expect(page).toHaveURL(/\/scans\/new$/);
 
   await page.goto("/sites");
-  await expect(page.getByRole("heading", { name: "Saved sites" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Saved sites" }),
+  ).toBeVisible();
   await page.getByRole("link", { name: "Create site" }).click();
   await page.getByLabel("Name").fill("Example Site");
   await page.getByLabel("Base URL").fill("https://example.com/learn/");
   await page.getByLabel("Included path prefixes").fill("/learn/");
   await page.getByRole("button", { name: "Create site" }).click();
   await expect(page).toHaveURL(/\/sites\/3$/);
-  await expect(page.getByRole("heading", { name: "Example Site" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Example Site" }),
+  ).toBeVisible();
   await page.getByRole("link", { name: "Edit site" }).click();
   await page.getByLabel("Maximum pages").fill("150");
   await page.getByRole("button", { name: "Save site" }).click();
@@ -39,15 +49,21 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   await expect(page.getByText("Example Site").first()).toBeVisible();
 
   await page.goto("/scans/new");
-  await expect(page.getByRole("heading", { name: "Start a new scan" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Start a new scan" }),
+  ).toBeVisible();
 
   await page.getByLabel("Starting URL").fill("example.com");
   await page.getByLabel("Starting URL").blur();
-  await expect(page.getByLabel("Starting URL")).toHaveValue("https://example.com/");
+  await expect(page.getByLabel("Starting URL")).toHaveValue(
+    "https://example.com/",
+  );
   await expect(page.getByText("Exact hostname: example.com")).toBeVisible();
 
   await page.getByText("Advanced scope settings").click();
-  await page.getByRole("textbox", { name: "Allowed hosts" }).fill("example.com\nblog.example.com");
+  await page
+    .getByRole("textbox", { name: "Allowed hosts" })
+    .fill("example.com\nblog.example.com");
   await page.getByRole("button", { name: "Start scan" }).click();
 
   await expect(page).toHaveURL(/\/scans\/1$/);
@@ -63,24 +79,34 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   await expect(page.getByText(/2 of 2 nodes/)).toBeVisible();
   await page.getByLabel("Graph mode").selectOption("2d");
   await page.getByLabel("Search graph nodes").fill("pricing");
-  await page.getByRole("button", { name: /Pricing/ }).first().click();
+  await page
+    .getByRole("button", { name: /Pricing/ })
+    .first()
+    .click();
   await expect(page.getByText("Selected page")).toBeVisible();
   await expect(page.getByRole("link", { name: "Open details" })).toBeVisible();
   await page.getByRole("button", { name: "Neighborhood", exact: true }).click();
   await expect(page).toHaveURL(/focus_snapshot_id=9/);
-  await page.getByRole("button", { name: /2 links/ }).first().click();
+  await page
+    .getByRole("button", { name: /2 links/ })
+    .first()
+    .click();
   await expect(page.getByText("Selected edge")).toBeVisible();
   await expect(page.getByText("Pricing link")).toBeVisible();
   await page.getByLabel("Graph maximum depth").fill("1");
   await expect(page).toHaveURL(/max_depth=1/);
   await page.getByRole("button", { name: "Presentation" }).click();
-  await expect(page.getByRole("button", { name: "Exit presentation" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Exit presentation" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Exit presentation" }).click();
 
   await page.getByRole("tab", { name: /Pages/i }).click();
   await page.getByLabel("Search pages").fill("pricing");
   await expect(page).toHaveURL(/search=pricing/);
-  await expect(page.getByRole("cell", { name: "Pricing", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "Pricing", exact: true }),
+  ).toBeVisible();
 
   await page.getByText("https://example.com/pricing").click();
   await expect(page.getByText("Page details")).toBeVisible();
@@ -91,7 +117,9 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   await expect(page.getByText("Open Graph")).toBeVisible();
 
   await page.getByRole("tab", { name: /Outgoing links/i }).click();
-  await expect(page.getByRole("table").getByText("External", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("table").getByText("External", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("No visible text")).toBeVisible();
 
   await page.getByRole("tab", { name: /Inbound links/i }).click();
@@ -101,8 +129,14 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   await expect(page).toHaveURL(/inbound_search=source/);
 
   await page.getByRole("tab", { name: "HTML" }).click();
-  await expect(page.getByLabel("Escaped HTML source")).toContainText("<script>window.executed = true</script>");
-  expect(await page.evaluate(() => (window as unknown as { executed?: boolean }).executed)).toBeUndefined();
+  await expect(page.getByLabel("Escaped HTML source")).toContainText(
+    "<script>window.executed = true</script>",
+  );
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { executed?: boolean }).executed,
+    ),
+  ).toBeUndefined();
 
   await page.getByRole("link", { name: "Back to page results" }).click();
   await expect(page).toHaveURL(/\/scans\/1\?tab=pages/);
@@ -112,25 +146,196 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   await page.getByLabel("Scan status").selectOption("completed");
   await expect(page).toHaveURL(/search=example/);
   await page.getByRole("button", { name: "Delete" }).click();
-  await expect(page.getByRole("dialog", { name: "Delete this scan?" })).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "Delete this scan?" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Delete scan" }).click();
   await expect(page.getByText("Scan deleted.")).toBeVisible();
+});
+
+test("persistent Page workspace supports organization, evidence, links, and notes", async ({
+  page,
+}) => {
+  await mockApi(page);
+
+  await page.goto("/sites/3/pages/2");
+  await expect(page.getByRole("heading", { name: "Pricing" })).toBeVisible();
+  await expect(
+    page.getByText("Needs Review", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Web team", { exact: true }).first(),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Edit organization" }).click();
+  await expect(page.getByLabel("Editorial")).toBeChecked();
+  await expect(page.getByText("Retired category (Archived)")).toHaveCount(0);
+  await page.getByLabel("Owner").fill("Content team");
+  await page.getByRole("button", { name: "Save organization" }).click();
+
+  await page.getByRole("tab", { name: /Scans/ }).click();
+  await expect(page).toHaveURL(/tab=scans/);
+  await expect(
+    page.getByRole("link", { name: "Open Observation" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /Retry Page/i })).toHaveCount(
+    0,
+  );
+
+  await page.getByRole("tab", { name: "Links" }).click();
+  await expect(page.getByText("Main content", { exact: true })).toBeVisible();
+  await expect(page.getByText("Crawlable", { exact: true })).toBeVisible();
+
+  await page.getByRole("tab", { name: /Notes/ }).click();
+  await page.getByLabel(/Add note/).fill("Review pricing copy\nwith legal.");
+  await page.getByRole("button", { name: "Add note" }).click();
+  await expect(
+    page.getByText("Review pricing copy\nwith legal."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Pin", exact: true }).click();
+  await expect(page.getByText(/Pinned note/)).toBeVisible();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Edit note").fill("Pricing copy approved.");
+  await page.getByRole("button", { name: "Save note" }).click();
+  await expect(page.getByText("Pricing copy approved.")).toBeVisible();
+  await page.getByLabel("Search notes").fill("pricing");
+  await expect(page).toHaveURL(/notes_search=pricing/);
 });
 
 async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
   let siteActive = true;
+  let pageNote: Record<string, unknown> | null = null;
+
+  await page.route("**/api/notes/41", async (route) => {
+    if (route.request().method() === "PATCH" && pageNote) {
+      pageNote = { ...pageNote, ...(await route.request().postDataJSON()) };
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(pageNote),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404 });
+  });
+
+  await page.route("**/api/sites/3/pages/2/notes**", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = await route.request().postDataJSON();
+      pageNote = {
+        id: 41,
+        website_property_id: null,
+        scan_id: null,
+        site_page_id: 12,
+        body: body.body,
+        is_pinned: body.is_pinned,
+        created_at: "2026-08-05T12:00:00Z",
+        updated_at: "2026-08-05T12:00:00Z",
+      };
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify(pageNote),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: pageNote ? [pageNote] : [],
+        total: pageNote ? 1 : 0,
+        limit: 50,
+        offset: 0,
+      }),
+    });
+  });
+
+  await page.route("**/api/sites/3/pages/2/observations**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [pageObservation],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      }),
+    });
+  });
+
+  await page.route("**/api/sites/3/page-categories**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: pageCategories,
+        total: pageCategories.length,
+        limit: 200,
+        offset: 0,
+      }),
+    });
+  });
+
+  await page.route("**/api/sites/3/pages/2/metadata", async (route) => {
+    const body = await route.request().postDataJSON();
+    persistentPage.page.owner_label =
+      body.owner_label ?? persistentPage.page.owner_label;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(persistentPage),
+    });
+  });
+
+  await page.route("**/api/sites/3/pages/2", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(persistentPage),
+    });
+  });
+
+  await page.route("**/api/snapshots/9/outgoing-links**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [roleLink],
+        total: 1,
+        limit: 50,
+        offset: 0,
+        summary: {
+          total_occurrences: 1,
+          nofollow_occurrences: 0,
+          in_scope_occurrences: 1,
+          role_counts: { main_content: 1 },
+        },
+      }),
+    });
+  });
 
   await page.route("**/api/scans", async (route) => {
     if (route.request().method() === "POST") {
-      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ ...scan, status: "running" }) });
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ ...scan, status: "running" }),
+      });
       return;
     }
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify([{ ...scan, status: scanStatus }]) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([{ ...scan, status: scanStatus }]),
+    });
   });
 
   await page.route("**/api/scans/history**", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ ...scan, status: "completed", finished_at: "2026-07-30T01:00:03Z" }], total: 1, limit: 25, offset: 0 }) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          { ...scan, status: "completed", finished_at: "2026-07-30T01:00:03Z" },
+        ],
+        total: 1,
+        limit: 25,
+        offset: 0,
+      }),
+    });
   });
 
   await page.route("**/api/scans/1", async (route) => {
@@ -147,59 +352,149 @@ async function mockApi(page: Page) {
           html_blobs_deleted: 1,
           raw_html_bytes_reclaimed: 1200,
           stored_html_bytes_reclaimed: 480,
-          warnings: []
-        })
+          warnings: [],
+        }),
       });
       return;
     }
     const body = { ...scan, status: scanStatus };
     scanStatus = "completed";
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
   });
 
   await page.route("**/api/scans/2", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...scan, id: 2, status: "completed", website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/", starting_url: "https://example.com/learn/", scope_config: { ...scope, max_pages: 12 } }) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...scan,
+        id: 2,
+        status: "completed",
+        website_property_id: 3,
+        website_property_name: "Example Site",
+        website_property_base_url: "https://example.com/learn/",
+        starting_url: "https://example.com/learn/",
+        scope_config: { ...scope, max_pages: 12 },
+      }),
+    });
   });
 
   await page.route("**/api/sites/3/scans", async (route) => {
     if (route.request().method() === "POST") {
-      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ ...scan, id: 2, status: "running", website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/", starting_url: "https://example.com/learn/" }) });
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...scan,
+          id: 2,
+          status: "running",
+          website_property_id: 3,
+          website_property_name: "Example Site",
+          website_property_base_url: "https://example.com/learn/",
+          starting_url: "https://example.com/learn/",
+        }),
+      });
       return;
     }
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ ...scan, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/" }], total: 1, limit: 25, offset: 0 }) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          {
+            ...scan,
+            website_property_id: 3,
+            website_property_name: "Example Site",
+            website_property_base_url: "https://example.com/learn/",
+          },
+        ],
+        total: 1,
+        limit: 25,
+        offset: 0,
+      }),
+    });
   });
 
   await page.route("**/api/sites/3", async (route) => {
     if (route.request().method() === "PATCH") {
       const body = await route.request().postDataJSON();
       if (typeof body.is_active === "boolean") siteActive = body.is_active;
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...site, is_active: siteActive, scope_config: body.scope_config ?? site.scope_config }) });
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...site,
+          is_active: siteActive,
+          scope_config: body.scope_config ?? site.scope_config,
+        }),
+      });
       return;
     }
     if (route.request().method() === "DELETE") {
-      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Delete or detach this site's scans before deleting the site." }) });
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          detail:
+            "Delete or detach this site's scans before deleting the site.",
+        }),
+      });
       return;
     }
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...site, is_active: siteActive }) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ...site, is_active: siteActive }),
+    });
   });
 
   await page.route(/\/api\/sites(?:\?.*)?$/, async (route) => {
     if (route.request().method() === "POST") {
-      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(site) });
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify(site),
+      });
       return;
     }
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ ...site, latest_scan: undefined, recent_scans: undefined, latest_scan_id: 1, latest_scan_status: "completed", latest_scan_date: "2026-07-30T01:00:00Z", latest_scan_discovered_count: 3, latest_scan_failed_count: 0 }], total: 1, limit: 25, offset: 0 }) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          {
+            ...site,
+            latest_scan: undefined,
+            recent_scans: undefined,
+            latest_scan_id: 1,
+            latest_scan_status: "completed",
+            latest_scan_date: "2026-07-30T01:00:00Z",
+            latest_scan_discovered_count: 3,
+            latest_scan_failed_count: 0,
+          },
+        ],
+        total: 1,
+        limit: 25,
+        offset: 0,
+      }),
+    });
   });
 
   await page.route("**/api/scans/1/pages**", async (route) => {
     await route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ items: [pageRow], total: 1, limit: 50, offset: 0 })
+      body: JSON.stringify({
+        items: [pageRow],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      }),
     });
   });
 
   await page.route("**/api/scans/1/errors", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([]),
+    });
   });
 
   await page.route("**/api/scans/1/delete-preview", async (route) => {
@@ -220,38 +515,63 @@ async function mockApi(page: Page) {
         raw_html_bytes_reclaimable: 1200,
         stored_html_bytes_reclaimable: 480,
         reason: null,
-        warnings: []
-      })
+        warnings: [],
+      }),
     });
   });
 
-  await page.route("**/api/scans/1/graph/edges/8-2/occurrences**", async (route) => {
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        items: [{ ...links[0], id: 20, source_snapshot_id: 8, target_snapshot_id: 9, anchor_text: "Pricing link", raw_href: "/pricing", is_self_link: false }],
-        total: 2,
-        limit: 50,
-        offset: 0,
-        edge: graph.edges[0]
-      })
-    });
-  });
+  await page.route(
+    "**/api/scans/1/graph/edges/8-2/occurrences**",
+    async (route) => {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [
+            {
+              ...links[0],
+              id: 20,
+              source_snapshot_id: 8,
+              target_snapshot_id: 9,
+              anchor_text: "Pricing link",
+              raw_href: "/pricing",
+              is_self_link: false,
+            },
+          ],
+          total: 2,
+          limit: 50,
+          offset: 0,
+          edge: graph.edges[0],
+        }),
+      });
+    },
+  );
 
   await page.route("**/api/graph/capabilities", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify(graphCapabilities) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(graphCapabilities),
+    });
   });
 
   await page.route(/\/api\/scans\/1\/graph(?:\?.*)?$/, async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify(graph) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(graph),
+    });
   });
 
   await page.route("**/api/snapshots/9", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify(snapshot) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(snapshot),
+    });
   });
 
   await page.route("**/api/snapshots/9/links", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify(links) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(links),
+    });
   });
 
   await page.route("**/api/snapshots/9/inbound-links**", async (route) => {
@@ -269,8 +589,8 @@ async function mockApi(page: Page) {
             source_http_status: 200,
             source_fetch_state: "fetched",
             source_crawl_depth: 1,
-            is_self_link: true
-          }
+            is_self_link: true,
+          },
         ],
         total: 1,
         limit: 50,
@@ -280,14 +600,17 @@ async function mockApi(page: Page) {
           unique_source_pages: 1,
           unique_anchor_texts: 0,
           nofollow_occurrences: 1,
-          self_link_occurrences: 1
-        }
-      })
+          self_link_occurrences: 1,
+        },
+      }),
     });
   });
 
   await page.route("**/api/snapshots/9/html", async (route) => {
-    await route.fulfill({ contentType: "text/plain", body: "<html><body><script>window.executed = true</script><h1>Pricing</h1></body></html>" });
+    await route.fulfill({
+      contentType: "text/plain",
+      body: "<html><body><script>window.executed = true</script><h1>Pricing</h1></body></html>",
+    });
   });
 }
 
@@ -307,7 +630,7 @@ const scope = {
   user_agent: "WebsiteScanner/0.1",
   drop_query_parameters: ["utm_*", "gclid", "fbclid", "msclkid"],
   allow_private_networks: false,
-  max_redirects: 10
+  max_redirects: 10,
 };
 
 const scan = {
@@ -327,7 +650,7 @@ const scan = {
   skipped_count: 0,
   queued_count: 2,
   stop_reason: null,
-  fatal_error_message: null
+  fatal_error_message: null,
 };
 
 const site = {
@@ -345,8 +668,20 @@ const site = {
   created_at: "2026-07-30T01:00:00Z",
   updated_at: "2026-07-30T01:00:00Z",
   total_scan_count: 1,
-  latest_scan: { ...scan, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/" },
-  recent_scans: [{ ...scan, website_property_id: 3, website_property_name: "Example Site", website_property_base_url: "https://example.com/learn/" }]
+  latest_scan: {
+    ...scan,
+    website_property_id: 3,
+    website_property_name: "Example Site",
+    website_property_base_url: "https://example.com/learn/",
+  },
+  recent_scans: [
+    {
+      ...scan,
+      website_property_id: 3,
+      website_property_name: "Example Site",
+      website_property_base_url: "https://example.com/learn/",
+    },
+  ],
 };
 
 const pageRow = {
@@ -363,7 +698,120 @@ const pageRow = {
   inbound_source_page_count: 1,
   response_time_ms: 87,
   fetch_state: "fetched",
-  error_type: null
+  error_type: null,
+};
+
+const pageCategories = [
+  {
+    id: 7,
+    website_property_id: 3,
+    name: "Editorial",
+    description: null,
+    color_key: "blue",
+    sort_order: 0,
+    is_active: true,
+    assignment_count: 1,
+    created_at: "2026-08-05T10:00:00Z",
+    updated_at: "2026-08-05T10:00:00Z",
+  },
+  {
+    id: 8,
+    website_property_id: 3,
+    name: "Retired category",
+    description: null,
+    color_key: "gray",
+    sort_order: 1,
+    is_active: false,
+    assignment_count: 0,
+    created_at: "2026-08-05T10:00:00Z",
+    updated_at: "2026-08-05T10:00:00Z",
+  },
+];
+
+const persistentPage = {
+  site_id: 3,
+  site_name: "Example Site",
+  page: {
+    site_page_id: 12,
+    resource_id: 2,
+    normalized_url: "https://example.com/pricing",
+    host: "example.com",
+    path: "/pricing",
+    query: "",
+    owner_label: "Web team",
+    workflow_status: "needs_review",
+    categories: [pageCategories[0]],
+    category_count: 1,
+    note_count: 0,
+    associated_at: "2026-07-30T01:00:02Z",
+    observation_count: 1,
+    first_observed_at: "2026-07-30T01:00:02Z",
+    latest_observed_at: "2026-07-30T01:00:02Z",
+    latest_snapshot_id: 9,
+    latest_scan_id: 1,
+    latest_http_status: 200,
+    latest_title: "Pricing",
+    latest_retrieval_method: "full_fetch",
+    latest_parse_method: "parsed",
+    latest_reused_from_snapshot_id: null,
+    latest_fetch_state: "fetched",
+    latest_error_type: null,
+    latest_error_message: null,
+  },
+};
+
+const pageObservation = {
+  snapshot_id: 9,
+  scan_id: 1,
+  site_id: 3,
+  site_name: "Example Site",
+  scan_created_at: "2026-07-30T01:00:00Z",
+  scan_status: "completed",
+  scan_started_at: "2026-07-30T01:00:01Z",
+  scan_finished_at: "2026-07-30T01:01:00Z",
+  observed_at: "2026-07-30T01:00:02Z",
+  requested_url: "https://example.com/pricing",
+  final_url: "https://example.com/pricing",
+  http_status: 200,
+  retrieval_http_status: 200,
+  fetch_state: "fetched",
+  error_type: null,
+  crawl_depth: 1,
+  response_time_ms: 87,
+  content_type: "text/html",
+  raw_html_sha256: "rawhash",
+  head_sha256: "headhash",
+  page_title: "Pricing",
+  canonical_url: "https://example.com/pricing",
+  retrieval_method: "full_fetch",
+  parse_method: "parsed",
+  content_blob_id: 4,
+  parse_artifact_id: 5,
+  reused_from_snapshot_id: null,
+  network_bytes_transferred: 1200,
+  parser_version: "html-parser-v2-link-roles",
+};
+
+const roleLink = {
+  id: 33,
+  raw_href: "/learn",
+  resolved_url: "https://example.com/learn",
+  normalized_target_url: "https://example.com/learn",
+  target_resource_id: 4,
+  anchor_text: "Learn",
+  title: null,
+  aria_label: null,
+  rel: null,
+  target: null,
+  dom_path: "html > body > main > a",
+  in_scope: true,
+  scope_decision: "crawlable",
+  exclusion_reason: null,
+  link_role: "main_content",
+  link_role_label: "Main content",
+  link_role_rule: "ancestor_main",
+  link_context_json: { landmark_tag: "main" },
+  discovered_at: "2026-07-30T01:00:02Z",
 };
 
 const graph = {
@@ -374,7 +822,7 @@ const graph = {
     website_property_id: null,
     website_property_name: null,
     created_at: "2026-07-30T01:00:00Z",
-    finished_at: "2026-07-30T01:01:00Z"
+    finished_at: "2026-07-30T01:01:00Z",
   },
   summary: {
     total_available_nodes: 2,
@@ -390,7 +838,7 @@ const graph = {
     truncation_reasons: [],
     focused: false,
     focus_snapshot_id: null,
-    focus_hops: null
+    focus_hops: null,
   },
   nodes: [
     {
@@ -418,7 +866,7 @@ const graph = {
       is_starting_url: true,
       redirects: false,
       canonical_url: null,
-      category: "2xx"
+      category: "2xx",
     },
     {
       id: "snapshot:9",
@@ -445,8 +893,8 @@ const graph = {
       is_starting_url: false,
       redirects: false,
       canonical_url: null,
-      category: "2xx"
-    }
+      category: "2xx",
+    },
   ],
   edges: [
     {
@@ -466,10 +914,10 @@ const graph = {
       first_discovered_at: "2026-07-30T01:00:01Z",
       last_discovered_at: "2026-07-30T01:00:02Z",
       scope_decisions: { crawlable: 2 },
-      dom_regions: { main: 2 }
-    }
+      dom_regions: { main: 2 },
+    },
   ],
-  effective_filters: {}
+  effective_filters: {},
 };
 
 const graphCapabilities = {
@@ -484,8 +932,24 @@ const graphCapabilities = {
   occurrence_page_maximum: 200,
   supported_status_filters: ["any", "2xx", "3xx", "4xx", "5xx", "none"],
   supported_error_filters: ["any", "with_errors", "without_errors"],
-  supported_node_size_modes: ["uniform", "inbound_sources", "inbound_occurrences", "outbound_targets", "outbound_occurrences", "response_time", "depth_inverse"],
-  supported_node_category_modes: ["status", "fetch_state", "depth", "host", "path", "error", "seed"]
+  supported_node_size_modes: [
+    "uniform",
+    "inbound_sources",
+    "inbound_occurrences",
+    "outbound_targets",
+    "outbound_occurrences",
+    "response_time",
+    "depth_inverse",
+  ],
+  supported_node_category_modes: [
+    "status",
+    "fetch_state",
+    "depth",
+    "host",
+    "path",
+    "error",
+    "seed",
+  ],
 };
 
 const snapshot = {
@@ -501,7 +965,14 @@ const snapshot = {
   fetched_at: "2026-07-30T01:00:02Z",
   response_time_ms: 87,
   response_headers: {},
-  redirect_chain: [{ requested_url: "https://example.com/pricing-old", status_code: 301, location: "/pricing", resolved_url: "https://example.com/pricing" }],
+  redirect_chain: [
+    {
+      requested_url: "https://example.com/pricing-old",
+      status_code: 301,
+      location: "/pricing",
+      resolved_url: "https://example.com/pricing",
+    },
+  ],
   html_raw_byte_size: 1200,
   html_stored_byte_size: 480,
   raw_html_sha256: "rawhash",
@@ -518,11 +989,11 @@ const snapshot = {
     twitter: { "twitter:card": "summary" },
     meta: [{ name: "description", content: "Pricing page" }],
     links: [{ rel: "canonical", href: "https://example.com/pricing" }],
-    json_ld: ['{"@context":"https://schema.org","@type":"WebPage"}']
+    json_ld: ['{"@context":"https://schema.org","@type":"WebPage"}'],
   },
   fetch_state: "fetched",
   error_type: null,
-  error_message: null
+  error_message: null,
 };
 
 const links = [
@@ -541,7 +1012,6 @@ const links = [
     in_scope: false,
     scope_decision: "external",
     exclusion_reason: "External host",
-    discovered_at: "2026-07-30T01:00:02Z"
-  }
+    discovered_at: "2026-07-30T01:00:02Z",
+  },
 ];
-
