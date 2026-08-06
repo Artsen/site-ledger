@@ -1,3 +1,11 @@
+from app.models.rendered import (
+    ArtifactBlob,
+    RenderedArtifact,
+    RenderedConsoleMessage,
+    RenderedNetworkEntry,
+    RenderedObservation,
+    RenderedPageError,
+)
 from app.models.resources import (
     BackgroundJob,
     ContentBlob,
@@ -14,6 +22,7 @@ from app.models.resources import (
     ScanSeedOrigin,
     SitePage,
     SourceRefresh,
+    StaticFetchAttempt,
     UrlSource,
     UrlSourceEntry,
     WebResource,
@@ -36,10 +45,17 @@ __all__ = [
     "ScanSeed",
     "ScanSeedOrigin",
     "SitePage",
+    "StaticFetchAttempt",
     "SourceRefresh",
     "UrlSource",
     "UrlSourceEntry",
     "WebResource",
     "WebsiteProperty",
     "WorkerInstance",
+    "ArtifactBlob",
+    "RenderedArtifact",
+    "RenderedConsoleMessage",
+    "RenderedNetworkEntry",
+    "RenderedObservation",
+    "RenderedPageError",
 ]

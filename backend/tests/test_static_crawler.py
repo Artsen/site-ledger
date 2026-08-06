@@ -4,8 +4,9 @@ from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from starlette.routing import Route
 
+from app.crawler.safe_fetch import connect_error_type
 from app.crawler.scope import ScopeConfig
-from app.crawler.static_crawler import StaticPageCrawler
+from app.crawler.static_crawler import StaticPageCrawler, _retry_after_ms
 from app.models import (
     ContentBlob,
     HtmlParseArtifact,
@@ -13,6 +14,7 @@ from app.models import (
     ResourceSnapshot,
     Scan,
     SitePage,
+    StaticFetchAttempt,
     WebsiteProperty,
 )
 from app.storage.content_store import LocalContentStore
@@ -86,6 +88,8 @@ async def test_saved_site_failed_observation_creates_site_page(db_session, tmp_p
             allowed_host_patterns=["fixture.test"],
             allow_private_networks=True,
             max_pages=1,
+            static_retry_initial_delay_ms=0,
+            static_retry_max_delay_ms=0,
         ),
         website_property_id=site.id,
     )
@@ -104,6 +108,263 @@ async def test_saved_site_failed_observation_creates_site_page(db_session, tmp_p
     assert snapshot.fetch_state == "failed"
     assert site_page.resource_id == snapshot.resource_id
     assert site_page.website_property_id == site.id
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_is_retried_after_the_crawl(db_session, tmp_path) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectTimeout("temporary timeout", request=request)
+        return httpx.Response(
+            200,
+            content=b"<html><body><a href='/next'>Next</a></body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_pages=1,
+        ),
+    )
+    await StaticPageCrawler(
+        db_session,
+        LocalContentStore(tmp_path),
+        transport=httpx.MockTransport(handler),
+    ).run(scan)
+
+    snapshot = db_session.query(ResourceSnapshot).one()
+    assert attempts == 2
+    assert snapshot.fetch_state == "fetched"
+    assert snapshot.error_type is None
+    assert scan.failed_count == 0
+    assert scan.status == "completed"
+    attempts = (
+        db_session.query(StaticFetchAttempt).order_by(StaticFetchAttempt.attempt_number).all()
+    )
+    assert [(attempt.outcome, attempt.error_type) for attempt in attempts] == [
+        ("failed", "connection_timeout"),
+        ("succeeded", None),
+    ]
+    assert attempts[0].retryable is True
+    assert scan.static_request_attempt_count == 2
+    assert scan.static_retry_request_count == 1
+    assert scan.static_recovered_after_retry_count == 1
+    assert scan.static_retry_exhausted_count == 0
+    assert (
+        db_session.query(ResourceOccurrence).filter_by(source_snapshot_id=snapshot.id).count() == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_successful_retry_resumes_discovery(db_session, tmp_path) -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/" and requests.count("/") == 1:
+            raise httpx.ConnectTimeout("temporary timeout", request=request)
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                content=b"<html><body><a href='/b'>B</a></body></html>",
+                headers={"content-type": "text/html"},
+            )
+        return httpx.Response(
+            200,
+            content=b"<html><body>B</body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_pages=2,
+            max_depth=1,
+            static_retry_initial_delay_ms=0,
+            static_retry_max_delay_ms=0,
+        ),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(handler)
+    ).run(scan)
+
+    snapshots = db_session.query(ResourceSnapshot).order_by(ResourceSnapshot.crawl_depth).all()
+    assert requests == ["/", "/", "/b"]
+    assert [snapshot.requested_url for snapshot in snapshots] == [
+        "http://fixture.test/",
+        "http://fixture.test/b",
+    ]
+    assert scan.discovered_count == 2
+    assert scan.fetched_count == 2
+    assert scan.static_request_attempt_count == 3
+    assert scan.static_recovered_after_retry_count == 1
+
+
+@pytest.mark.asyncio
+async def test_exhausted_retry_preserves_every_attempt(db_session, tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("x" * 9000, request=request)
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_pages=1,
+            static_retry_initial_delay_ms=0,
+            static_retry_max_delay_ms=0,
+        ),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(handler)
+    ).run(scan)
+
+    snapshot = db_session.query(ResourceSnapshot).one()
+    attempts = (
+        db_session.query(StaticFetchAttempt).order_by(StaticFetchAttempt.attempt_number).all()
+    )
+    assert snapshot.fetch_state == "failed"
+    assert snapshot.error_type == "connection_timeout"
+    assert scan.failed_count == 1
+    assert scan.static_retry_exhausted_count == 1
+    assert len(attempts) == 2
+    assert all(attempt.retryable for attempt in attempts)
+    assert all(len(attempt.error_message or "") == 8000 for attempt in attempts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [408, 425, 429, 502, 503, 504])
+async def test_temporary_http_status_is_retried(status, db_session, tmp_path) -> None:
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(
+                status,
+                headers={"content-type": "text/html", "retry-after": "0"},
+                content=b"<html>temporary</html>",
+            )
+        return httpx.Response(
+            200, headers={"content-type": "text/html"}, content=b"<html>ok</html>"
+        )
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_pages=1,
+            static_retry_initial_delay_ms=0,
+            static_retry_max_delay_ms=0,
+        ),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(handler)
+    ).run(scan)
+
+    rows = db_session.query(StaticFetchAttempt).order_by(StaticFetchAttempt.attempt_number).all()
+    assert attempts == 2
+    assert [row.retrieval_http_status for row in rows] == [status, 200]
+    assert rows[0].retry_reason == f"http_{status}"
+    assert scan.static_recovered_after_retry_count == 1
+
+
+@pytest.mark.asyncio
+async def test_certificate_failure_is_not_retried(db_session, tmp_path) -> None:
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        raise httpx.ConnectError("certificate verify failed", request=request)
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_pages=1,
+            static_retry_initial_delay_ms=0,
+            static_retry_max_delay_ms=0,
+        ),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(handler)
+    ).run(scan)
+
+    attempt = db_session.query(StaticFetchAttempt).one()
+    assert requests == 1
+    assert attempt.error_type == "certificate_validation_error"
+    assert attempt.retryable is False
+    assert scan.static_retry_request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_shared_client_does_not_replay_response_cookies(db_session, tmp_path) -> None:
+    observed_cookie: str | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal observed_cookie
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html", "set-cookie": "session=secret"},
+                content=b"<html><a href='/next'>Next</a></html>",
+            )
+        observed_cookie = request.headers.get("cookie")
+        return httpx.Response(
+            200, headers={"content-type": "text/html"}, content=b"<html>next</html>"
+        )
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_pages=2,
+            max_depth=1,
+        ),
+    )
+    await StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=httpx.MockTransport(handler)
+    ).run(scan)
+
+    assert observed_cookie is None
+    first = (
+        db_session.query(ResourceSnapshot)
+        .filter(ResourceSnapshot.requested_url == "http://fixture.test/")
+        .one()
+    )
+    assert "set-cookie" not in (first.response_headers or {})
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("certificate verify failed", "certificate_validation_error"),
+        ("TLSV1 alert protocol version", "tls_configuration_error"),
+        ("unexpected EOF while reading", "transient_tls_disconnect"),
+        ("connection reset by peer", "connection_reset"),
+        ("getaddrinfo failed", "dns_error"),
+    ],
+)
+def test_transport_error_classification(message, expected) -> None:
+    assert connect_error_type(httpx.ConnectError(message)) == expected
+
+
+def test_retry_after_is_capped() -> None:
+    assert _retry_after_ms({"Retry-After": "120"}, 5000) == 5000
 
 
 @pytest.mark.asyncio

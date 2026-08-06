@@ -1,4 +1,4 @@
-import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
+import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, StaticFetchAttempt, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import { errorFromResponse } from "../utils/errors";
@@ -26,6 +26,9 @@ export const defaultScope = (): ScopeConfig => ({
   max_depth: 3,
   respect_robots_txt: false,
   request_timeout_seconds: 10,
+  static_max_attempts: 2,
+  static_retry_initial_delay_ms: 500,
+  static_retry_max_delay_ms: 5000,
   max_html_response_bytes: 2000000,
   concurrent_requests_per_host: 2,
   delay_between_requests_ms: 0,
@@ -34,7 +37,28 @@ export const defaultScope = (): ScopeConfig => ({
   allow_private_networks: false,
   max_redirects: 10,
   enable_http_revalidation: true,
-  enable_parse_reuse: true
+  enable_parse_reuse: true,
+  render_mode: "none",
+  render_max_pages: 10,
+  render_viewport_width: 1440,
+  render_viewport_height: 900,
+  render_device_scale_factor: 1,
+  render_locale: "en-US",
+  render_timezone: "UTC",
+  render_color_scheme: "light",
+  render_reduced_motion: "reduce",
+  render_navigation_timeout_seconds: 30,
+  render_load_timeout_seconds: 10,
+  render_capture_full_page: true,
+  render_max_full_page_height: 20000,
+  render_max_dom_bytes: 5000000,
+  render_max_screenshot_bytes: 15000000,
+  render_max_network_entries: 1000,
+  render_max_console_entries: 200,
+  render_max_page_errors: 50,
+  render_max_page_duration_seconds: 60,
+  render_max_total_network_bytes: 50000000,
+  render_max_resource_bytes: 10000000
 });
 
 export function createScan(startingUrl: string, scopeConfig: ScopeConfig, websitePropertyId?: number | null) {
@@ -95,6 +119,7 @@ export const deleteScan = (id: string) => request<ScanDeleteResult>(`/api/scans/
 export const listPages = (scanId: string, query = "") => request<PageList>(`/api/scans/${scanId}/pages${query}`);
 export const listErrors = (scanId: string) => request<Snapshot[]>(`/api/scans/${scanId}/errors`);
 export const getSnapshot = (snapshotId: string) => request<Snapshot>(`/api/snapshots/${snapshotId}`);
+export const getStaticFetchAttempts = (snapshotId: string) => request<StaticFetchAttempt[]>(`/api/snapshots/${snapshotId}/static-fetch-attempts`);
 export const getLinks = (snapshotId: string) => request<LinkOccurrence[]>(`/api/snapshots/${snapshotId}/links`);
 export const getOutgoingLinks = (snapshotId: string, query = "") => request<OutgoingLinkList>(`/api/snapshots/${snapshotId}/outgoing-links${query}`);
 export const getInboundLinks = (snapshotId: string, query = "") => request<InboundLinkList>(`/api/snapshots/${snapshotId}/inbound-links${query}`);
@@ -102,6 +127,12 @@ export const listScanSeeds = (scanId: string, query = "") => request<ScanSeedLis
 export const getScanGraph = (scanId: string, query = "") => request<GraphResponse>(`/api/scans/${scanId}/graph${query}`);
 export const getGraphEdgeOccurrences = (scanId: string, edgeId: string, query = "") => request<GraphEdgeOccurrenceList>(`/api/scans/${scanId}/graph/edges/${edgeId}/occurrences${query}`);
 export const getGraphCapabilities = () => request<GraphCapabilities>("/api/graph/capabilities");
+export const getRenderCapabilities = () => request<RenderCapabilities>("/api/rendering/capabilities");
+export const getRenderedObservation = (snapshotId: string) => request<RenderedObservation>(`/api/snapshots/${snapshotId}/rendered`);
+export const getRenderedNetwork = (id: number, query = "") => request<RenderedEventList<RenderedNetworkEntry>>(`/api/rendered-observations/${id}/network${query}`);
+export const getRenderedConsole = (id: number, query = "") => request<RenderedEventList<RenderedConsoleMessage>>(`/api/rendered-observations/${id}/console${query}`);
+export const getRenderedErrors = (id: number, query = "") => request<RenderedEventList<RenderedPageError>>(`/api/rendered-observations/${id}/errors${query}`);
+export const renderedArtifactUrl = (id: number) => `${API_BASE}/api/rendered-artifacts/${id}/content`;
 export const listJobs = (query = "") => request<JobList>(`/api/jobs${query}`);
 export const getJob = (jobId: string) => request<Job>(`/api/jobs/${jobId}`);
 export const getWorkerHealth = () => request<WorkerHealth>("/api/jobs/worker-health");

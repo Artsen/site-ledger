@@ -451,6 +451,7 @@ def worker_health(db: Session, offline_threshold_seconds: float) -> WorkerHealth
         last_worker_heartbeat=max((worker.last_seen_at for worker in online_workers), default=None),
         queued_work_has_worker=not queued_jobs or bool(online_workers),
         offline_threshold_seconds=offline_threshold_seconds,
+        worker_capabilities=[worker.metadata_json for worker in online_workers],
     )
 
 

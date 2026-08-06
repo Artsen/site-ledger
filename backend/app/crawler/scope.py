@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Any
 
+from app.browser.config import DEFAULTS
 from app.crawler.url_normalizer import NormalizedUrl, UrlNormalizationError, normalize_url
 
 ScopeDecision = str
@@ -18,6 +19,9 @@ class ScopeConfig:
     max_depth: int = 3
     respect_robots_txt: bool = False
     request_timeout_seconds: float = 10
+    static_max_attempts: int = 2
+    static_retry_initial_delay_ms: int = 500
+    static_retry_max_delay_ms: int = 5000
     max_html_response_bytes: int = 2_000_000
     concurrent_requests_per_host: int = 2
     delay_between_requests_ms: int = 0
@@ -27,6 +31,27 @@ class ScopeConfig:
     max_redirects: int = 10
     enable_http_revalidation: bool = True
     enable_parse_reuse: bool = True
+    render_mode: str = DEFAULTS.render_mode
+    render_max_pages: int = DEFAULTS.render_max_pages
+    render_viewport_width: int = DEFAULTS.render_viewport_width
+    render_viewport_height: int = DEFAULTS.render_viewport_height
+    render_device_scale_factor: float = DEFAULTS.render_device_scale_factor
+    render_locale: str = DEFAULTS.render_locale
+    render_timezone: str = DEFAULTS.render_timezone
+    render_color_scheme: str = DEFAULTS.render_color_scheme
+    render_reduced_motion: str = DEFAULTS.render_reduced_motion
+    render_navigation_timeout_seconds: float = DEFAULTS.render_navigation_timeout_seconds
+    render_load_timeout_seconds: float = DEFAULTS.render_load_timeout_seconds
+    render_capture_full_page: bool = DEFAULTS.render_capture_full_page
+    render_max_full_page_height: int = DEFAULTS.render_max_full_page_height
+    render_max_dom_bytes: int = DEFAULTS.render_max_dom_bytes
+    render_max_screenshot_bytes: int = DEFAULTS.render_max_screenshot_bytes
+    render_max_network_entries: int = DEFAULTS.render_max_network_entries
+    render_max_console_entries: int = DEFAULTS.render_max_console_entries
+    render_max_page_errors: int = DEFAULTS.render_max_page_errors
+    render_max_page_duration_seconds: float = DEFAULTS.render_max_page_duration_seconds
+    render_max_total_network_bytes: int = DEFAULTS.render_max_total_network_bytes
+    render_max_resource_bytes: int = DEFAULTS.render_max_resource_bytes
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ScopeConfig":
@@ -37,7 +62,7 @@ class ScopeConfig:
         return config
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "allowed_host_patterns": self.allowed_host_patterns,
             "excluded_host_patterns": self.excluded_host_patterns,
             "included_path_prefixes": self.included_path_prefixes,
@@ -47,6 +72,9 @@ class ScopeConfig:
             "max_depth": self.max_depth,
             "respect_robots_txt": self.respect_robots_txt,
             "request_timeout_seconds": self.request_timeout_seconds,
+            "static_max_attempts": self.static_max_attempts,
+            "static_retry_initial_delay_ms": self.static_retry_initial_delay_ms,
+            "static_retry_max_delay_ms": self.static_retry_max_delay_ms,
             "max_html_response_bytes": self.max_html_response_bytes,
             "concurrent_requests_per_host": self.concurrent_requests_per_host,
             "delay_between_requests_ms": self.delay_between_requests_ms,
@@ -57,6 +85,10 @@ class ScopeConfig:
             "enable_http_revalidation": self.enable_http_revalidation,
             "enable_parse_reuse": self.enable_parse_reuse,
         }
+        for name in self.__dataclass_fields__:
+            if name.startswith("render_"):
+                result[name] = getattr(self, name)
+        return result
 
 
 @dataclass(frozen=True)

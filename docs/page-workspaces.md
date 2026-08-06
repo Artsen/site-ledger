@@ -41,8 +41,10 @@ flowchart LR
   Snapshot --> Evidence[HTTP, parse, error, and reuse evidence]
 ```
 
-A failed observation is immutable evidence. The workspace does not offer Page retry, Page rerun,
-targeted Page checking, observation replacement, or attachment of new evidence to an old Scan.
+A completed observation is immutable evidence. During the active static phase, bounded transient
+retries remain part of the same ResourceSnapshot observation and every StaticFetchAttempt is
+retained beneath it. After a Scan completes, the workspace does not offer Page retry, Page rerun,
+targeted Page checking, observation replacement, or attachment of new evidence to that old Scan.
 Future whole scans can produce later observations.
 
 The Scans tab reports appearances only. A Page not appearing in another Scan is not labeled missing

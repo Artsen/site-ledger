@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
@@ -16,6 +16,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.rendered import RenderedObservation
 
 
 class Scan(Base):
@@ -42,6 +45,20 @@ class Scan(Base):
     full_parse_count: Mapped[int] = mapped_column(Integer, default=0)
     network_bytes_transferred: Mapped[int] = mapped_column(Integer, default=0)
     reused_content_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_selected_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_attempted_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_completed_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_blocked_request_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_artifact_count: Mapped[int] = mapped_column(Integer, default=0)
+    static_request_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    static_retry_request_count: Mapped[int] = mapped_column(Integer, default=0)
+    static_recovered_after_retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    static_retry_exhausted_count: Mapped[int] = mapped_column(Integer, default=0)
+    static_connection_timeout_count: Mapped[int] = mapped_column(Integer, default=0)
+    static_read_timeout_count: Mapped[int] = mapped_column(Integer, default=0)
+    static_connection_error_count: Mapped[int] = mapped_column(Integer, default=0)
     stop_reason: Mapped[str | None] = mapped_column(String(128))
     fatal_error_message: Mapped[str | None] = mapped_column(Text)
 
@@ -264,10 +281,49 @@ class ResourceSnapshot(Base):
         remote_side=[id], foreign_keys=[reused_from_snapshot_id]
     )
     occurrences: Mapped[list["ResourceOccurrence"]] = relationship(back_populates="source_snapshot")
+    rendered_observation: Mapped["RenderedObservation | None"] = relationship(
+        back_populates="snapshot", uselist=False, cascade="all, delete-orphan"
+    )
+    fetch_attempts: Mapped[list["StaticFetchAttempt"]] = relationship(
+        back_populates="snapshot",
+        cascade="all, delete-orphan",
+        order_by="StaticFetchAttempt.attempt_number",
+    )
 
     __table_args__ = (
         Index("ix_snapshot_scan_resource", "scan_id", "resource_id"),
         Index("ix_snapshot_resource_fetched", "resource_id", "fetched_at", "id"),
+    )
+
+
+class StaticFetchAttempt(Base):
+    __tablename__ = "static_fetch_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("resource_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    requested_url: Mapped[str] = mapped_column(Text)
+    final_url: Mapped[str | None] = mapped_column(Text)
+    retrieval_http_status: Mapped[int | None] = mapped_column(Integer, index=True)
+    response_time_ms: Mapped[int | None] = mapped_column(Integer)
+    outcome: Mapped[str] = mapped_column(String(32), index=True)
+    error_type: Mapped[str | None] = mapped_column(String(64), index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    redirect_chain: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    network_bytes_transferred: Mapped[int] = mapped_column(Integer, default=0)
+    retryable: Mapped[bool] = mapped_column(default=False, index=True)
+    retry_reason: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    snapshot: Mapped[ResourceSnapshot] = relationship(back_populates="fetch_attempts")
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "attempt_number", name="uq_static_fetch_attempt"),
+        CheckConstraint("attempt_number >= 1", name="ck_static_fetch_attempt_number"),
     )
 
 

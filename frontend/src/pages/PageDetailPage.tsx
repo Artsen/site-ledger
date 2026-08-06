@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { getHtml, getInboundLinks, getLinks, getScan, getSnapshot } from "../api/client";
+import { getHtml, getInboundLinks, getLinks, getRenderedObservation, getScan, getSnapshot, getStaticFetchAttempts } from "../api/client";
+import { RenderedObservationView } from "../components/RenderedObservationView";
 import { LinkRoleBadge } from "../components/PageOrganization";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
@@ -14,7 +15,7 @@ import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { UrlText } from "../components/ui/UrlText";
 import { inputClass } from "../components/ui/styles";
-import type { InboundLinkList, InboundLinkOccurrence, LinkOccurrence, Snapshot } from "../types/scans";
+import type { InboundLinkList, InboundLinkOccurrence, LinkOccurrence, Snapshot, StaticFetchAttempt } from "../types/scans";
 import { formatBytes, formatDate, formatScopeDecision, formatStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 
@@ -29,6 +30,8 @@ export function PageDetailPage() {
   const inboundQuery = useMemo(() => buildInboundQuery(searchParams), [searchParams]);
   const inboundLinks = useQuery({ queryKey: ["inbound-links", snapshotId, inboundQuery], queryFn: () => getInboundLinks(snapshotId, inboundQuery), enabled: tab === "inbound" });
   const html = useQuery({ queryKey: ["html", snapshotId], queryFn: () => getHtml(snapshotId), enabled: tab === "html" });
+  const rendered = useQuery({ queryKey: ["rendered", snapshotId], queryFn: () => getRenderedObservation(snapshotId), retry: false });
+  const attempts = useQuery({ queryKey: ["static-fetch-attempts", snapshotId], queryFn: () => getStaticFetchAttempts(snapshotId) });
 
   if (snapshot.isLoading) return <PageFrame><LoadingBlock label="Loading page..." /></PageFrame>;
   if (snapshot.error) return <PageFrame><ErrorBanner error={snapshot.error} title="Could not load page snapshot" /></PageFrame>;
@@ -39,7 +42,8 @@ export function PageDetailPage() {
     { id: "head", label: "Head" },
     { id: "links", label: "Outgoing links", count: links.data?.length },
     { id: "inbound", label: "Inbound links", count: inboundLinks.data?.summary.total_occurrences },
-    { id: "html", label: "HTML" }
+    { id: "html", label: "HTML" },
+    ...(rendered.data ? [{ id: "rendered", label: "Rendered" }] : [])
   ];
 
   return (
@@ -60,11 +64,12 @@ export function PageDetailPage() {
       <Tabs tabs={tabs} active={tab} onChange={(next) => setSearchParams(next === "overview" ? {} : { tab: next })} />
 
       <div className="mt-5">
-        {tab === "overview" ? <Overview snapshot={snapshot.data} /> : null}
+        {tab === "overview" ? <Overview snapshot={snapshot.data} attempts={attempts.data ?? []} attemptsLoading={attempts.isLoading} /> : null}
         {tab === "head" ? <HeadView snapshot={snapshot.data} /> : null}
         {tab === "links" ? <LinksView links={links.data ?? []} loading={links.isLoading} error={links.error} /> : null}
         {tab === "inbound" ? <InboundLinksView inbound={inboundLinks.data} loading={inboundLinks.isLoading} error={inboundLinks.error} searchParams={searchParams} setSearchParams={setSearchParams} scanId={scanId} /> : null}
         {tab === "html" ? <HtmlView html={html.data ?? ""} loading={html.isLoading} error={html.error} /> : null}
+        {tab === "rendered" && rendered.data ? <RenderedObservationView observation={rendered.data} /> : null}
       </div>
     </PageFrame>
   );
@@ -195,7 +200,7 @@ function PageFrame({ children }: { children: React.ReactNode }) {
   return <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</section>;
 }
 
-function Overview({ snapshot }: { snapshot: Snapshot }) {
+function Overview({ snapshot, attempts, attemptsLoading }: { snapshot: Snapshot; attempts: StaticFetchAttempt[]; attemptsLoading: boolean }) {
   return (
     <div className="space-y-5">
       <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
@@ -223,6 +228,25 @@ function Overview({ snapshot }: { snapshot: Snapshot }) {
             { label: "Error message", value: snapshot.error_message ?? "None" }
           ]}
         />
+      </section>
+      <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-4 text-base font-semibold">Static fetch attempts</h2>
+        {attemptsLoading ? <LoadingBlock label="Loading fetch attempts..." /> : !attempts.length ? <EmptyState title="No attempt history" message="This legacy snapshot predates durable static attempt evidence." /> : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Attempt", "Outcome", "Status", "Duration", "Transferred", "Retry decision", "Error"].map((header) => <th key={header} className="px-3 py-2 font-medium">{header}</th>)}</tr></thead>
+              <tbody>{attempts.map((attempt) => <tr key={attempt.id} className="border-t border-stone-100 align-top">
+                <td className="px-3 py-2 font-medium">{attempt.attempt_number}</td>
+                <td className="px-3 py-2"><StatusBadge status={attempt.outcome} /></td>
+                <td className="px-3 py-2">{attempt.retrieval_http_status ?? "No response"}</td>
+                <td className="px-3 py-2">{attempt.response_time_ms == null ? "Not available" : `${attempt.response_time_ms} ms`}</td>
+                <td className="px-3 py-2">{formatBytes(attempt.network_bytes_transferred)}</td>
+                <td className="px-3 py-2">{attempt.retryable ? formatStatus(attempt.retry_reason ?? "retryable") : "Not retryable"}</td>
+                <td className="max-w-md px-3 py-2"><div>{attempt.error_type ? formatStatus(attempt.error_type) : "None"}</div>{attempt.error_message ? <div className="mt-1 break-words text-xs text-stone-600">{attempt.error_message}</div> : null}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        )}
       </section>
       <RedirectChain chain={snapshot.redirect_chain ?? []} />
     </div>

@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from app.browser.config import DEFAULTS, validate_render_config
 from app.schemas.page_workspaces import PageCategoryRead
 
 
@@ -16,6 +17,9 @@ class ScopeConfigPayload(BaseModel):
     max_depth: int = 3
     respect_robots_txt: bool = False
     request_timeout_seconds: float = 10
+    static_max_attempts: int = Field(default=2, ge=1, le=5)
+    static_retry_initial_delay_ms: int = Field(default=500, ge=0, le=60_000)
+    static_retry_max_delay_ms: int = Field(default=5000, ge=0, le=60_000)
     max_html_response_bytes: int = 2_000_000
     concurrent_requests_per_host: int = 2
     delay_between_requests_ms: int = 0
@@ -25,6 +29,34 @@ class ScopeConfigPayload(BaseModel):
     max_redirects: int = 10
     enable_http_revalidation: bool = True
     enable_parse_reuse: bool = True
+    render_mode: str = DEFAULTS.render_mode
+    render_max_pages: int = DEFAULTS.render_max_pages
+    render_viewport_width: int = DEFAULTS.render_viewport_width
+    render_viewport_height: int = DEFAULTS.render_viewport_height
+    render_device_scale_factor: float = DEFAULTS.render_device_scale_factor
+    render_locale: str = DEFAULTS.render_locale
+    render_timezone: str = DEFAULTS.render_timezone
+    render_color_scheme: str = DEFAULTS.render_color_scheme
+    render_reduced_motion: str = DEFAULTS.render_reduced_motion
+    render_navigation_timeout_seconds: float = DEFAULTS.render_navigation_timeout_seconds
+    render_load_timeout_seconds: float = DEFAULTS.render_load_timeout_seconds
+    render_capture_full_page: bool = DEFAULTS.render_capture_full_page
+    render_max_full_page_height: int = DEFAULTS.render_max_full_page_height
+    render_max_dom_bytes: int = DEFAULTS.render_max_dom_bytes
+    render_max_screenshot_bytes: int = DEFAULTS.render_max_screenshot_bytes
+    render_max_network_entries: int = DEFAULTS.render_max_network_entries
+    render_max_console_entries: int = DEFAULTS.render_max_console_entries
+    render_max_page_errors: int = DEFAULTS.render_max_page_errors
+    render_max_page_duration_seconds: float = DEFAULTS.render_max_page_duration_seconds
+    render_max_total_network_bytes: int = DEFAULTS.render_max_total_network_bytes
+    render_max_resource_bytes: int = DEFAULTS.render_max_resource_bytes
+
+    @model_validator(mode="after")
+    def validate_rendering(self) -> "ScopeConfigPayload":
+        if self.static_retry_initial_delay_ms > self.static_retry_max_delay_ms:
+            raise ValueError("static_retry_initial_delay_ms cannot exceed the maximum delay")
+        validate_render_config(self.model_dump())
+        return self
 
 
 class ScanCreate(BaseModel):
@@ -55,6 +87,20 @@ class ScanRead(BaseModel):
     full_parse_count: int = 0
     network_bytes_transferred: int = 0
     reused_content_bytes: int = 0
+    rendered_selected_count: int = 0
+    rendered_attempted_count: int = 0
+    rendered_completed_count: int = 0
+    rendered_failed_count: int = 0
+    rendered_skipped_count: int = 0
+    rendered_blocked_request_count: int = 0
+    rendered_artifact_count: int = 0
+    static_request_attempt_count: int = 0
+    static_retry_request_count: int = 0
+    static_recovered_after_retry_count: int = 0
+    static_retry_exhausted_count: int = 0
+    static_connection_timeout_count: int = 0
+    static_read_timeout_count: int = 0
+    static_connection_error_count: int = 0
     stop_reason: str | None
     fatal_error_message: str | None
     note_count: int = 0
@@ -82,6 +128,7 @@ class PageRead(BaseModel):
     retrieval_http_status: int | None = None
     reused_from_snapshot_id: int | None = None
     network_bytes_transferred: int | None = None
+    rendered_capture_state: str | None = None
 
 
 class PageList(BaseModel):
@@ -162,6 +209,7 @@ class PageObservationRead(BaseModel):
     reused_from_snapshot_id: int | None
     network_bytes_transferred: int | None
     parser_version: str | None
+    rendered_capture_state: str | None = None
 
 
 class PageObservationList(BaseModel):
@@ -209,6 +257,28 @@ class SnapshotRead(BaseModel):
     last_modified: str | None = None
     cache_control: str | None = None
     vary_header: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class StaticFetchAttemptRead(BaseModel):
+    id: int
+    snapshot_id: int
+    attempt_number: int
+    started_at: datetime
+    finished_at: datetime
+    requested_url: str
+    final_url: str | None
+    retrieval_http_status: int | None
+    response_time_ms: int | None
+    outcome: str
+    error_type: str | None
+    error_message: str | None
+    redirect_chain: list[dict[str, Any]]
+    network_bytes_transferred: int
+    retryable: bool
+    retry_reason: str | None
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -319,6 +389,13 @@ class ScanDeletePreview(BaseModel):
     html_blobs_deleted: int
     raw_html_bytes_reclaimable: int
     stored_html_bytes_reclaimable: int
+    rendered_observations: int = 0
+    rendered_artifacts: int = 0
+    artifact_blobs_referenced: int = 0
+    exclusive_artifact_blobs: int = 0
+    shared_artifact_blobs: int = 0
+    raw_artifact_bytes_reclaimable: int = 0
+    stored_artifact_bytes_reclaimable: int = 0
     reason: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
@@ -333,4 +410,10 @@ class ScanDeleteResult(BaseModel):
     html_blobs_deleted: int
     raw_html_bytes_reclaimed: int
     stored_html_bytes_reclaimed: int
+    rendered_observations_deleted: int = 0
+    rendered_artifacts_deleted: int = 0
+    artifact_blob_records_deleted: int = 0
+    artifact_blob_files_deleted: int = 0
+    raw_artifact_bytes_reclaimed: int = 0
+    stored_artifact_bytes_reclaimed: int = 0
     warnings: list[str] = Field(default_factory=list)

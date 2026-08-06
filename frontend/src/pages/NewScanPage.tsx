@@ -2,13 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { createScan, createSiteScan, defaultScope, listSites, listSources } from "../api/client";
+import { createScan, createSiteScan, defaultScope, getRenderCapabilities, listSites, listSources } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
 import { inputClass } from "../components/ui/styles";
-import type { ScopeConfig, SiteListItem } from "../types/scans";
+import type { RenderCapabilities, ScopeConfig, SiteListItem } from "../types/scans";
 import { plural } from "../utils/format";
 import { normalizeStartingUrlInput, parseLineList } from "../utils/url";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
@@ -35,6 +35,7 @@ export function NewScanPage() {
   const [searchParams] = useSearchParams();
   const initialSiteId = searchParams.get("site_id") ?? "";
   const sites = useQuery({ queryKey: ["sites", "active-selector"], queryFn: () => listSites("?active_state=active&limit=100&sort=name") });
+  const renderCapabilities = useQuery({ queryKey: ["render-capabilities"], queryFn: getRenderCapabilities });
   const [mode, setMode] = useState<"site" | "ad_hoc">(initialSiteId ? "site" : "ad_hoc");
   const [selectedSiteId, setSelectedSiteId] = useState(initialSiteId);
   const initialScope = useMemo(() => scopeFromQuery(searchParams), [searchParams]);
@@ -53,7 +54,7 @@ export function NewScanPage() {
   const submittingRef = useRef(false);
   const urlValidation = useMemo(() => normalizeStartingUrlInput(startingUrl), [startingUrl]);
   const effectiveScope = useMemo(() => scopeFromForm(scope, listFields), [scope, listFields]);
-  const validation = useMemo(() => validateForm(startingUrl, urlValidation, scope), [startingUrl, urlValidation, scope]);
+  const validation = useMemo(() => validateForm(startingUrl, urlValidation, scope, renderCapabilities.data), [startingUrl, urlValidation, scope, renderCapabilities.data]);
   const selectedSite = sites.data?.items.find((site) => String(site.id) === selectedSiteId);
   const sources = useQuery({
     queryKey: ["sources", selectedSiteId, "scan-selector"],
@@ -102,7 +103,7 @@ export function NewScanPage() {
     setListFields((current) => ({ ...current, [key]: value }));
   }
 
-  function updateNumber(key: keyof Pick<ScopeConfig, "max_pages" | "max_depth" | "request_timeout_seconds" | "max_html_response_bytes" | "delay_between_requests_ms" | "max_redirects">, value: string) {
+  function updateNumber(key: keyof Pick<ScopeConfig, "max_pages" | "max_depth" | "request_timeout_seconds" | "static_max_attempts" | "static_retry_initial_delay_ms" | "static_retry_max_delay_ms" | "max_html_response_bytes" | "delay_between_requests_ms" | "max_redirects">, value: string) {
     setScope((current) => ({ ...current, [key]: value === "" ? Number.NaN : Number(value) }));
   }
 
@@ -274,6 +275,43 @@ export function NewScanPage() {
           </div>
         </div>
 
+        <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm sm:p-5">
+          <h2 className="text-base font-semibold">Browser-rendered observations</h2>
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field id="render-mode" label="Render mode" helper="Static HTTP evidence remains authoritative. Browser evidence is attached to eligible snapshots.">
+              <select id="render-mode" value={scope.render_mode} onChange={(event) => setScope({ ...scope, render_mode: event.target.value as ScopeConfig["render_mode"] })} className={inputClass()}>
+                <option value="none">Static only</option><option value="starting_page">Starting page</option><option value="all_eligible">All eligible pages</option>
+              </select>
+            </Field>
+            {scope.render_mode !== "none" ? <Field id="render-max-pages" label="Maximum rendered pages" error={validation.renderMaxPages}>
+              <input id="render-max-pages" type="number" min={renderCapabilities.data?.limits.render_max_pages.minimum ?? 1} max={Math.min(scope.max_pages, renderCapabilities.data?.limits.render_max_pages.maximum ?? scope.max_pages)} value={numberInputValue(scope.render_max_pages)} onChange={(event) => setScope({ ...scope, render_max_pages: Number(event.target.value) })} className={inputClass(Boolean(validation.renderMaxPages))} />
+            </Field> : null}
+            {scope.render_mode !== "none" ? <Field id="render-color" label="Color scheme"><select id="render-color" value={scope.render_color_scheme} onChange={(event) => setScope({ ...scope, render_color_scheme: event.target.value as ScopeConfig["render_color_scheme"] })} className={inputClass()}><option value="light">Light</option><option value="dark">Dark</option><option value="no-preference">No preference</option></select></Field> : null}
+            {scope.render_mode !== "none" ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={scope.render_capture_full_page} onChange={(event) => setScope({ ...scope, render_capture_full_page: event.target.checked })} className="size-4 rounded border-stone-300" />Capture full-page screenshot</label> : null}
+          </div>
+          {scope.render_mode !== "none" ? <details className="mt-4 border-t border-stone-200 pt-4"><summary className="cursor-pointer text-sm font-medium">Advanced browser settings</summary><div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <RenderNumberField label="Viewport width" field="render_viewport_width" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Viewport height" field="render_viewport_height" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Device scale factor" field="render_device_scale_factor" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <Field id="render-locale" label="Locale"><input id="render-locale" value={scope.render_locale} onChange={(event) => setScope({ ...scope, render_locale: event.target.value })} className={inputClass()} /></Field>
+            <Field id="render-timezone" label="Timezone"><input id="render-timezone" value={scope.render_timezone} onChange={(event) => setScope({ ...scope, render_timezone: event.target.value })} className={inputClass()} /></Field>
+            <Field id="render-motion" label="Motion"><select id="render-motion" value={scope.render_reduced_motion} onChange={(event) => setScope({ ...scope, render_reduced_motion: event.target.value as ScopeConfig["render_reduced_motion"] })} className={inputClass()}><option value="reduce">Reduce</option><option value="no-preference">No preference</option></select></Field>
+            <RenderNumberField label="Navigation timeout (seconds)" field="render_navigation_timeout_seconds" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Load timeout (seconds)" field="render_load_timeout_seconds" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Page duration limit (seconds)" field="render_max_page_duration_seconds" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Full-page height limit" field="render_max_full_page_height" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="DOM byte limit" field="render_max_dom_bytes" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Screenshot byte limit" field="render_max_screenshot_bytes" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Network entry limit" field="render_max_network_entries" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Console entry limit" field="render_max_console_entries" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Page error limit" field="render_max_page_errors" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Total network byte limit" field="render_max_total_network_bytes" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+            <RenderNumberField label="Resource byte limit" field="render_max_resource_bytes" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
+          </div></details> : null}
+          {renderCapabilities.error ? <div className="mt-3 text-sm text-red-700">Rendering limits could not be loaded. Static-only scans remain available.</div> : null}
+          {validation.renderLimits ? <div className="mt-3 text-sm text-red-700">{validation.renderLimits}</div> : null}
+        </section>
+
         <details open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)} className="rounded-md border border-stone-200 bg-white p-4 shadow-sm sm:p-5">
           <summary className="cursor-pointer text-sm font-medium text-stone-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">
             Advanced scope settings
@@ -325,6 +363,15 @@ export function NewScanPage() {
               <Field id="request-timeout" label="Request timeout" error={validation.requestTimeout} helper="Seconds before a request is recorded as timed out.">
                 <input id="request-timeout" type="number" min={1} value={numberInputValue(scope.request_timeout_seconds)} onChange={(event) => updateNumber("request_timeout_seconds", event.target.value)} className={inputClass(Boolean(validation.requestTimeout))} />
               </Field>
+              <Field id="static-max-attempts" label="Maximum static attempts" error={validation.staticMaxAttempts} helper="Total requests allowed per page, including the first attempt.">
+                <input id="static-max-attempts" type="number" min={1} max={5} value={numberInputValue(scope.static_max_attempts)} onChange={(event) => updateNumber("static_max_attempts", event.target.value)} className={inputClass(Boolean(validation.staticMaxAttempts))} />
+              </Field>
+              <Field id="static-retry-initial-delay" label="Initial retry delay" error={validation.staticRetryInitialDelay} helper="Milliseconds before the first eligible retry.">
+                <input id="static-retry-initial-delay" type="number" min={0} max={60000} value={numberInputValue(scope.static_retry_initial_delay_ms)} onChange={(event) => updateNumber("static_retry_initial_delay_ms", event.target.value)} className={inputClass(Boolean(validation.staticRetryInitialDelay))} />
+              </Field>
+              <Field id="static-retry-max-delay" label="Maximum retry delay" error={validation.staticRetryMaxDelay} helper="Caps backoff, jitter, and Retry-After delays in milliseconds.">
+                <input id="static-retry-max-delay" type="number" min={0} max={60000} value={numberInputValue(scope.static_retry_max_delay_ms)} onChange={(event) => updateNumber("static_retry_max_delay_ms", event.target.value)} className={inputClass(Boolean(validation.staticRetryMaxDelay))} />
+              </Field>
               <Field id="max-html-bytes" label="Maximum HTML response size" error={validation.maxHtmlBytes} helper="Bytes read before a page is stopped as too large.">
                 <input id="max-html-bytes" type="number" min={1} value={numberInputValue(scope.max_html_response_bytes)} onChange={(event) => updateNumber("max_html_response_bytes", event.target.value)} className={inputClass(Boolean(validation.maxHtmlBytes))} />
               </Field>
@@ -361,6 +408,14 @@ function TextArea({ id, label, value, helper, onChange }: { id: string; label: s
       <textarea id={id} value={value} onChange={(event) => onChange(event.target.value)} rows={5} className={`${inputClass()} font-mono text-xs leading-5`} />
     </Field>
   );
+}
+
+type RenderNumberKey = keyof Pick<ScopeConfig, "render_viewport_width" | "render_viewport_height" | "render_device_scale_factor" | "render_navigation_timeout_seconds" | "render_load_timeout_seconds" | "render_max_page_duration_seconds" | "render_max_full_page_height" | "render_max_dom_bytes" | "render_max_screenshot_bytes" | "render_max_network_entries" | "render_max_console_entries" | "render_max_page_errors" | "render_max_total_network_bytes" | "render_max_resource_bytes">;
+
+function RenderNumberField({ label, field, scope, capabilities, onChange }: { label: string; field: RenderNumberKey; scope: ScopeConfig; capabilities?: RenderCapabilities; onChange: (scope: ScopeConfig) => void }) {
+  const limits = capabilities?.limits[field];
+  const id = field.replace(/_/g, "-");
+  return <Field id={id} label={label}><input id={id} type="number" min={limits?.minimum} max={limits?.maximum} step={field === "render_device_scale_factor" ? 0.1 : 1} value={numberInputValue(scope[field])} onChange={(event) => onChange({ ...scope, [field]: Number(event.target.value) })} className={inputClass()} /></Field>;
 }
 
 function ScopeSummary({ hostname, scope }: { hostname: string; scope: ScopeConfig }) {
@@ -407,15 +462,24 @@ function listsFromScope(scope: ScopeConfig): ListFieldText {
   };
 }
 
-function validateForm(_startingUrl: string, urlValidation: ReturnType<typeof normalizeStartingUrlInput>, scope: ScopeConfig) {
+function validateForm(_startingUrl: string, urlValidation: ReturnType<typeof normalizeStartingUrlInput>, scope: ScopeConfig, capabilities?: RenderCapabilities) {
+  const renderLimits = scope.render_mode === "none" || !capabilities ? null : Object.entries(capabilities.limits).some(([field, limits]) => {
+    const value = scope[field as RenderNumberKey];
+    return typeof value === "number" && (!Number.isFinite(value) || value < limits.minimum || value > limits.maximum);
+  }) || !scope.render_locale.trim() || !scope.render_timezone.trim() ? "One or more browser settings are outside the server-supported limits." : null;
   const validation = {
     startingUrl: urlValidation.error,
     maxPages: validateInteger(scope.max_pages, 1, 10000, "Maximum pages must be between 1 and 10,000."),
     maxDepth: validateInteger(scope.max_depth, 0, 50, "Maximum depth must be between 0 and 50."),
     requestTimeout: validateNumber(scope.request_timeout_seconds, 1, 300, "Request timeout must be between 1 and 300 seconds."),
+    staticMaxAttempts: validateInteger(scope.static_max_attempts, 1, 5, "Maximum static attempts must be between 1 and 5."),
+    staticRetryInitialDelay: validateInteger(scope.static_retry_initial_delay_ms, 0, 60000, "Initial retry delay must be between 0 and 60,000 milliseconds."),
+    staticRetryMaxDelay: scope.static_retry_initial_delay_ms > scope.static_retry_max_delay_ms ? "Maximum retry delay must be at least the initial delay." : validateInteger(scope.static_retry_max_delay_ms, 0, 60000, "Maximum retry delay must be between 0 and 60,000 milliseconds."),
     maxHtmlBytes: validateInteger(scope.max_html_response_bytes, 1, 100000000, "Maximum HTML response size must be at least 1 byte."),
     requestDelay: validateInteger(scope.delay_between_requests_ms, 0, 60000, "Delay must be between 0 and 60,000 milliseconds."),
-    maxRedirects: validateInteger(scope.max_redirects, 0, 50, "Maximum redirects must be between 0 and 50.")
+    maxRedirects: validateInteger(scope.max_redirects, 0, 50, "Maximum redirects must be between 0 and 50."),
+    renderMaxPages: scope.render_mode === "none" ? null : validateInteger(scope.render_max_pages, 1, Math.min(1000, scope.max_pages), "Rendered pages must be between 1 and the scan page limit."),
+    renderLimits
   };
   return { ...validation, hasErrors: Object.values(validation).some(Boolean) };
 }

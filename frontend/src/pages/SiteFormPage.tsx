@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { createSite, defaultScope, getSite, updateSite } from "../api/client";
+import { createSite, defaultScope, getRenderCapabilities, getSite, updateSite } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
@@ -22,6 +22,7 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const existing = useQuery({ queryKey: ["site", siteId], queryFn: () => getSite(siteId), enabled: mode === "edit" });
+  const renderCapabilities = useQuery({ queryKey: ["render-capabilities"], queryFn: getRenderCapabilities });
   useDocumentTitle(mode === "edit" ? (existing.data?.name ? `Edit ${existing.data.name}` : "Edit Site") : "Create Site");
   const [touchedIncludedPaths, setTouchedIncludedPaths] = useState(false);
   const [form, setForm] = useState<SitePayload>({
@@ -61,7 +62,7 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
       locale: existing.data.locale ?? "",
       platform_key: existing.data.platform_key,
       ownership_key: existing.data.ownership_key,
-      scope_config: existing.data.scope_config,
+      scope_config: { ...defaultScope(), ...existing.data.scope_config },
       is_active: existing.data.is_active
     });
     setListFields(listsFromScope(existing.data.scope_config));
@@ -87,7 +88,7 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
     setListFields((current) => ({ ...current, [key]: value }));
   }
 
-  function updateScopeNumber(key: keyof Pick<ScopeConfig, "max_pages" | "max_depth" | "request_timeout_seconds" | "max_html_response_bytes" | "delay_between_requests_ms" | "max_redirects">, value: string) {
+  function updateScopeNumber(key: keyof Pick<ScopeConfig, "max_pages" | "max_depth" | "request_timeout_seconds" | "static_max_attempts" | "static_retry_initial_delay_ms" | "static_retry_max_delay_ms" | "max_html_response_bytes" | "delay_between_requests_ms" | "max_redirects">, value: string) {
     setForm((current) => ({ ...current, scope_config: { ...current.scope_config, [key]: value === "" ? Number.NaN : Number(value) } }));
   }
 
@@ -132,10 +133,16 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
               <NumberField id="max-pages" label="Maximum pages" value={form.scope_config.max_pages} error={validation.maxPages} onChange={(value) => updateScopeNumber("max_pages", value)} />
               <NumberField id="max-depth" label="Maximum depth" value={form.scope_config.max_depth} error={validation.maxDepth} onChange={(value) => updateScopeNumber("max_depth", value)} />
               <NumberField id="request-timeout" label="Request timeout" value={form.scope_config.request_timeout_seconds} error={validation.requestTimeout} onChange={(value) => updateScopeNumber("request_timeout_seconds", value)} />
+              <NumberField id="static-max-attempts" label="Maximum static attempts" value={form.scope_config.static_max_attempts} error={validation.staticMaxAttempts} onChange={(value) => updateScopeNumber("static_max_attempts", value)} />
+              <NumberField id="static-retry-initial-delay" label="Initial retry delay (ms)" value={form.scope_config.static_retry_initial_delay_ms} error={validation.staticRetryInitialDelay} onChange={(value) => updateScopeNumber("static_retry_initial_delay_ms", value)} />
+              <NumberField id="static-retry-max-delay" label="Maximum retry delay (ms)" value={form.scope_config.static_retry_max_delay_ms} error={validation.staticRetryMaxDelay} onChange={(value) => updateScopeNumber("static_retry_max_delay_ms", value)} />
               <NumberField id="max-html-bytes" label="Maximum HTML response size" value={form.scope_config.max_html_response_bytes} error={validation.maxHtmlBytes} onChange={(value) => updateScopeNumber("max_html_response_bytes", value)} />
               <NumberField id="request-delay" label="Delay between requests" value={form.scope_config.delay_between_requests_ms} error={validation.requestDelay} onChange={(value) => updateScopeNumber("delay_between_requests_ms", value)} />
               <NumberField id="max-redirects" label="Maximum redirects" value={form.scope_config.max_redirects} error={validation.maxRedirects} onChange={(value) => updateScopeNumber("max_redirects", value)} />
               <Field id="user-agent" label="User agent"><input id="user-agent" value={form.scope_config.user_agent} onChange={(event) => setForm({ ...form, scope_config: { ...form.scope_config, user_agent: event.target.value } })} className={inputClass()} /></Field>
+              <Field id="saved-render-mode" label="Default render mode" helper="Copied into new scans; existing scans are unchanged."><select id="saved-render-mode" value={form.scope_config.render_mode} onChange={(event) => setForm({ ...form, scope_config: { ...form.scope_config, render_mode: event.target.value as ScopeConfig["render_mode"] } })} className={inputClass()}><option value="none">Static only</option><option value="starting_page">Starting page</option><option value="all_eligible">All eligible pages</option></select></Field>
+              {form.scope_config.render_mode !== "none" ? <NumberField id="saved-render-max" label="Maximum rendered pages" value={form.scope_config.render_max_pages} error={validation.renderMaxPages} onChange={(value) => setForm((current) => ({ ...current, scope_config: { ...current.scope_config, render_max_pages: Number(value) } }))} /> : null}
+              {renderCapabilities.error ? <div className="text-xs text-red-700">Rendering limits are currently unavailable.</div> : null}
             </div>
           </div>
           <ScopeSummary scope={effectiveScope} baseUrl={baseValidation.normalizedUrl} />
@@ -220,9 +227,13 @@ function validate(form: SitePayload, baseValidation: ReturnType<typeof normalize
     maxPages: validateInteger(scope.max_pages, 1, 10000, "Maximum pages must be between 1 and 10,000."),
     maxDepth: validateInteger(scope.max_depth, 0, 50, "Maximum depth must be between 0 and 50."),
     requestTimeout: validateNumber(scope.request_timeout_seconds, 1, 300, "Request timeout must be between 1 and 300 seconds."),
+    staticMaxAttempts: validateInteger(scope.static_max_attempts, 1, 5, "Maximum static attempts must be between 1 and 5."),
+    staticRetryInitialDelay: validateInteger(scope.static_retry_initial_delay_ms, 0, 60000, "Initial retry delay must be between 0 and 60,000 milliseconds."),
+    staticRetryMaxDelay: scope.static_retry_initial_delay_ms > scope.static_retry_max_delay_ms ? "Maximum retry delay must be at least the initial delay." : validateInteger(scope.static_retry_max_delay_ms, 0, 60000, "Maximum retry delay must be between 0 and 60,000 milliseconds."),
     maxHtmlBytes: validateInteger(scope.max_html_response_bytes, 1, 100000000, "Maximum HTML response size must be at least 1 byte."),
     requestDelay: validateInteger(scope.delay_between_requests_ms, 0, 60000, "Delay must be between 0 and 60,000 milliseconds."),
-    maxRedirects: validateInteger(scope.max_redirects, 0, 50, "Maximum redirects must be between 0 and 50.")
+    maxRedirects: validateInteger(scope.max_redirects, 0, 50, "Maximum redirects must be between 0 and 50."),
+    renderMaxPages: scope.render_mode === "none" ? null : validateInteger(scope.render_max_pages, 1, Math.min(scope.max_pages, 1000), "Rendered pages must be between 1 and the maximum page count.")
   };
   return { ...validation, hasErrors: Object.values(validation).some(Boolean) };
 }

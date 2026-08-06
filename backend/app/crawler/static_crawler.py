@@ -1,8 +1,10 @@
 import asyncio
+import random
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -19,7 +21,14 @@ from app.crawler.safe_fetch import (
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.security import UnsafeDestinationError, validate_public_destination
 from app.crawler.url_normalizer import NormalizedUrl
-from app.models import ResourceOccurrence, ResourceSnapshot, Scan, ScanSeed
+from app.models import (
+    ResourceOccurrence,
+    ResourceSnapshot,
+    Scan,
+    ScanSeed,
+    StaticFetchAttempt,
+    WebResource,
+)
 from app.services.cache_policy import (
     find_revalidation_candidate,
     representation_headers,
@@ -31,12 +40,47 @@ from app.services.repositories import get_or_create_resource
 from app.services.site_pages import ensure_site_page
 from app.storage.content_store import LocalContentStore
 
+TRANSIENT_FETCH_ERRORS = {
+    "connection_timeout",
+    "read_timeout",
+    "connection_error",
+    "connection_reset",
+    "dns_error",
+    "transient_tls_disconnect",
+}
+TEMPORARY_HTTP_STATUSES = {408, 425, 429, 502, 503, 504}
+BOUNDED_ERROR_MESSAGE_LENGTH = 8000
+
 
 @dataclass(frozen=True)
 class CrawlItem:
     normalized: NormalizedUrl
     requested_url: str
     depth: int
+
+
+@dataclass(frozen=True)
+class RetryWork:
+    item: CrawlItem
+    snapshot_id: int
+    attempt_number: int
+    retry_reason: str
+    delay_ms: int
+
+
+@dataclass(frozen=True)
+class RetryDecision:
+    retryable: bool
+    reason: str | None = None
+    retry_after_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class StaticCrawlResult:
+    had_errors: bool
+    cancelled: bool
+    stop_reason: str
+    fatal_error: str | None = None
 
 
 class StaticPageCrawler:
@@ -47,118 +91,168 @@ class StaticPageCrawler:
         transport: httpx.AsyncBaseTransport | None = None,
         should_cancel: Callable[[], bool] | None = None,
         progress_callback: Callable[[Scan], None] | None = None,
+        retry_progress_callback: Callable[[int, int], None] | None = None,
     ):
         self.db = db
         self.store = store
         self.transport = transport
         self.should_cancel = should_cancel
         self.progress_callback = progress_callback
+        self.retry_progress_callback = retry_progress_callback
+        self._resource_cache: dict[str, WebResource] = {}
 
     async def run(self, scan: Scan) -> None:
+        await self._execute(scan, finalize=True)
+
+    async def collect(self, scan: Scan) -> StaticCrawlResult:
+        return await self._execute(scan, finalize=False)
+
+    async def _execute(self, scan: Scan, *, finalize: bool) -> StaticCrawlResult:
+        self._resource_cache.clear()
         config = ScopeConfig.from_dict(scan.scope_config)
         scope = ScopeEngine(config, scan.starting_url)
         initial = scope.evaluate(scan.starting_url)
         if initial.normalized is None or not initial.in_scope:
-            scan.status = "failed"
-            scan.fatal_error_message = initial.exclusion_reason or "Starting URL is out of scope"
-            scan.finished_at = datetime.now(UTC)
+            message = initial.exclusion_reason or "Starting URL is out of scope"
+            if finalize:
+                scan.status = "failed"
+                scan.fatal_error_message = message
+                scan.finished_at = datetime.now(UTC)
             self.db.commit()
-            return
+            return StaticCrawlResult(False, False, "invalid_starting_url", message)
 
-        scan.status = "running"
-        scan.started_at = datetime.now(UTC)
+        if finalize:
+            scan.status = "running"
+            scan.started_at = datetime.now(UTC)
         queue = self._initial_queue(scan, initial.normalized)
+        retry_queue: deque[RetryWork] = deque()
         seen = {item.normalized.normalized_url for item in queue}
         fetched: set[str] = set()
         had_errors = False
         self._update_counts(scan, len(seen), len(fetched), len(queue))
         self.db.commit()
 
-        while queue and scan.status != "cancelled" and len(fetched) < config.max_pages:
-            if self._cancel_requested():
-                scan.status = "cancelled"
-                break
-            item = queue.popleft()
-            scan.queued_count = len(queue)
-            self.db.commit()
-            if item.depth > config.max_depth:
-                scan.skipped_count += 1
-                continue
-            try:
-                snapshot, anchors = await self._fetch_one(scan, item, config, scope)
-                fetched.add(item.normalized.normalized_url)
-                self._mark_seed(scan.id, item.normalized.normalized_url, "fetched")
-                if snapshot.error_type:
-                    had_errors = True
-                for anchor in anchors:
-                    result = scope.evaluate(
-                        anchor.raw_href or "", snapshot.final_url or item.requested_url, seen
-                    )
-                    target = (
-                        get_or_create_resource(self.db, result.normalized)
-                        if result.normalized
-                        else None
-                    )
-                    occurrence = ResourceOccurrence(
-                        source_snapshot_id=snapshot.id,
-                        raw_href=anchor.raw_href,
-                        resolved_url=anchor.resolved_url,
-                        normalized_target_url=result.normalized.normalized_url
-                        if result.normalized
-                        else None,
-                        target_resource_id=target.id if target else None,
-                        anchor_text=anchor.anchor_text,
-                        title=anchor.title,
-                        aria_label=anchor.aria_label,
-                        rel=anchor.rel,
-                        target=anchor.target,
-                        dom_path=anchor.dom_path,
-                        in_scope=result.in_scope,
-                        scope_decision=result.decision,
-                        exclusion_reason=result.exclusion_reason,
-                        link_role=anchor.link_role,
-                        link_role_rule=anchor.link_role_rule,
-                        link_context_json=anchor.link_context_json,
-                    )
-                    self.db.add(occurrence)
-                    if (
-                        result.in_scope
-                        and result.normalized is not None
-                        and result.normalized.normalized_url not in seen
-                        and item.depth + 1 <= config.max_depth
-                        and len(seen) < config.max_pages
-                    ):
-                        seen.add(result.normalized.normalized_url)
-                        queue.append(
-                            CrawlItem(
-                                result.normalized,
-                                result.normalized.normalized_url,
-                                item.depth + 1,
-                            )
-                        )
-                self._update_counts(scan, len(seen), len(fetched), len(queue))
-                self.db.commit()
-                self._progress(scan)
-            except Exception as exc:  # page-level failures are persisted, not fatal scan failures
-                had_errors = True
-                self._record_failure(scan, item, "connection_error", str(exc))
-                fetched.add(item.normalized.normalized_url)
-                self._mark_seed(scan.id, item.normalized.normalized_url, "failed")
-                self._update_counts(scan, len(seen), len(fetched), len(queue))
-                self.db.commit()
-                self._progress(scan)
-            if config.delay_between_requests_ms:
-                await self._sleep_with_cancellation(config.delay_between_requests_ms / 1000, scan)
+        client = httpx.AsyncClient(
+            follow_redirects=False,
+            max_redirects=config.max_redirects,
+            timeout=config.request_timeout_seconds,
+            transport=self.transport,
+            limits=httpx.Limits(
+                max_connections=max(2, config.concurrent_requests_per_host),
+                max_keepalive_connections=max(2, config.concurrent_requests_per_host),
+            ),
+        )
 
-        if scan.status == "cancelled":
-            scan.stop_reason = "cancelled_by_user"
-        else:
-            scan.status = "completed_with_errors" if had_errors else "completed"
-            scan.stop_reason = "page_limit_reached" if queue else "queue_exhausted"
-        scan.finished_at = datetime.now(UTC)
-        scan.queued_count = len(queue)
+        try:
+            while (
+                (queue or retry_queue)
+                and scan.status != "cancelled"
+                and len(fetched) < config.max_pages
+            ):
+                if self._cancel_requested():
+                    scan.status = "cancelled"
+                    break
+                retry_work = retry_queue.popleft() if not queue else None
+                item = retry_work.item if retry_work else queue.popleft()
+                attempt_number = retry_work.attempt_number if retry_work else 1
+                scan.queued_count = len(queue) + len(retry_queue)
+                self.db.commit()
+                if item.depth > config.max_depth:
+                    scan.skipped_count += 1
+                    continue
+                if retry_work and retry_work.delay_ms:
+                    await self._sleep_with_cancellation(retry_work.delay_ms / 1000, scan)
+                    if scan.status == "cancelled":
+                        break
+
+                started_at = datetime.now(UTC)
+                attempt_snapshot, anchors = await self._fetch_one(scan, item, config, scope, client)
+                finished_at = datetime.now(UTC)
+                decision = _retry_decision(attempt_snapshot, config)
+                canonical = attempt_snapshot
+                if retry_work:
+                    existing = self.db.get(ResourceSnapshot, retry_work.snapshot_id)
+                    if existing is None:
+                        raise RuntimeError("Static retry snapshot disappeared")
+                    self._replace_snapshot_outcome(scan, existing, attempt_snapshot)
+                    canonical = existing
+                self._record_attempt(
+                    scan,
+                    canonical,
+                    attempt_snapshot,
+                    attempt_number,
+                    started_at,
+                    finished_at,
+                    decision,
+                )
+                if retry_work:
+                    self.db.delete(attempt_snapshot)
+
+                if decision.retryable and attempt_number < config.static_max_attempts:
+                    retry_queue.append(
+                        RetryWork(
+                            item=item,
+                            snapshot_id=canonical.id,
+                            attempt_number=attempt_number + 1,
+                            retry_reason=decision.reason or "transient_failure",
+                            delay_ms=_retry_delay_ms(config, attempt_number, decision),
+                        )
+                    )
+                    self._mark_seed(scan.id, item.normalized.normalized_url, "queued")
+                else:
+                    fetched.add(item.normalized.normalized_url)
+                    if decision.retryable:
+                        scan.static_retry_exhausted_count += 1
+                    if canonical.error_type:
+                        had_errors = True
+                        self._mark_seed(scan.id, item.normalized.normalized_url, "failed")
+                    else:
+                        if attempt_number > 1:
+                            scan.static_recovered_after_retry_count += 1
+                        self._mark_seed(scan.id, item.normalized.normalized_url, "fetched")
+                        self._persist_anchors(
+                            scan,
+                            canonical,
+                            item,
+                            anchors,
+                            config,
+                            scope,
+                            seen,
+                            queue,
+                            discover=True,
+                        )
+
+                self._update_counts(scan, len(seen), len(fetched), len(queue) + len(retry_queue))
+                self.db.commit()
+                if retry_work and self.retry_progress_callback:
+                    self.retry_progress_callback(
+                        scan.static_retry_request_count,
+                        scan.static_retry_request_count + len(retry_queue),
+                    )
+                else:
+                    self._progress(scan)
+                if config.delay_between_requests_ms:
+                    await self._sleep_with_cancellation(
+                        config.delay_between_requests_ms / 1000, scan
+                    )
+        finally:
+            await client.aclose()
+
+        cancelled = scan.status == "cancelled"
+        stop_reason = (
+            "cancelled_by_user"
+            if cancelled
+            else ("page_limit_reached" if queue or retry_queue else "queue_exhausted")
+        )
+        if finalize:
+            scan.stop_reason = stop_reason
+            if not cancelled:
+                scan.status = "completed_with_errors" if had_errors else "completed"
+            scan.finished_at = datetime.now(UTC)
+        scan.queued_count = len(queue) + len(retry_queue)
         self.db.commit()
         self._progress(scan)
+        return StaticCrawlResult(had_errors, cancelled, stop_reason)
 
     async def _fetch_one(
         self,
@@ -166,8 +260,9 @@ class StaticPageCrawler:
         item: CrawlItem,
         config: ScopeConfig,
         scope: ScopeEngine,
+        client: httpx.AsyncClient | None,
     ) -> tuple[ResourceSnapshot, list[Any]]:
-        resource = get_or_create_resource(self.db, item.normalized)
+        resource = self._resource(item.normalized)
         try:
             await validate_public_destination(item.requested_url, config.allow_private_networks)
             request_headers = representation_headers(config.user_agent)
@@ -197,6 +292,7 @@ class StaticPageCrawler:
                 transport=self.transport,
                 redirect_validator=lambda url: _validate_redirect(scope, url),
                 destination_validator=validate_public_destination,
+                client=client,
             )
             result = await fetcher.get(item.requested_url, headers=fetch_headers)
             if candidate is not None:
@@ -367,12 +463,141 @@ class StaticPageCrawler:
             return self._record_failure(scan, item, "read_timeout", str(exc)), []
         except httpx.ConnectError as exc:
             return self._record_failure(scan, item, connect_error_type(exc), str(exc)), []
+        except (httpx.ReadError, httpx.RemoteProtocolError) as exc:
+            return self._record_failure(scan, item, connect_error_type(exc), str(exc)), []
         except UnsafeDestinationError as exc:
             return self._record_failure(scan, item, "unsafe_destination", str(exc)), []
         except httpx.InvalidURL as exc:
             return self._record_failure(scan, item, "invalid_url", str(exc)), []
         except ValueError as exc:
             return self._record_failure(scan, item, "invalid_url", str(exc)), []
+
+    def _persist_anchors(
+        self,
+        scan: Scan,
+        snapshot: ResourceSnapshot,
+        item: CrawlItem,
+        anchors: list[Any],
+        config: ScopeConfig,
+        scope: ScopeEngine,
+        seen: set[str],
+        queue: deque[CrawlItem],
+        *,
+        discover: bool,
+    ) -> None:
+        for anchor in anchors:
+            result = scope.evaluate(
+                anchor.raw_href or "", snapshot.final_url or item.requested_url, seen
+            )
+            target = self._resource(result.normalized) if result.normalized else None
+            self.db.add(
+                ResourceOccurrence(
+                    source_snapshot_id=snapshot.id,
+                    raw_href=anchor.raw_href,
+                    resolved_url=anchor.resolved_url,
+                    normalized_target_url=(
+                        result.normalized.normalized_url if result.normalized else None
+                    ),
+                    target_resource_id=target.id if target else None,
+                    anchor_text=anchor.anchor_text,
+                    title=anchor.title,
+                    aria_label=anchor.aria_label,
+                    rel=anchor.rel,
+                    target=anchor.target,
+                    dom_path=anchor.dom_path,
+                    in_scope=result.in_scope,
+                    scope_decision=result.decision,
+                    exclusion_reason=result.exclusion_reason,
+                    link_role=anchor.link_role,
+                    link_role_rule=anchor.link_role_rule,
+                    link_context_json=anchor.link_context_json,
+                )
+            )
+            if (
+                discover
+                and result.in_scope
+                and result.normalized is not None
+                and result.normalized.normalized_url not in seen
+                and item.depth + 1 <= config.max_depth
+                and len(seen) < config.max_pages
+            ):
+                seen.add(result.normalized.normalized_url)
+                queue.append(
+                    CrawlItem(
+                        result.normalized,
+                        result.normalized.normalized_url,
+                        item.depth + 1,
+                    )
+                )
+
+    def _replace_snapshot_outcome(
+        self,
+        scan: Scan,
+        canonical: ResourceSnapshot,
+        attempt_snapshot: ResourceSnapshot,
+    ) -> None:
+        if canonical.fetch_state == "failed":
+            scan.failed_count = max(0, scan.failed_count - 1)
+        for column in ResourceSnapshot.__table__.columns:
+            if column.name in {"id", "scan_id", "resource_id", "requested_url", "crawl_depth"}:
+                continue
+            setattr(canonical, column.name, getattr(attempt_snapshot, column.name))
+
+    def _record_attempt(
+        self,
+        scan: Scan,
+        canonical: ResourceSnapshot,
+        attempt_snapshot: ResourceSnapshot,
+        attempt_number: int,
+        started_at: datetime,
+        finished_at: datetime,
+        decision: RetryDecision,
+    ) -> None:
+        if attempt_snapshot.error_type:
+            outcome = "failed"
+        elif (attempt_snapshot.retrieval_http_status or 0) >= 400:
+            outcome = "http_error"
+        else:
+            outcome = "succeeded"
+        response_time_ms = attempt_snapshot.response_time_ms
+        if response_time_ms is None:
+            response_time_ms = max(0, int((finished_at - started_at).total_seconds() * 1000))
+        self.db.add(
+            StaticFetchAttempt(
+                snapshot_id=canonical.id,
+                attempt_number=attempt_number,
+                started_at=started_at,
+                finished_at=finished_at,
+                requested_url=attempt_snapshot.requested_url,
+                final_url=attempt_snapshot.final_url,
+                retrieval_http_status=attempt_snapshot.retrieval_http_status,
+                response_time_ms=response_time_ms,
+                outcome=outcome,
+                error_type=attempt_snapshot.error_type,
+                error_message=(attempt_snapshot.error_message or "")[:BOUNDED_ERROR_MESSAGE_LENGTH]
+                or None,
+                redirect_chain=attempt_snapshot.redirect_chain or [],
+                network_bytes_transferred=attempt_snapshot.network_bytes_transferred or 0,
+                retryable=decision.retryable,
+                retry_reason=decision.reason,
+            )
+        )
+        scan.static_request_attempt_count += 1
+        if attempt_number > 1:
+            scan.static_retry_request_count += 1
+        if attempt_snapshot.error_type == "connection_timeout":
+            scan.static_connection_timeout_count += 1
+        elif attempt_snapshot.error_type == "read_timeout":
+            scan.static_read_timeout_count += 1
+        elif attempt_snapshot.error_type in {
+            "connection_error",
+            "connection_reset",
+            "dns_error",
+            "transient_tls_disconnect",
+            "certificate_validation_error",
+            "tls_configuration_error",
+        }:
+            scan.static_connection_error_count += 1
 
     def _record_failure(
         self,
@@ -385,7 +610,7 @@ class StaticPageCrawler:
         response_headers: dict[str, Any] | None = None,
         redirect_chain: list[dict[str, Any]] | None = None,
     ) -> ResourceSnapshot:
-        resource = get_or_create_resource(self.db, item.normalized)
+        resource = self._resource(item.normalized)
         snapshot = ResourceSnapshot(
             scan_id=scan.id,
             resource_id=resource.id,
@@ -422,6 +647,14 @@ class StaticPageCrawler:
             associated_at=snapshot.fetched_at,
         )
         return snapshot
+
+    def _resource(self, normalized: NormalizedUrl) -> WebResource:
+        cached = self._resource_cache.get(normalized.normalized_url)
+        if cached is not None:
+            return cached
+        resource = get_or_create_resource(self.db, normalized)
+        self._resource_cache[normalized.normalized_url] = resource
+        return resource
 
     @staticmethod
     def _update_counts(scan: Scan, discovered: int, fetched: int, queued: int) -> None:
@@ -485,6 +718,52 @@ class StaticPageCrawler:
             interval = min(0.25, remaining)
             await asyncio.sleep(interval)
             remaining -= interval
+
+
+def _retry_decision(snapshot: ResourceSnapshot, config: ScopeConfig) -> RetryDecision:
+    if snapshot.error_type in TRANSIENT_FETCH_ERRORS:
+        return RetryDecision(True, snapshot.error_type)
+    status = snapshot.retrieval_http_status
+    if status not in TEMPORARY_HTTP_STATUSES:
+        return RetryDecision(False)
+    retry_after_ms = None
+    if status in {429, 503}:
+        retry_after_ms = _retry_after_ms(
+            snapshot.retrieval_response_headers or {}, config.static_retry_max_delay_ms
+        )
+    return RetryDecision(True, f"http_{status}", retry_after_ms)
+
+
+def _retry_delay_ms(
+    config: ScopeConfig, completed_attempt_number: int, decision: RetryDecision
+) -> int:
+    exponential = config.static_retry_initial_delay_ms * (2 ** (completed_attempt_number - 1))
+    base = min(config.static_retry_max_delay_ms, exponential)
+    if decision.retry_after_ms is not None:
+        base = max(base, decision.retry_after_ms)
+    jitter_ceiling = min(250, int(base * 0.25))
+    jitter = int(random.uniform(0, jitter_ceiling)) if jitter_ceiling else 0
+    return int(min(config.static_retry_max_delay_ms, base + jitter))
+
+
+def _retry_after_ms(headers: dict[str, Any], maximum_ms: int) -> int | None:
+    raw = next(
+        (str(value).strip() for key, value in headers.items() if key.lower() == "retry-after"),
+        "",
+    )
+    if not raw:
+        return None
+    try:
+        seconds = max(0.0, float(raw))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            seconds = max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return min(maximum_ms, int(seconds * 1000))
 
 
 async def _validate_redirect(

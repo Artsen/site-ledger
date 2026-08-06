@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.config import get_settings
 from app.product import API_TITLE, API_VERSION, PRODUCT_DESCRIPTION
+from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
 
 
@@ -15,6 +16,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     store = LocalContentStore(settings.html_storage_root)
     app.state.content_store = store
+    app.state.artifact_store = LocalArtifactStore(settings.rendered_artifact_storage_root)
     yield
 
 

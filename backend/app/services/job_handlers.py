@@ -10,7 +10,7 @@ from typing import Any, Protocol
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.crawler.static_crawler import StaticPageCrawler
+from app.config import get_settings
 from app.database import is_transient_database_lock
 from app.models import BackgroundJob, Scan, SourceRefresh
 from app.services import background_jobs
@@ -22,7 +22,9 @@ from app.services.job_types import (
     JOB_TYPE_SCAN,
     JOB_TYPE_SOURCE_REFRESH,
 )
+from app.services.scan_execution import ScanExecutionCoordinator
 from app.services.source_refresh import execute_source_refresh
+from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
 
 logger = logging.getLogger("site_ledger.jobs")
@@ -129,26 +131,13 @@ class ScanJobHandler:
             scan = db.get(Scan, job.scan_id)
             if scan is None:
                 raise ValueError("Scan not found.")
-            crawler = StaticPageCrawler(
+            coordinator = ScanExecutionCoordinator(
                 db,
                 self.store,
-                should_cancel=context.check_cancelled,
-                progress_callback=lambda active_scan: context.progress(
-                    phase="running",
-                    current_operation="Crawling pages",
-                    current=active_scan.fetched_count,
-                    total=active_scan.discovered_count or None,
-                    unit="pages",
-                    counters={
-                        "discovered": active_scan.discovered_count,
-                        "queued": active_scan.queued_count,
-                        "fetched": active_scan.fetched_count,
-                        "failed": active_scan.failed_count,
-                        "skipped": active_scan.skipped_count,
-                    },
-                ),
+                LocalArtifactStore(get_settings().rendered_artifact_storage_root),
+                context,
             )
-            await crawler.run(scan)
+            await coordinator.execute(scan)
             db.refresh(scan)
             if scan.status == JOB_STATUS_CANCELLED:
                 return HandlerResult(status=JOB_STATUS_CANCELLED, result_json=_scan_result(scan))
@@ -361,6 +350,9 @@ def _mark_domain_interrupted(
                 scan.status = "interrupted"
                 scan.stop_reason = reason
                 scan.finished_at = now
+                from app.services.rendered_capture import mark_capturing_interrupted
+
+                mark_capturing_interrupted(db, scan.id, reason)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:

@@ -15,6 +15,7 @@ observations from separate scans without erasing the evidence captured by each s
 
 - Saves Sites with reusable scope and user-defined classification labels.
 - Runs bounded static HTML scans through durable background jobs.
+- Optionally attaches bounded Chromium-rendered observations to eligible static snapshots.
 - Accepts sitemap, robots-discovered sitemap, and manual URL Sources.
 - Maintains a current URL Inventory with source provenance.
 - Preserves persistent Pages and scan-specific observation history.
@@ -26,9 +27,8 @@ observations from separate scans without erasing the evidence captured by each s
 - Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
 - Supports scan, source, Site, and background Activity lifecycle management.
 
-Site Ledger does not currently perform browser-rendered crawling, complete website change
-detection, visual regression, accessibility or performance audits, analytics correlation, or AI
-findings.
+Site Ledger does not perform browser-only crawling, complete website change detection, visual
+regression, accessibility or performance audits, analytics correlation, or AI findings.
 
 ## Core Product Model
 
@@ -73,6 +73,8 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
+python -m playwright install chromium
+python -m app.browser_check
 alembic upgrade head
 ~~~
 
@@ -83,7 +85,8 @@ cd frontend
 npm install
 ~~~
 
-Runtime databases and captured HTML are written under data/ and ignored by Git.
+Runtime databases, static HTML, rendered DOM, and screenshots are written under data/ and ignored
+by Git.
 
 ## Running Locally
 
@@ -133,9 +136,18 @@ The crawler is an SSRF boundary:
 - Redirect destinations are revalidated before each request.
 - Cookies and user credentials are not forwarded.
 - Request timeout, redirect, response-size, Page, and depth limits are enforced.
+- Active static scans may retry transient network failures and selected temporary HTTP statuses up
+  to `static_max_attempts`; every request remains durable attempt evidence under one final Page
+  observation. Retry-After and exponential delays are capped by `static_retry_max_delay_ms`.
+- Completed scans cannot retry an individual Page, and browser-rendered Pages are never retried.
 - Scanned HTML is parsed as data and never executed in the application.
+- Browser requests are intercepted before navigation and every HTTP redirect or subresource
+  destination is checked against the network policy.
+- Browser contexts are non-persistent, service workers and unsafe methods are blocked, and no
+  credentials are supplied.
 
-Authenticated crawling and private-network crawling are not currently supported.
+Authenticated browser capture is not supported. Private-network access remains disabled by
+default and must be deliberately enabled in scan scope.
 
 ## Quality Checks
 
@@ -149,6 +161,8 @@ ruff format --check .
 mypy app
 alembic upgrade head
 alembic check
+python -m app.static_benchmark
+python -m app.render_benchmark
 ~~~
 
 Frontend:
@@ -175,6 +189,7 @@ storage, graph queries, background jobs, Page history, and reuse are covered by 
 - [Graph performance](docs/graph-performance.md)
 - [Page history and reuse](docs/page-history-and-reuse.md)
 - [Page workspaces](docs/page-workspaces.md)
+- [Browser-rendered observations](docs/browser-rendered-observations.md)
 
 ## Current Limitations
 

@@ -16,6 +16,14 @@ ALLOWED_CALLER_HEADERS = {
     "if-modified-since",
 }
 FORBIDDEN_CALLER_HEADERS = {"authorization", "cookie", "proxy-authorization"}
+SENSITIVE_RESPONSE_HEADERS = {
+    "authorization",
+    "cookie",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "set-cookie",
+    "set-cookie2",
+}
 
 RedirectValidator = Callable[[str], Awaitable[tuple[bool, str | None, str | None, str | None]]]
 DestinationValidator = Callable[[str, bool], Awaitable[None]]
@@ -53,29 +61,37 @@ class SafeHttpFetcher:
         transport: httpx.AsyncBaseTransport | None = None,
         redirect_validator: RedirectValidator | None = None,
         destination_validator: DestinationValidator = validate_public_destination,
+        client: httpx.AsyncClient | None = None,
     ):
         self.limits = limits
         self.transport = transport
         self.redirect_validator = redirect_validator
         self.destination_validator = destination_validator
+        self.client = client
 
     async def get(self, url: str, headers: dict[str, str] | None = None) -> SafeFetchResult:
         started = monotonic()
         request_headers = {"User-Agent": self.limits.user_agent}
         request_headers.update(_validated_request_headers(headers or {}))
-        async with httpx.AsyncClient(
-            follow_redirects=False,
-            max_redirects=self.limits.max_redirects,
-            timeout=self.limits.timeout_seconds,
-            headers=request_headers,
-            transport=self.transport,
-        ) as client:
-            response, content, chain = await self._get_with_validated_redirects(client, url)
+        if self.client is not None:
+            response, content, chain = await self._get_with_validated_redirects(
+                self.client, url, request_headers
+            )
+        else:
+            async with httpx.AsyncClient(
+                follow_redirects=False,
+                max_redirects=self.limits.max_redirects,
+                timeout=self.limits.timeout_seconds,
+                transport=self.transport,
+            ) as client:
+                response, content, chain = await self._get_with_validated_redirects(
+                    client, url, request_headers
+                )
         return SafeFetchResult(
             requested_url=url,
             final_url=str(response.url),
             http_status=response.status_code,
-            headers=dict(response.headers),
+            headers=_sanitized_response_headers(response.headers),
             content=content,
             encoding=response.encoding,
             redirect_chain=chain,
@@ -83,7 +99,7 @@ class SafeHttpFetcher:
         )
 
     async def _get_with_validated_redirects(
-        self, client: httpx.AsyncClient, start_url: str
+        self, client: httpx.AsyncClient, start_url: str, request_headers: dict[str, str]
     ) -> tuple[httpx.Response, bytes, list[dict[str, Any]]]:
         current_url = start_url
         seen_redirects = {start_url}
@@ -91,7 +107,8 @@ class SafeHttpFetcher:
 
         for _hop in range(self.limits.max_redirects + 1):
             await self.destination_validator(current_url, self.limits.allow_private_networks)
-            async with client.stream("GET", current_url) as response:
+            client.cookies.clear()
+            async with client.stream("GET", current_url, headers=request_headers) as response:
                 if response.status_code not in REDIRECT_STATUSES:
                     content = await self._read_limited_response(response, redirect_chain)
                     return response, content, redirect_chain
@@ -106,7 +123,7 @@ class SafeHttpFetcher:
                         str(exc),
                         str(response.url),
                         response.status_code,
-                        dict(response.headers),
+                        _sanitized_response_headers(response.headers),
                         redirect_chain,
                     ) from exc
                 redirect_chain.append(
@@ -118,7 +135,7 @@ class SafeHttpFetcher:
                         "Redirect response did not include a valid Location header",
                         str(response.url),
                         response.status_code,
-                        dict(response.headers),
+                        _sanitized_response_headers(response.headers),
                         redirect_chain,
                     )
                 try:
@@ -129,7 +146,7 @@ class SafeHttpFetcher:
                         str(exc),
                         str(response.url),
                         response.status_code,
-                        dict(response.headers),
+                        _sanitized_response_headers(response.headers),
                         redirect_chain,
                     ) from exc
                 if self.redirect_validator is not None:
@@ -142,7 +159,7 @@ class SafeHttpFetcher:
                             message or "Redirect was rejected",
                             str(response.url),
                             response.status_code,
-                            dict(response.headers),
+                            _sanitized_response_headers(response.headers),
                             redirect_chain,
                         )
                     if normalized_url:
@@ -153,7 +170,7 @@ class SafeHttpFetcher:
                         "Redirect loop detected",
                         str(response.url),
                         response.status_code,
-                        dict(response.headers),
+                        _sanitized_response_headers(response.headers),
                         redirect_chain,
                     )
                 await self.destination_validator(resolved_url, self.limits.allow_private_networks)
@@ -200,12 +217,45 @@ def _redirect_record(
     }
 
 
-def connect_error_type(exc: httpx.ConnectError) -> str:
+def connect_error_type(exc: httpx.TransportError) -> str:
     text = str(exc).lower()
-    if "name" in text or "dns" in text:
+    if any(
+        marker in text
+        for marker in (
+            "certificate verify",
+            "certificate validation",
+            "cert verification",
+            "hostname mismatch",
+            "self signed certificate",
+            "unable to get local issuer",
+        )
+    ):
+        return "certificate_validation_error"
+    if any(
+        marker in text
+        for marker in (
+            "no ciphers available",
+            "wrong version number",
+            "unsupported protocol",
+            "protocol version",
+            "tlsv1 alert protocol version",
+        )
+    ):
+        return "tls_configuration_error"
+    if any(
+        marker in text
+        for marker in (
+            "unexpected eof",
+            "eof occurred in violation of protocol",
+            "tls connection was non-properly terminated",
+            "ssl connection has been closed unexpectedly",
+        )
+    ):
+        return "transient_tls_disconnect"
+    if "connection reset" in text or "reset by peer" in text:
+        return "connection_reset"
+    if any(marker in text for marker in ("name or service not known", "getaddrinfo", "dns")):
         return "dns_error"
-    if "ssl" in text or "tls" in text:
-        return "tls_error"
     return "connection_error"
 
 
@@ -243,3 +293,11 @@ def _validated_request_headers(headers: dict[str, str]) -> dict[str, str]:
             raise ValueError(f"Header is not supported for crawler requests: {key}")
         validated[key] = value
     return validated
+
+
+def _sanitized_response_headers(headers: httpx.Headers) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.strip().lower() not in SENSITIVE_RESPONSE_HEADERS
+    }

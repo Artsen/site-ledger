@@ -11,6 +11,7 @@ from contextlib import suppress
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.browser.capability import worker_browser_capability
 from app.config import get_settings
 from app.database import SessionLocal, is_transient_database_lock
 from app.product import PRODUCT_NAME
@@ -44,7 +45,7 @@ class WorkerService:
         self._running: set[asyncio.Task[None]] = set()
 
     async def run(self, *, once: bool = False, recover_only: bool = False) -> None:
-        self._register()
+        await self._register()
         self._recover()
         if recover_only:
             self._stop_worker()
@@ -82,13 +83,14 @@ class WorkerService:
     def request_stop(self) -> None:
         self._stop.set()
 
-    def _register(self) -> None:
+    async def _register(self) -> None:
+        browser_capability = await asyncio.to_thread(worker_browser_capability)
         with self.session_factory() as db:
             background_jobs.register_worker(
                 db,
                 worker_id=self.worker_id,
                 concurrency=self.concurrency,
-                metadata={"kind": "local"},
+                metadata={"kind": "local", "browser": browser_capability},
             )
         logger.info("worker registered", extra={"worker_id": self.worker_id})
 
