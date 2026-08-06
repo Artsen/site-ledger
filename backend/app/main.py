@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.ai_document_routes import router as ai_document_router
 from app.api.routes import router
 from app.config import get_settings
 from app.product import API_TITLE, API_VERSION, PRODUCT_DESCRIPTION
@@ -36,6 +37,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router)
+    app.include_router(ai_document_router)
     return app
 
 
