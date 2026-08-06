@@ -135,6 +135,10 @@ of edges. The hard cap is 3,000 nodes and 10,000 edges. Larger scans should use 
 neighborhood mode. The graph does not claim support for very large site-wide graphs with tens of
 thousands of visible nodes.
 
+Resource Inventory does not add Resource nodes or embedded-reference edges. Graph topology remains
+Page-link based; rendered DOM and browser-network evidence are also excluded. See
+[Resource Inventory](resource-inventory.md).
+
 ## Future Layouts
 
 Future semantic layouts may add Page text extraction, embeddings, projection coordinates, topic

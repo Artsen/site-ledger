@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { getHtml, getInboundLinks, getLinks, getRenderedObservation, getScan, getSnapshot, getStaticFetchAttempts } from "../api/client";
+import { getHtml, getInboundLinks, getLinks, getRenderedObservation, getSnapshot, getStaticFetchAttempts } from "../api/client";
 import { RenderedObservationView } from "../components/RenderedObservationView";
 import { LinkRoleBadge } from "../components/PageOrganization";
 import { Button } from "../components/ui/Button";
@@ -11,20 +11,21 @@ import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
+import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { UrlText } from "../components/ui/UrlText";
 import { inputClass } from "../components/ui/styles";
 import type { InboundLinkList, InboundLinkOccurrence, LinkOccurrence, Snapshot, StaticFetchAttempt } from "../types/scans";
-import { formatBytes, formatDate, formatScopeDecision, formatStatus, plural } from "../utils/format";
+import { formatBytes, formatDate, formatScopeDecision, formatStatus } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
+import { useUrlPagination } from "../utils/useUrlPagination";
 
 export function PageDetailPage() {
   const { scanId = "", snapshotId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get("tab") ?? "overview";
   const snapshot = useQuery({ queryKey: ["snapshot", snapshotId], queryFn: () => getSnapshot(snapshotId) });
-  const scan = useQuery({ queryKey: ["scan", scanId], queryFn: () => getScan(scanId) });
   useDocumentTitle(snapshot.data?.page_title ?? "Page");
   const links = useQuery({ queryKey: ["links", snapshotId], queryFn: () => getLinks(snapshotId), enabled: tab === "links" });
   const inboundQuery = useMemo(() => buildInboundQuery(searchParams), [searchParams]);
@@ -45,19 +46,30 @@ export function PageDetailPage() {
     { id: "html", label: "HTML" },
     ...(rendered.data ? [{ id: "rendered", label: "Rendered" }] : [])
   ];
+  const pageUrl = snapshot.data.final_url ?? snapshot.data.requested_url;
+  const workspaceUrl = snapshot.data.is_html_page && snapshot.data.has_persistent_page && snapshot.data.website_property_id
+    ? `/sites/${snapshot.data.website_property_id}/pages/${snapshot.data.resource_id}`
+    : null;
+  const pageLabel = snapshot.data.page_title ?? snapshot.data.requested_url;
 
   return (
     <PageFrame>
       <div className="mb-5">
         <div className="mb-2 text-sm text-stone-500">
-          <Link to={`/scans/${scanId}`} className="underline">Scans</Link> / <Link to={`/scans/${scanId}?tab=pages`} className="underline">Pages</Link> / Page details
+          <Link to={`/scans/${scanId}`} className="underline">Scan</Link> / <Link to={`/scans/${scanId}?tab=pages`} className="underline">Pages</Link> / Observation
         </div>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <h1 className="truncate text-xl font-semibold text-stone-950">{snapshot.data.page_title ?? snapshot.data.requested_url}</h1>
-            <div className="mt-2 min-w-0"><UrlText value={snapshot.data.final_url ?? snapshot.data.requested_url} secondary /></div>
+            <div className="mt-2 min-w-0"><UrlText value={pageUrl} secondary /></div>
+            {workspaceUrl ? <div className="mt-2 truncate text-sm text-stone-600">Page workspace: <Link to={workspaceUrl} className="font-medium underline">{pageLabel}</Link></div> : null}
           </div>
-          <div className="flex gap-2">{scan.data?.website_property_id ? <Link to={`/sites/${scan.data.website_property_id}/pages/${snapshot.data.resource_id}`} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium">Open persistent Page</Link> : null}<Link to={`/scans/${scanId}?tab=pages`} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">Back to page results</Link></div>
+          <div data-testid="observation-header-actions" className="flex flex-wrap items-center gap-2 lg:justify-end">
+            {workspaceUrl ? <Link aria-label={`Open Page workspace for ${pageLabel}`} to={workspaceUrl} className="rounded-md border border-neutral-900 bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-700 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">Open Page workspace</Link> : null}
+            <a href={pageUrl} target="_blank" rel="noreferrer" className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">{snapshot.data.is_html_page ? "Open live Page" : "Open live Resource"}</a>
+            <CopyButton value={pageUrl} label="Copy Page URL" />
+            <Link to={`/scans/${scanId}?tab=pages`} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2">Back to Scan Pages</Link>
+          </div>
         </div>
       </div>
 
@@ -90,6 +102,7 @@ function InboundLinksView({
   setSearchParams: ReturnType<typeof useSearchParams>[1];
   scanId: string;
 }) {
+  const pagination = useUrlPagination({ prefix: "inbound", total: inbound?.total });
   if (error) return <ErrorBanner error={error} title="Could not load inbound links" />;
   if (loading) return <LoadingBlock label="Loading inbound links..." />;
   if (!inbound) return null;
@@ -117,8 +130,9 @@ function InboundLinksView({
           <Button type="button" variant="ghost" onClick={() => setSearchParams(tabOnly(searchParams, "inbound"))}>Clear filters</Button>
         </div>
       </section>
+      <PaginatedTableControls total={inbound.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inbound occurrence" />
       {!inbound.items.length ? <EmptyState title={hasInboundFilters(searchParams) ? "No inbound links match" : "No inbound links"} message={hasInboundFilters(searchParams) ? "Clear filters or broaden the search." : "No pages in this scan link to this page."} /> : <InboundTable items={inbound.items} scanId={scanId} />}
-      <InboundPagination inbound={inbound} searchParams={searchParams} setSearchParams={setSearchParams} />
+      <PaginatedTableControls total={inbound.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inbound occurrence" />
     </div>
   );
 }
@@ -182,20 +196,6 @@ function InboundTable({ items, scanId }: { items: InboundLinkOccurrence[]; scanI
   );
 }
 
-function InboundPagination({ inbound, searchParams, setSearchParams }: { inbound: InboundLinkList; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {
-  const limit = inbound.limit;
-  const offset = inbound.offset;
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
-      <span>{plural(inbound.total, "inbound occurrence")}</span>
-      <div className="flex gap-2">
-        <Button type="button" disabled={offset <= 0} onClick={() => setInboundOffset(setSearchParams, searchParams, Math.max(0, offset - limit))}>Previous</Button>
-        <Button type="button" disabled={offset + limit >= inbound.total} onClick={() => setInboundOffset(setSearchParams, searchParams, offset + limit)}>Next</Button>
-      </div>
-    </div>
-  );
-}
-
 function PageFrame({ children }: { children: React.ReactNode }) {
   return <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</section>;
 }
@@ -203,6 +203,7 @@ function PageFrame({ children }: { children: React.ReactNode }) {
 function Overview({ snapshot, attempts, attemptsLoading }: { snapshot: Snapshot; attempts: StaticFetchAttempt[]; attemptsLoading: boolean }) {
   return (
     <div className="space-y-5">
+      <PageWorkspaceRelationship snapshot={snapshot} />
       <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
         <h2 className="mb-4 text-base font-semibold">Page overview</h2>
         <DefinitionList
@@ -250,6 +251,31 @@ function Overview({ snapshot, attempts, attemptsLoading }: { snapshot: Snapshot;
       </section>
       <RedirectChain chain={snapshot.redirect_chain ?? []} />
     </div>
+  );
+}
+
+function PageWorkspaceRelationship({ snapshot }: { snapshot: Snapshot }) {
+  const workspaceUrl = snapshot.is_html_page && snapshot.has_persistent_page && snapshot.website_property_id
+    ? `/sites/${snapshot.website_property_id}/pages/${snapshot.resource_id}`
+    : null;
+  return (
+    <section aria-labelledby="page-workspace-relationship" className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+      <h2 id="page-workspace-relationship" className="text-base font-semibold">Page workspace</h2>
+      {workspaceUrl ? <>
+        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+          <div><dt className="text-xs font-medium uppercase text-stone-500">Site</dt><dd className="mt-1">{snapshot.website_property_name ?? `Site ${snapshot.website_property_id}`}</dd></div>
+          <div><dt className="text-xs font-medium uppercase text-stone-500">Persistent Page</dt><dd className="mt-1"><Link to={workspaceUrl} className="font-medium underline">Open {snapshot.page_title ?? "Page workspace"}</Link></dd></div>
+          <div><dt className="text-xs font-medium uppercase text-stone-500">Resource identity</dt><dd className="mt-1 font-mono">#{snapshot.resource_id}</dd></div>
+        </dl>
+        <p className="mt-3 text-sm text-stone-600">This observation records what Site Ledger found during this Scan. The Page workspace contains Site-specific history, categories, notes, owner, and workflow status.</p>
+      </> : !snapshot.is_html_page ? (
+        <p className="mt-2 text-sm text-stone-600">This observation represents a non-HTML Resource and does not have a Page workspace. Use the Scan Resources or Site Resource history instead.</p>
+      ) : snapshot.website_property_id == null ? (
+        <p className="mt-2 text-sm text-stone-600">This observation came from an ad hoc Scan and has no Site-scoped Page workspace.</p>
+      ) : (
+        <p className="mt-2 text-sm text-amber-800">This historical observation belongs to {snapshot.website_property_name ?? `Site ${snapshot.website_property_id}`}, but its persistent Page workspace association is unavailable.</p>
+      )}
+    </section>
   );
 }
 
@@ -537,15 +563,6 @@ function updateInboundParam(setSearchParams: ReturnType<typeof useSearchParams>[
     if (value) next.set(key, value);
     else next.delete(key);
     next.delete("inbound_offset");
-    return next;
-  });
-}
-
-function setInboundOffset(setSearchParams: ReturnType<typeof useSearchParams>[1], searchParams: URLSearchParams, offset: number) {
-  setSearchParams(() => {
-    const next = new URLSearchParams(searchParams);
-    next.set("tab", "inbound");
-    next.set("inbound_offset", String(offset));
     return next;
   });
 }

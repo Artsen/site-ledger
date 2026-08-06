@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import {
@@ -24,6 +24,7 @@ import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
+import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import type {
@@ -33,6 +34,7 @@ import type {
 } from "../types/scans";
 import { formatDate, formatStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
+import { useUrlPagination } from "../utils/useUrlPagination";
 
 const WORKFLOWS = [
   "unreviewed",
@@ -372,6 +374,7 @@ function ScansTab({
   resourceId: string;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const pagination = useUrlPagination({ prefix: "page_scans" });
   const query = new URLSearchParams();
   for (const key of [
     "scope",
@@ -381,16 +384,19 @@ function ScansTab({
     "retrieval_method",
     "parse_method",
     "direction",
-    "offset",
   ]) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
+  query.set("limit", String(pagination.limit));
+  query.set("offset", String(pagination.offset));
   const observations = useQuery({
     queryKey: ["site-page-observations", siteId, resourceId, query.toString()],
     queryFn: () =>
       listPageObservations(siteId, resourceId, `?${query.toString()}`),
   });
+  useEffect(() => pagination.ensureValid(observations.data?.total), [observations.data?.total, pagination]);
+  const controls = observations.data ? <PaginatedTableControls total={observations.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="Scan appearance" isLoading={observations.isFetching && !observations.isLoading} /> : null;
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <div className="mb-4 flex flex-wrap gap-3">
@@ -424,6 +430,7 @@ function ScansTab({
       {observations.isLoading ? (
         <LoadingBlock label="Loading Scans..." />
       ) : null}
+      {controls ? <div className="mb-4">{controls}</div> : null}
       {observations.data?.items.length ? (
         <ObservationTable observations={observations.data.items} />
       ) : !observations.isLoading ? (
@@ -432,14 +439,7 @@ function ScansTab({
           message="No retained observations match these filters."
         />
       ) : null}
-      {observations.data ? (
-        <Pagination
-          total={observations.data.total}
-          limit={observations.data.limit}
-          offset={observations.data.offset}
-          setSearchParams={setSearchParams}
-        />
-      ) : null}
+      {controls ? <div className="mt-4">{controls}</div> : null}
     </section>
   );
 }
@@ -567,7 +567,7 @@ function LinksTab({ detail }: { detail: PersistentPageDetail }) {
       ? String(detail.page.latest_snapshot_id)
       : "");
   const role = searchParams.get("link_role") ?? "all";
-  const linkOffset = Number(searchParams.get("link_offset") ?? "0");
+  const pagination = useUrlPagination({ prefix: direction === "outgoing" ? "outgoing" : "inbound" });
   const observations = useQuery({
     queryKey: [
       "site-page-link-observations",
@@ -582,27 +582,29 @@ function LinksTab({ detail }: { detail: PersistentPageDetail }) {
       ),
   });
   const outgoing = useQuery({
-    queryKey: ["outgoing-links", snapshotId, role, linkOffset],
+    queryKey: ["outgoing-links", snapshotId, role, pagination.limit, pagination.offset],
     queryFn: () =>
       getOutgoingLinks(
         snapshotId,
-        `?limit=50&offset=${linkOffset}${
+        `?limit=${pagination.limit}&offset=${pagination.offset}${
           role === "all" ? "" : `&link_role=${encodeURIComponent(role)}`
         }`,
       ),
     enabled: Boolean(snapshotId) && direction === "outgoing",
   });
   const inbound = useQuery({
-    queryKey: ["inbound-links", snapshotId, role, linkOffset],
+    queryKey: ["inbound-links", snapshotId, role, pagination.limit, pagination.offset],
     queryFn: () =>
       getInboundLinks(
         snapshotId,
-        `?limit=50&offset=${linkOffset}${
+        `?limit=${pagination.limit}&offset=${pagination.offset}${
           role === "all" ? "" : `&link_role=${encodeURIComponent(role)}`
         }`,
       ),
     enabled: Boolean(snapshotId) && direction === "inbound",
   });
+  const activeData = direction === "outgoing" ? outgoing.data : inbound.data;
+  useEffect(() => pagination.ensureValid(activeData?.total), [activeData?.total, pagination]);
   if (!snapshotId)
     return (
       <EmptyState
@@ -623,6 +625,7 @@ function LinksTab({ detail }: { detail: PersistentPageDetail }) {
   const error = direction === "outgoing" ? outgoing.error : inbound.error;
   const loading =
     direction === "outgoing" ? outgoing.isLoading : inbound.isLoading;
+  const controls = activeData ? <PaginatedTableControls total={activeData.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="link occurrence" isLoading={(direction === "outgoing" ? outgoing.isFetching : inbound.isFetching) && !loading} /> : null;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3 rounded-md border border-stone-200 bg-white p-4 shadow-sm">
@@ -690,6 +693,7 @@ function LinksTab({ detail }: { detail: PersistentPageDetail }) {
         <ErrorBanner error={error} title="Could not load links" />
       ) : null}
       {loading ? <LoadingBlock label="Loading links..." /> : null}
+      {controls}
       {!loading && !filtered.length ? (
         <EmptyState
           title="No links"
@@ -699,54 +703,7 @@ function LinksTab({ detail }: { detail: PersistentPageDetail }) {
       {filtered.length ? (
         <LinkTable links={filtered} inbound={direction === "inbound"} />
       ) : null}
-      {(direction === "outgoing" ? outgoing.data : inbound.data) ? (
-        <LinkPagination
-          data={(direction === "outgoing" ? outgoing.data : inbound.data)!}
-          setSearchParams={setSearchParams}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function LinkPagination({
-  data,
-  setSearchParams,
-}: {
-  data: { total: number; limit: number; offset: number };
-  setSearchParams: ReturnType<typeof useSearchParams>[1];
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 text-sm">
-      <span>{plural(data.total, "link occurrence")}</span>
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          disabled={data.offset <= 0}
-          onClick={() =>
-            setLinkParam(
-              setSearchParams,
-              "link_offset",
-              String(Math.max(0, data.offset - data.limit)),
-            )
-          }
-        >
-          Previous
-        </Button>
-        <Button
-          type="button"
-          disabled={data.offset + data.limit >= data.total}
-          onClick={() =>
-            setLinkParam(
-              setSearchParams,
-              "link_offset",
-              String(data.offset + data.limit),
-            )
-          }
-        >
-          Next
-        </Button>
-      </div>
+      {controls}
     </div>
   );
 }
@@ -815,47 +772,6 @@ function LinkTable({
   );
 }
 
-function Pagination({
-  total,
-  limit,
-  offset,
-  setSearchParams,
-}: {
-  total: number;
-  limit: number;
-  offset: number;
-  setSearchParams: ReturnType<typeof useSearchParams>[1];
-}) {
-  return (
-    <div className="mt-4 flex items-center justify-between gap-3 text-sm">
-      <span>{plural(total, "Scan appearance")}</span>
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          disabled={offset <= 0}
-          onClick={() =>
-            setScanParam(
-              setSearchParams,
-              "offset",
-              String(Math.max(0, offset - limit)),
-            )
-          }
-        >
-          Previous
-        </Button>
-        <Button
-          type="button"
-          disabled={offset + limit >= total}
-          onClick={() =>
-            setScanParam(setSearchParams, "offset", String(offset + limit))
-          }
-        >
-          Next
-        </Button>
-      </div>
-    </div>
-  );
-}
 function PageFrame({ children }: { children: React.ReactNode }) {
   return (
     <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
@@ -882,7 +798,7 @@ function setScanParam(
     const next = new URLSearchParams(current);
     next.set("tab", "scans");
     next.set(key, value);
-    if (key !== "offset") next.delete("offset");
+    if (key !== "page_scans_offset") next.delete("page_scans_offset");
     return next;
   });
 }
@@ -895,7 +811,10 @@ function setLinkParam(
     const next = new URLSearchParams(current);
     next.set("tab", "links");
     next.set(key, value);
-    if (key !== "link_offset") next.delete("link_offset");
+    if (key !== "link_direction") {
+      next.delete("outgoing_offset");
+      next.delete("inbound_offset");
+    }
     return next;
   });
 }

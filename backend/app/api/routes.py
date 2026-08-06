@@ -47,8 +47,16 @@ from app.schemas.rendered import (
     RenderedConsoleMessageRead,
     RenderedEventList,
     RenderedNetworkEntryRead,
+    RenderedObservationIndexList,
     RenderedObservationRead,
     RenderedPageErrorRead,
+)
+from app.schemas.resources import (
+    ResourceDetail,
+    ResourceHistoryList,
+    ResourceInventoryList,
+    ResourceOccurrenceList,
+    ResourceSummary,
 )
 from app.schemas.scans import (
     InboundLinkList,
@@ -122,9 +130,21 @@ from app.services.page_categories import (
     update_category,
 )
 from app.services.page_queries import get_site_page, list_page_observations, list_site_pages
+from app.services.rendered_queries import list_scan_rendered_observations
+from app.services.resource_queries import (
+    get_scan_resource,
+    get_site_resource,
+    list_resource_occurrences,
+    list_scan_resources,
+    list_site_resource_history,
+    list_site_resources,
+    scan_resource_summary,
+    site_resource_summary,
+)
 from app.services.scan_deletion import delete_scan as delete_scan_service
 from app.services.scan_deletion import preview_scan_deletion
 from app.services.scan_queries import (
+    get_snapshot_detail,
     list_scan_history,
     list_scan_pages,
     list_snapshot_inbound_links,
@@ -167,9 +187,20 @@ from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
 router = APIRouter(prefix="/api")
 DbSession = Annotated[Session, Depends(get_db)]
-ScanListLimit = Annotated[int, Query(ge=1, le=100)]
-PageLimit = Annotated[int, Query(ge=1, le=200)]
+ScanListLimit = Annotated[int, Query(ge=1, le=250)]
+PageLimit = Annotated[int, Query(ge=1, le=250)]
 PageOffset = Annotated[int, Query(ge=0)]
+ResourceSortParam = Literal[
+    "url",
+    "kind",
+    "mime_type",
+    "http_status",
+    "declared_size",
+    "occurrence_count",
+    "source_page_count",
+    "first_discovered",
+    "latest_discovered",
+]
 
 
 @router.get("/health")
@@ -1036,7 +1067,18 @@ def list_pages(
     min_depth: int | None = Query(default=None, ge=0),
     max_depth: int | None = Query(default=None, ge=0),
     error_state: Literal["any", "with_errors", "without_errors"] = "any",
-    sort: Literal["requested_url", "status", "title", "depth", "duration"] = "requested_url",
+    rendered_state: Literal[
+        "any",
+        "not_requested",
+        "captured",
+        "captured_with_warnings",
+        "failed",
+        "skipped",
+        "interrupted",
+    ] = "any",
+    sort: Literal[
+        "requested_url", "status", "title", "depth", "duration", "rendered_state"
+    ] = "requested_url",
     direction: Literal["asc", "desc"] = "asc",
     limit: PageLimit = 50,
     offset: PageOffset = 0,
@@ -1056,6 +1098,232 @@ def list_pages(
         direction,
         limit,
         offset,
+        rendered_state,
+    )
+
+
+@router.get("/scans/{scan_id}/resources", response_model=ResourceInventoryList)
+def get_scan_resources(
+    scan_id: int,
+    db: DbSession,
+    search: str | None = None,
+    resource_kind: str | None = None,
+    mime_type: str | None = None,
+    extension: str | None = None,
+    host: str | None = None,
+    status: int | None = None,
+    evidence_state: Literal["any", "observed", "discovered_only"] = "any",
+    scope_state: Literal["any", "in_scope", "out_of_scope"] = "any",
+    location_state: Literal["any", "internal", "external"] = "any",
+    min_size: int | None = Query(default=None, ge=0),
+    max_size: int | None = Query(default=None, ge=0),
+    has_multiple_source_pages: bool = False,
+    sort: ResourceSortParam = "url",
+    direction: Literal["asc", "desc"] = "asc",
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> ResourceInventoryList:
+    result = list_scan_resources(
+        db,
+        scan_id,
+        search=search,
+        resource_kind=resource_kind,
+        mime_type=mime_type,
+        extension=extension,
+        host=host,
+        status=status,
+        evidence_state=evidence_state,
+        scope_state=scope_state,
+        location_state=location_state,
+        min_size=min_size,
+        max_size=max_size,
+        has_multiple_source_pages=has_multiple_source_pages,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+    if result is None:
+        raise HTTPException(404, "Scan not found")
+    return result
+
+
+@router.get("/sites/{site_id}/resources", response_model=ResourceInventoryList)
+def get_site_resources(
+    site_id: int,
+    db: DbSession,
+    search: str | None = None,
+    resource_kind: str | None = None,
+    mime_type: str | None = None,
+    extension: str | None = None,
+    host: str | None = None,
+    status: int | None = None,
+    evidence_state: Literal["any", "observed", "discovered_only"] = "any",
+    scope_state: Literal["any", "in_scope", "out_of_scope"] = "any",
+    location_state: Literal["any", "internal", "external"] = "any",
+    min_size: int | None = Query(default=None, ge=0),
+    max_size: int | None = Query(default=None, ge=0),
+    has_multiple_source_pages: bool = False,
+    sort: ResourceSortParam = "url",
+    direction: Literal["asc", "desc"] = "asc",
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> ResourceInventoryList:
+    result = list_site_resources(
+        db,
+        site_id,
+        search=search,
+        resource_kind=resource_kind,
+        mime_type=mime_type,
+        extension=extension,
+        host=host,
+        status=status,
+        evidence_state=evidence_state,
+        scope_state=scope_state,
+        location_state=location_state,
+        min_size=min_size,
+        max_size=max_size,
+        has_multiple_source_pages=has_multiple_source_pages,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.get("/sites/{site_id}/resources/summary", response_model=ResourceSummary)
+def get_site_resource_summary(site_id: int, db: DbSession) -> ResourceSummary:
+    result = site_resource_summary(db, site_id)
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.get("/sites/{site_id}/resources/{resource_id}", response_model=ResourceDetail)
+def get_site_resource_detail(site_id: int, resource_id: int, db: DbSession) -> ResourceDetail:
+    result = get_site_resource(db, site_id, resource_id)
+    if result is None:
+        raise HTTPException(404, "Resource not found")
+    return result
+
+
+@router.get(
+    "/sites/{site_id}/resources/{resource_id}/history",
+    response_model=ResourceHistoryList,
+)
+def get_site_resource_history(
+    site_id: int,
+    resource_id: int,
+    db: DbSession,
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> ResourceHistoryList:
+    result = list_site_resource_history(db, site_id, resource_id, limit=limit, offset=offset)
+    if result is None:
+        raise HTTPException(404, "Resource not found")
+    return result
+
+
+@router.get(
+    "/sites/{site_id}/resources/{resource_id}/occurrences",
+    response_model=ResourceOccurrenceList,
+)
+def get_site_resource_occurrences(
+    site_id: int,
+    resource_id: int,
+    db: DbSession,
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> ResourceOccurrenceList:
+    if get_site_resource(db, site_id, resource_id) is None:
+        raise HTTPException(404, "Resource not found")
+    return list_resource_occurrences(db, resource_id, site_id=site_id, limit=limit, offset=offset)
+
+
+@router.get("/scans/{scan_id}/resources/summary", response_model=ResourceSummary)
+def get_scan_resource_summary(scan_id: int, db: DbSession) -> ResourceSummary:
+    result = scan_resource_summary(db, scan_id)
+    if result is None:
+        raise HTTPException(404, "Scan not found")
+    return result
+
+
+@router.get("/scans/{scan_id}/resources/{resource_id}", response_model=ResourceDetail)
+def get_scan_resource_detail(scan_id: int, resource_id: int, db: DbSession) -> ResourceDetail:
+    result = get_scan_resource(db, scan_id, resource_id)
+    if result is None:
+        raise HTTPException(404, "Resource not found")
+    return result
+
+
+@router.get(
+    "/scans/{scan_id}/resources/{resource_id}/occurrences",
+    response_model=ResourceOccurrenceList,
+)
+def get_scan_resource_occurrences(
+    scan_id: int,
+    resource_id: int,
+    db: DbSession,
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> ResourceOccurrenceList:
+    if get_scan_resource(db, scan_id, resource_id) is None:
+        raise HTTPException(404, "Resource not found")
+    return list_resource_occurrences(db, resource_id, scan_id=scan_id, limit=limit, offset=offset)
+
+
+@router.get(
+    "/scans/{scan_id}/rendered-observations",
+    response_model=RenderedObservationIndexList,
+)
+def get_scan_rendered_observations(
+    scan_id: int,
+    db: DbSession,
+    search: str | None = None,
+    capture_state: str | None = None,
+    navigation_status: int | None = None,
+    has_warnings: bool | None = None,
+    has_page_errors: bool | None = None,
+    has_console_messages: bool | None = None,
+    has_blocked_requests: bool | None = None,
+    has_viewport_screenshot: bool | None = None,
+    has_full_page_screenshot: bool | None = None,
+    has_rendered_dom: bool | None = None,
+    sort: Literal[
+        "page_url",
+        "capture_state",
+        "duration",
+        "navigation_status",
+        "warning_count",
+        "page_error_count",
+        "capture_time",
+    ] = "capture_time",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> RenderedObservationIndexList:
+    if db.get(Scan, scan_id) is None:
+        raise HTTPException(404, "Scan not found")
+    return list_scan_rendered_observations(
+        db,
+        scan_id,
+        search=search,
+        capture_state=capture_state,
+        navigation_status=navigation_status,
+        has_warnings=has_warnings,
+        has_page_errors=has_page_errors,
+        has_console_messages=has_console_messages,
+        has_blocked_requests=has_blocked_requests,
+        has_viewport_screenshot=has_viewport_screenshot,
+        has_full_page_screenshot=has_full_page_screenshot,
+        has_rendered_dom=has_rendered_dom,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
     )
 
 
@@ -1170,12 +1438,9 @@ def list_errors(scan_id: int, db: DbSession) -> list[ResourceSnapshot]:
 
 @router.get("/snapshots/{snapshot_id}", response_model=SnapshotRead)
 def get_snapshot(snapshot_id: int, db: DbSession) -> SnapshotRead:
-    snapshot = db.get(ResourceSnapshot, snapshot_id)
-    if not snapshot:
+    result = get_snapshot_detail(db, snapshot_id)
+    if result is None:
         raise HTTPException(404, "Snapshot not found")
-    result = SnapshotRead.model_validate(snapshot, from_attributes=True)
-    result.html_raw_byte_size = snapshot.blob.raw_byte_size if snapshot.blob else None
-    result.html_stored_byte_size = snapshot.blob.stored_byte_size if snapshot.blob else None
     return result
 
 

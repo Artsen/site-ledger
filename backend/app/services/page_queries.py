@@ -193,6 +193,16 @@ def list_page_observations(
 
 
 def _site_page_query(site_id: int) -> Select[Any]:
+    all_observations = (
+        select(
+            ResourceSnapshot.resource_id.label("resource_id"),
+            func.count(ResourceSnapshot.id).label("all_observation_count"),
+        )
+        .join(Scan, Scan.id == ResourceSnapshot.scan_id)
+        .where(Scan.website_property_id == site_id)
+        .group_by(ResourceSnapshot.resource_id)
+        .subquery()
+    )
     observations = (
         select(
             ResourceSnapshot.resource_id.label("resource_id"),
@@ -202,6 +212,14 @@ def _site_page_query(site_id: int) -> Select[Any]:
         )
         .join(Scan, Scan.id == ResourceSnapshot.scan_id)
         .where(Scan.website_property_id == site_id)
+        .where(
+            or_(
+                ResourceSnapshot.representation_kind == "html_page",
+                ResourceSnapshot.html_blob_id.is_not(None),
+                ResourceSnapshot.content_type.ilike("text/html%"),
+                ResourceSnapshot.content_type.ilike("application/xhtml+xml%"),
+            )
+        )
         .group_by(ResourceSnapshot.resource_id)
         .subquery()
     )
@@ -228,7 +246,14 @@ def _site_page_query(site_id: int) -> Select[Any]:
         )
         .join(WebResource, WebResource.id == SitePage.resource_id)
         .outerjoin(observations, observations.c.resource_id == SitePage.resource_id)
-        .where(SitePage.website_property_id == site_id)
+        .outerjoin(all_observations, all_observations.c.resource_id == SitePage.resource_id)
+        .where(
+            SitePage.website_property_id == site_id,
+            or_(
+                func.coalesce(all_observations.c.all_observation_count, 0) == 0,
+                func.coalesce(observations.c.observation_count, 0) > 0,
+            ),
+        )
     )
 
 

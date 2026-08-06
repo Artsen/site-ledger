@@ -32,7 +32,7 @@ class LegacyStaticPageCrawler(StaticPageCrawler):
         config: ScopeConfig,
         scope: ScopeEngine,
         client: httpx.AsyncClient | None,
-    ) -> tuple[ResourceSnapshot, list[Any]]:
+    ) -> tuple[ResourceSnapshot, list[Any], list[Any]]:
         return await super()._fetch_one(scan, item, config, scope, None)
 
     def _resource(self, normalized: NormalizedUrl) -> WebResource:

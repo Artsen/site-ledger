@@ -34,6 +34,10 @@ export type Scan = {
   static_connection_timeout_count: number;
   static_read_timeout_count: number;
   static_connection_error_count: number;
+  html_page_observed_count?: number;
+  resource_observed_count?: number;
+  resource_discovered_count?: number;
+  resource_reference_occurrence_count?: number;
   stop_reason: string | null;
   fatal_error_message: string | null;
 };
@@ -349,6 +353,97 @@ export type RenderedNetworkEntry = { id: number; sequence: number; redacted_url:
 export type RenderedConsoleMessage = { id: number; sequence: number; message_type: string; text: string; source_url: string | null; timestamp_offset_ms: number | null };
 export type RenderedPageError = { id: number; sequence: number; error_name: string | null; message: string; stack: string | null; source_url: string | null; timestamp_offset_ms: number | null };
 
+export type RenderedObservationIndexItem = {
+  id: number;
+  snapshot_id: number;
+  resource_id: number;
+  page_title: string | null;
+  static_final_url: string | null;
+  browser_final_url: string | null;
+  capture_state: string;
+  static_http_status: number | null;
+  navigation_http_status: number | null;
+  duration_ms: number | null;
+  warning_count: number;
+  blocked_request_count: number;
+  console_message_count: number;
+  page_error_count: number;
+  has_viewport_screenshot: boolean;
+  has_full_page_screenshot: boolean;
+  has_rendered_dom: boolean;
+  finished_at: string | null;
+};
+
+export type RenderedObservationIndexList = {
+  items: RenderedObservationIndexItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ResourceInventoryItem = {
+  resource_id: number;
+  normalized_url: string;
+  host: string;
+  path: string;
+  file_extension: string | null;
+  effective_kind: string;
+  effective_kind_label: string;
+  classification_source: string;
+  observed: boolean;
+  discovered_only: boolean;
+  snapshot_id: number | null;
+  final_url: string | null;
+  http_status: number | null;
+  normalized_mime_type: string | null;
+  content_disposition_filename: string | null;
+  declared_content_length: number | null;
+  network_bytes_transferred: number | null;
+  fetched_at: string | null;
+  response_time_ms: number | null;
+  occurrence_count: number;
+  source_page_count: number;
+  anchor_occurrence_count: number;
+  embedded_occurrence_count: number;
+  in_scope_occurrence_count: number;
+  out_of_scope_occurrence_count: number;
+  first_discovered_at: string | null;
+  latest_discovered_at: string | null;
+  observation_count: number;
+  scan_count: number;
+};
+
+export type ResourceInventoryList = { items: ResourceInventoryItem[]; total: number; limit: number; offset: number };
+export type ResourceSummary = { unique_resources: number; observed_resources: number; discovered_only_resources: number; total_occurrences: number; kind_counts: Record<string, number> };
+export type ResourceDetail = { resource: ResourceInventoryItem; requested_url: string | null; response_body_state: string | null; inspected_prefix_byte_count: number };
+export type ResourceOccurrence = {
+  occurrence_id: number;
+  occurrence_source: string;
+  source_snapshot_id: number;
+  source_resource_id: number;
+  source_url: string;
+  source_title: string | null;
+  relation_type: string;
+  element_tag: string | null;
+  attribute_name: string | null;
+  raw_url: string | null;
+  resolved_url: string | null;
+  anchor_text: string | null;
+  alt_text: string | null;
+  srcset_descriptor: string | null;
+  rel: string | null;
+  media: string | null;
+  type_hint: string | null;
+  as_hint: string | null;
+  scope_decision: string;
+  in_scope: boolean;
+  dom_path: string | null;
+  discovered_at: string;
+};
+export type ResourceOccurrenceList = { items: ResourceOccurrence[]; total: number; limit: number; offset: number };
+export type ResourceHistoryItem = { resource_id: number; scan_id: number; scan_created_at: string; scan_status: string; observed: boolean; discovered_only: boolean; effective_kind: string; normalized_mime_type: string | null; http_status: number | null; declared_content_length: number | null; occurrence_count: number; observed_at: string | null; snapshot_id: number | null };
+export type ResourceHistoryList = { items: ResourceHistoryItem[]; total: number; limit: number; offset: number };
+
 export type PageList = {
   items: Page[];
   total: number;
@@ -395,6 +490,19 @@ export type Snapshot = {
   last_modified: string | null;
   cache_control: string | null;
   vary_header: string | null;
+  representation_kind?: string | null;
+  representation_rule?: string | null;
+  normalized_mime_type?: string | null;
+  file_extension?: string | null;
+  content_disposition_filename?: string | null;
+  declared_content_length?: number | null;
+  response_body_state?: string | null;
+  inspected_prefix_byte_count?: number;
+  website_property_id: number | null;
+  website_property_name: string | null;
+  site_page_id: number | null;
+  has_persistent_page: boolean;
+  is_html_page: boolean;
 };
 
 export type PersistentPage = {

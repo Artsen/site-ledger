@@ -19,23 +19,27 @@ observations from separate scans without erasing the evidence captured by each s
 - Accepts sitemap, robots-discovered sitemap, and manual URL Sources.
 - Maintains a current URL Inventory with source provenance.
 - Preserves persistent Pages and scan-specific observation history.
+- Inventories observed and HTML-referenced non-HTML Resources without storing Resource bodies.
 - Provides Site-scoped Page workspaces with categories, owner labels, workflow status, and notes.
 - Classifies individual link occurrences by source-DOM role with explicit rule provenance.
 - Stores exact HTML responses as compressed, content-addressed evidence.
 - Records page metadata, redirect chains, errors, and inbound/outgoing link provenance.
 - Uses conditional HTTP revalidation and deterministic parsed-result reuse when safe.
 - Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
+- Indexes browser-rendered observations from the Scan workspace with exact evidence links.
 - Supports scan, source, Site, and background Activity lifecycle management.
 
-Site Ledger does not perform browser-only crawling, complete website change detection, visual
-regression, accessibility or performance audits, analytics correlation, or AI findings.
+Site Ledger does not perform browser-only crawling, Resource-body storage, complete website change
+detection, visual regression, accessibility or performance audits, analytics correlation, or AI
+findings.
 
 ## Core Product Model
 
 - **Site:** A saved website property with reusable scope and configuration. The internal model is
   WebsiteProperty.
 - **Page:** A persistent normalized URL identity represented internally by WebResource.
-- **Observation:** A scan-specific ResourceSnapshot of a Page.
+- **Resource:** A non-HTML representation observed directly or referenced by retained HTML.
+- **Observation:** A scan-specific ResourceSnapshot of a Page or non-HTML Resource.
 - **Scan:** One bounded collection run that produces observations.
 - **Source:** A sitemap, robots-discovered sitemap, or manual URL source.
 - **Inventory:** Current URL candidates declared by Sources. Inventory entries are inputs, not
@@ -44,6 +48,8 @@ regression, accessibility or performance audits, analytics correlation, or AI fi
 - **Activity:** Durable background execution and worker status.
 
 See [Product vision](docs/product-vision.md) for the broader model and roadmap.
+See [Resource Inventory](docs/resource-inventory.md) for classification, provenance, and storage
+boundaries.
 
 ## Architecture Overview
 
@@ -190,6 +196,7 @@ storage, graph queries, background jobs, Page history, and reuse are covered by 
 - [Page history and reuse](docs/page-history-and-reuse.md)
 - [Page workspaces](docs/page-workspaces.md)
 - [Browser-rendered observations](docs/browser-rendered-observations.md)
+- [Resource Inventory](docs/resource-inventory.md)
 
 ## Current Limitations
 

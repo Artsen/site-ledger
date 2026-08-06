@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { deleteScan, getScanDeletePreview, listScanHistory } from "../api/client";
@@ -7,23 +7,24 @@ import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
+import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { inputClass } from "../components/ui/styles";
 import type { Scan, ScanDeletePreview } from "../types/scans";
-import { formatBytes, formatDate, formatDuration, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
+import { formatBytes, formatDate, formatDuration, hostnameFromUrl, isTerminalStatus } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
+import { useUrlPagination } from "../utils/useUrlPagination";
 
 const statusOptions = ["completed", "completed_with_errors", "failed", "cancelled", "interrupted", "queued", "running"];
 
 export function ScansPage() {
   useDocumentTitle("All Scans");
   const [searchParams, setSearchParams] = useSearchParams();
+  const pagination = useUrlPagination({ prefix: "scans", defaultLimit: 25 });
   const queryClient = useQueryClient();
   const [success, setSuccess] = useState<string | null>(null);
   const [deleteState, setDeleteState] = useState<{ scan: Scan; preview?: ScanDeletePreview; error?: unknown } | null>(null);
-  const limit = Number(searchParams.get("limit") ?? 25);
-  const offset = Number(searchParams.get("offset") ?? 0);
-  const query = useMemo(() => buildHistoryQuery(searchParams), [searchParams]);
+  const query = buildHistoryQuery(searchParams, pagination.limit, pagination.offset);
   const scans = useQuery({ queryKey: ["scan-history", query], queryFn: () => listScanHistory(query) });
   const preview = useMutation({
     mutationFn: (scan: Scan) => getScanDeletePreview(String(scan.id)),
@@ -38,8 +39,8 @@ export function ScansPage() {
       setDeleteState(null);
       setSuccess("Scan deleted.");
       const remainingOnPage = (scans.data?.items.length ?? 1) - 1;
-      if (remainingOnPage <= 0 && offset > 0) {
-        updateHistoryParam(setSearchParams, "offset", String(Math.max(0, offset - limit)));
+      if (remainingOnPage <= 0 && pagination.offset > 0) {
+        pagination.setPage(Math.max(1, pagination.currentPage - 1));
       }
     }
   });
@@ -49,6 +50,8 @@ export function ScansPage() {
     const timer = window.setTimeout(() => setSuccess(null), 3500);
     return () => window.clearTimeout(timer);
   }, [success]);
+  useEffect(() => pagination.ensureValid(scans.data?.total), [scans.data?.total, pagination]);
+  const controls = scans.data ? <PaginatedTableControls total={scans.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="scan" isLoading={scans.isFetching && !scans.isLoading} /> : null;
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
@@ -81,13 +84,14 @@ export function ScansPage() {
           </select>
         </div>
         <div className="mt-3">
-          <Button type="button" variant="ghost" onClick={() => setSearchParams({ limit: String(limit), offset: "0" })}>Clear filters</Button>
+          <Button type="button" variant="ghost" onClick={() => setSearchParams({ scans_limit: String(pagination.limit), scans_offset: "0" })}>Clear filters</Button>
         </div>
       </section>
       {success ? <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{success}</div> : null}
       {scans.error ? <ErrorBanner error={scans.error} title="Could not load scan history" /> : null}
       {scans.isLoading ? <LoadingBlock label="Loading scan history..." /> : null}
       {!scans.isLoading && !scans.data?.items.length ? <EmptyState title="No scans found" message={hasHistoryFilters(searchParams) ? "Clear filters or broaden the search." : "Create a scan to start building history."} /> : null}
+      {controls ? <div className="mb-4">{controls}</div> : null}
       {scans.data?.items.length ? (
         <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
           <table className="min-w-full text-left text-sm">
@@ -137,15 +141,7 @@ export function ScansPage() {
           </table>
         </div>
       ) : null}
-      {scans.data ? (
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
-          <span>{plural(scans.data.total, "scan")}</span>
-          <div className="flex gap-2">
-            <Button type="button" disabled={offset <= 0} onClick={() => updateHistoryParam(setSearchParams, "offset", String(Math.max(0, offset - limit)), false)}>Previous</Button>
-            <Button type="button" disabled={offset + limit >= scans.data.total} onClick={() => updateHistoryParam(setSearchParams, "offset", String(offset + limit), false)}>Next</Button>
-          </div>
-        </div>
-      ) : null}
+      {controls ? <div className="mt-4">{controls}</div> : null}
       {deleteState ? (
         <DeleteDialog
           state={deleteState}
@@ -219,14 +215,14 @@ function Warnings({ warnings }: { warnings: string[] }) {
   );
 }
 
-function buildHistoryQuery(searchParams: URLSearchParams) {
+function buildHistoryQuery(searchParams: URLSearchParams, limit: number, offset: number) {
   const params = new URLSearchParams();
-  for (const key of ["search", "status", "sort", "direction", "limit", "offset"]) {
+  for (const key of ["search", "status", "sort", "direction"]) {
     const value = searchParams.get(key);
     if (value) params.set(key, value);
   }
-  if (!params.has("limit")) params.set("limit", "25");
-  if (!params.has("offset")) params.set("offset", "0");
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
   return `?${params.toString()}`;
 }
 
@@ -235,7 +231,7 @@ function updateHistoryParam(setSearchParams: ReturnType<typeof useSearchParams>[
     const next = new URLSearchParams(current);
     if (value) next.set(key, value);
     else next.delete(key);
-    if (resetOffset) next.set("offset", "0");
+    if (resetOffset) next.set("scans_offset", "0");
     return next;
   });
 }

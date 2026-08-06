@@ -54,11 +54,13 @@ A successful `304 Not Modified` response creates a fresh `ResourceSnapshot`. The
 - `html_blob_id`, hashes, and parsed head fields reused from the prior observation.
 - `reused_from_snapshot_id`: the prior observation used as evidence.
 
-The crawler then recreates link occurrences for the current scan from the parse artifact anchors and
-current scope configuration. It does not reuse old scan occurrence rows.
+The crawler then recreates link and embedded-Resource occurrences for the current Scan from the
+current parse artifact and scope configuration. It does not reuse old Scan occurrence rows.
 
 Current parser artifacts also store occurrence-specific link role and rule evidence. Scope remains
 scan-specific and is recomputed when anchors are reused. See [Page workspaces](page-workspaces.md).
+Parser v3 also stores duplicate-preserving embedded references; see
+[Resource Inventory](resource-inventory.md).
 
 ## Limits
 

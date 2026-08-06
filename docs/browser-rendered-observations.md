@@ -60,3 +60,10 @@ from hashes. Rendered DOM is served as `text/plain` and displayed as escaped Rea
 Capture states are `capturing`, `completed`, `completed_with_warnings`, `failed`, `skipped`,
 `cancelled`, and `interrupted`. Page-level browser failures make the Scan
 `completed_with_errors`; browser preflight failure before useful execution makes it `failed`.
+
+## Scan Discoverability
+
+The Scan Rendered tab indexes retained observations with server-side filtering and pagination.
+Overview and Pages links open the exact snapshot's Rendered workspace. This index does not alter
+capture selection, browser policy, or the no-retry rule. Rendered network and DOM evidence do not
+feed static Resource Inventory; see [Resource Inventory](resource-inventory.md).

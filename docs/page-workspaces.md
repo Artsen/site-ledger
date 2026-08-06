@@ -23,6 +23,12 @@ skipped, redirected, revalidated, or successful result. Ad hoc scans and source-
 candidates do not create `SitePage` rows. The migration backfills distinct saved Site and observed
 resource pairs using the earliest retained observation time when available.
 
+The snapshot detail response resolves Page workspace context through the observation's own Scan.
+It reports the associated Site and matching `SitePage` in one read-only query. Observation views
+link to the workspace only for HTML Page evidence with that exact association; overlapping Sites,
+ad hoc Scans, missing legacy associations, and non-HTML Resources do not produce inferred links or
+create `SitePage` rows during reads.
+
 ## Workspace
 
 The persistent Page route provides URL-backed Overview, Scans, Links, and Notes tabs. Tabs load
@@ -126,15 +132,15 @@ download-attribute presence, and resolved extension. It does not retain ancestor
 
 ```mermaid
 flowchart LR
-  DOM[Source anchor DOM] --> Parser[parse_html v2]
+  DOM[Source anchor DOM] --> Parser[parse_html v3]
   Parser --> Anchor[HtmlParseAnchor role and rule]
   Anchor --> Reuse[Artifact reuse]
   Reuse --> Occurrence[ResourceOccurrence role and rule]
   Scope[Current Scan ScopeEngine] --> Occurrence
 ```
 
-Parser version `html-parser-v2-link-roles` prevents legacy artifacts from masquerading as current
-output. Existing occurrences remain valid with null roles and display as **Unclassified legacy
+Parser version `html-parser-v3-resource-references` retains link roles and adds embedded Resource
+references. Existing occurrences remain valid with null roles and display as **Unclassified legacy
 link**. A future scan parses or selects a current-version artifact, copies role evidence to new
 occurrences, and independently recomputes scope decisions. Historical rows are not mass-reparsed.
 
@@ -148,6 +154,10 @@ and occurrence role evidence.
 Deleting one or all Scans preserves `SitePage`, categories, assignments, Page notes, owner, and
 workflow status. A `WebResource` is not orphaned while any SitePage references it. Site deletion
 removes Site-scoped metadata and then permits normal reference-aware cleanup.
+
+The Site Resources tab is separate from Pages and URL Inventory. Resources have Scan-derived
+history and Used-by-Page provenance but do not inherit Page categories, owner, workflow, or notes.
+See [Resource Inventory](resource-inventory.md).
 
 The current workspace intentionally excludes saved views, findings, authenticated ownership,
 audit-log history, hierarchical or AI categories, user-defined link-role overrides, rich-text

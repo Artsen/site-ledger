@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { deleteSite, listSites } from "../api/client";
@@ -6,27 +7,30 @@ import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
+import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { inputClass } from "../components/ui/styles";
 import { classificationLabel } from "../types/siteClassifications";
 import type { SiteListItem } from "../types/scans";
-import { formatDate, plural } from "../utils/format";
+import { formatDate } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
+import { useUrlPagination } from "../utils/useUrlPagination";
 
 export function SitesPage() {
   useDocumentTitle("Sites");
   const [searchParams, setSearchParams] = useSearchParams();
+  const pagination = useUrlPagination({ prefix: "sites", defaultLimit: 25 });
   const queryClient = useQueryClient();
-  const query = buildSiteQuery(searchParams);
+  const query = buildSiteQuery(searchParams, pagination.limit, pagination.offset);
   const sites = useQuery({ queryKey: ["sites", query], queryFn: () => listSites(query) });
+  useEffect(() => pagination.ensureValid(sites.data?.total), [pagination, sites.data?.total]);
   const remove = useMutation({
     mutationFn: (site: SiteListItem) => deleteSite(String(site.id)),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["sites"] });
     }
   });
-  const limit = Number(searchParams.get("limit") ?? 25);
-  const offset = Number(searchParams.get("offset") ?? 0);
+  const controls = sites.data ? <PaginatedTableControls total={sites.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="site" isLoading={sites.isFetching && !sites.isLoading} /> : null;
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
@@ -57,23 +61,16 @@ export function SitesPage() {
             <option value="latest_scan_at">Latest scan</option>
           </select>
         </div>
-        <div className="mt-3"><Button type="button" variant="ghost" onClick={() => setSearchParams({})}>Clear filters</Button></div>
+        <div className="mt-3"><Button type="button" variant="ghost" onClick={() => setSearchParams({ sites_limit: String(pagination.limit), sites_offset: "0" })}>Clear filters</Button></div>
       </section>
       {sites.error || remove.error ? <ErrorBanner error={sites.error ?? remove.error} title="Site request failed" /> : null}
       {sites.isLoading ? <LoadingBlock label="Loading sites..." /> : null}
       {!sites.isLoading && !sites.data?.items.length ? <EmptyState title="No sites found" message="Create a saved site or adjust the filters." /> : null}
+      {controls ? <div className="mb-4">{controls}</div> : null}
       {sites.data?.items.length ? <SitesTable sites={sites.data.items} onDelete={(site) => {
         if (window.confirm(`Delete ${site.name}? Sites with scans cannot be deleted.`)) remove.mutate(site);
       }} /> : null}
-      {sites.data ? (
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
-          <span>{plural(sites.data.total, "site")}</span>
-          <div className="flex gap-2">
-            <Button type="button" disabled={offset <= 0} onClick={() => updateParam(setSearchParams, "offset", String(Math.max(0, offset - limit)), false)}>Previous</Button>
-            <Button type="button" disabled={offset + limit >= sites.data.total} onClick={() => updateParam(setSearchParams, "offset", String(offset + limit), false)}>Next</Button>
-          </div>
-        </div>
-      ) : null}
+      {controls ? <div className="mt-4">{controls}</div> : null}
     </section>
   );
 }
@@ -122,12 +119,14 @@ function FilterInput({ label, param, placeholder, searchParams, setSearchParams 
   );
 }
 
-function buildSiteQuery(searchParams: URLSearchParams) {
+function buildSiteQuery(searchParams: URLSearchParams, limit: number, offset: number) {
   const params = new URLSearchParams();
-  for (const key of ["search", "group_key", "locale", "platform_key", "ownership_key", "active_state", "sort", "direction", "limit", "offset"]) {
+  for (const key of ["search", "group_key", "locale", "platform_key", "ownership_key", "active_state", "sort", "direction"]) {
     const value = searchParams.get(key);
     if (value) params.set(key, value);
   }
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
   return `?${params.toString()}`;
 }
 
@@ -136,7 +135,7 @@ function updateParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key
     const next = new URLSearchParams(current);
     if (value) next.set(key, value);
     else next.delete(key);
-    if (resetOffset) next.delete("offset");
+    if (resetOffset) next.delete("sites_offset");
     return next;
   });
 }

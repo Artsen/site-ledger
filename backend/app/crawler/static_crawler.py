@@ -11,6 +11,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.crawler.resource_classification import classify_response
 from app.crawler.safe_fetch import (
     FetchLimits,
     RedirectFailureError,
@@ -23,6 +24,7 @@ from app.crawler.security import UnsafeDestinationError, validate_public_destina
 from app.crawler.url_normalizer import NormalizedUrl
 from app.models import (
     ResourceOccurrence,
+    ResourceReferenceOccurrence,
     ResourceSnapshot,
     Scan,
     ScanSeed,
@@ -100,6 +102,8 @@ class StaticPageCrawler:
         self.progress_callback = progress_callback
         self.retry_progress_callback = retry_progress_callback
         self._resource_cache: dict[str, WebResource] = {}
+        self._discovered_resource_ids: set[int] = set()
+        self._resource_reference_occurrence_count = 0
 
     async def run(self, scan: Scan) -> None:
         await self._execute(scan, finalize=True)
@@ -109,6 +113,8 @@ class StaticPageCrawler:
 
     async def _execute(self, scan: Scan, *, finalize: bool) -> StaticCrawlResult:
         self._resource_cache.clear()
+        self._discovered_resource_ids.clear()
+        self._resource_reference_occurrence_count = 0
         config = ScopeConfig.from_dict(scan.scope_config)
         scope = ScopeEngine(config, scan.starting_url)
         initial = scope.evaluate(scan.starting_url)
@@ -166,7 +172,9 @@ class StaticPageCrawler:
                         break
 
                 started_at = datetime.now(UTC)
-                attempt_snapshot, anchors = await self._fetch_one(scan, item, config, scope, client)
+                attempt_snapshot, anchors, resource_references = await self._fetch_one(
+                    scan, item, config, scope, client
+                )
                 finished_at = datetime.now(UTC)
                 decision = _retry_decision(attempt_snapshot, config)
                 canonical = attempt_snapshot
@@ -221,6 +229,21 @@ class StaticPageCrawler:
                             queue,
                             discover=True,
                         )
+                        self._persist_resource_references(
+                            canonical,
+                            item,
+                            resource_references,
+                            scope,
+                        )
+                        if canonical.representation_kind == "html_page":
+                            scan.html_page_observed_count += 1
+                        elif canonical.representation_kind not in {None, "unknown"}:
+                            scan.resource_observed_count += 1
+                            self._discovered_resource_ids.add(canonical.resource_id)
+                        scan.resource_discovered_count = len(self._discovered_resource_ids)
+                        scan.resource_reference_occurrence_count = (
+                            self._resource_reference_occurrence_count
+                        )
 
                 self._update_counts(scan, len(seen), len(fetched), len(queue) + len(retry_queue))
                 self.db.commit()
@@ -261,7 +284,7 @@ class StaticPageCrawler:
         config: ScopeConfig,
         scope: ScopeEngine,
         client: httpx.AsyncClient | None,
-    ) -> tuple[ResourceSnapshot, list[Any]]:
+    ) -> tuple[ResourceSnapshot, list[Any], list[Any]]:
         resource = self._resource(item.normalized)
         try:
             await validate_public_destination(item.requested_url, config.allow_private_networks)
@@ -288,6 +311,7 @@ class StaticPageCrawler:
                     max_redirects=config.max_redirects,
                     user_agent=config.user_agent,
                     allow_private_networks=config.allow_private_networks,
+                    metadata_only_non_html=True,
                 ),
                 transport=self.transport,
                 redirect_validator=lambda url: _validate_redirect(scope, url),
@@ -308,6 +332,7 @@ class StaticPageCrawler:
                     )
                     revalidation_artifact = revalidation_artifact_result.artifact
                     anchors = revalidation_artifact_result.anchors
+                    resource_references = revalidation_artifact_result.resource_references
                     snapshot = ResourceSnapshot(
                         scan_id=scan.id,
                         resource_id=resource.id,
@@ -345,6 +370,17 @@ class StaticPageCrawler:
                         last_modified=candidate.snapshot.last_modified,
                         cache_control=candidate.snapshot.cache_control,
                         vary_header=candidate.snapshot.vary_header,
+                        representation_kind="html_page",
+                        representation_rule=candidate.snapshot.representation_rule
+                        or "mime_text_html",
+                        normalized_mime_type=candidate.snapshot.normalized_mime_type,
+                        file_extension=candidate.snapshot.file_extension,
+                        content_disposition_filename=(
+                            candidate.snapshot.content_disposition_filename
+                        ),
+                        declared_content_length=candidate.snapshot.declared_content_length,
+                        response_body_state="not_available",
+                        inspected_prefix_byte_count=0,
                     )
                     self.db.add(snapshot)
                     self.db.flush()
@@ -357,13 +393,19 @@ class StaticPageCrawler:
                     scan.not_modified_count += 1
                     scan.parse_reuse_count += 1
                     scan.reused_content_bytes += candidate.snapshot.blob.raw_byte_size
-                    return snapshot, anchors
+                    return snapshot, anchors, resource_references
                 result = await fetcher.get(
                     item.requested_url,
                     headers={"Accept": request_headers["accept"]},
                 )
             content_type = result.content_type
-            is_html = "text/html" in (content_type or "").lower() or not content_type
+            classification = classify_response(
+                url=result.final_url,
+                content_type=content_type,
+                content_disposition=result.headers.get("content-disposition"),
+                prefix=result.content[:4096],
+            )
+            is_html = classification.is_html
             blob = (
                 self.store.put_html(self.db, result.content, content_type, result.encoding)
                 if is_html
@@ -382,12 +424,13 @@ class StaticPageCrawler:
             )
             artifact = artifact_result.artifact if artifact_result else None
             anchors = artifact_result.anchors if artifact_result else []
+            resource_references = artifact_result.resource_references if artifact_result else []
             if artifact_result:
                 if artifact_result.parsed:
                     scan.full_parse_count += 1
                 else:
                     scan.parse_reuse_count += 1
-            scan.network_bytes_transferred += len(result.content)
+            scan.network_bytes_transferred += result.network_bytes_transferred
             snapshot = ResourceSnapshot(
                 scan_id=scan.id,
                 resource_id=resource.id,
@@ -411,9 +454,9 @@ class StaticPageCrawler:
                 meta_robots=artifact.meta_robots if artifact else None,
                 canonical_url=artifact.canonical_url if artifact else None,
                 parsed_head_json=artifact.parsed_head_json if artifact else None,
-                fetch_state="fetched" if is_html else "skipped",
-                error_type=None if is_html else "unsupported_content_type",
-                error_message=None if is_html else "Response was not HTML",
+                fetch_state="fetched",
+                error_type=None,
+                error_message=None,
                 retrieval_method="full_fetch_after_revalidation_fallback"
                 if candidate is not None
                 else "full_fetch"
@@ -422,55 +465,70 @@ class StaticPageCrawler:
                 parse_method=artifact_result.parse_method if artifact_result else "not_applicable",
                 retrieval_http_status=result.http_status,
                 retrieval_response_headers=result.headers,
-                network_bytes_transferred=len(result.content),
+                network_bytes_transferred=result.network_bytes_transferred,
                 request_variant_fingerprint=fingerprint,
                 etag=response_header_value(result.headers, "etag"),
                 last_modified=response_header_value(result.headers, "last-modified"),
                 cache_control=response_header_value(result.headers, "cache-control"),
                 vary_header=response_header_value(result.headers, "vary"),
+                representation_kind=classification.kind,
+                representation_rule=classification.rule,
+                normalized_mime_type=classification.normalized_mime_type,
+                file_extension=classification.file_extension,
+                content_disposition_filename=classification.content_disposition_filename,
+                declared_content_length=_content_length(result.headers),
+                response_body_state=result.response_body_state,
+                inspected_prefix_byte_count=result.inspected_prefix_byte_count,
             )
             self.db.add(snapshot)
             self.db.flush()
-            ensure_site_page(
-                self.db,
-                scan=scan,
-                resource=resource,
-                associated_at=snapshot.fetched_at,
-            )
-            if not is_html:
-                scan.skipped_count += 1
-            return snapshot, anchors
+            if is_html:
+                ensure_site_page(
+                    self.db,
+                    scan=scan,
+                    resource=resource,
+                    associated_at=snapshot.fetched_at,
+                )
+            return snapshot, anchors, resource_references
         except httpx.TooManyRedirects as exc:
-            return self._record_failure(scan, item, "too_many_redirects", str(exc)), []
+            return self._record_failure(scan, item, "too_many_redirects", str(exc)), [], []
         except ResponseTooLargeError as exc:
-            return self._record_failure(
-                scan, item, "response_too_large", str(exc), redirect_chain=exc.redirect_chain
-            ), []
+            return (
+                self._record_failure(
+                    scan, item, "response_too_large", str(exc), redirect_chain=exc.redirect_chain
+                ),
+                [],
+                [],
+            )
         except RedirectFailureError as exc:
-            return self._record_failure(
-                scan,
-                item,
-                exc.error_type,
-                str(exc),
-                final_url=exc.final_url,
-                http_status=exc.http_status,
-                response_headers=exc.response_headers,
-                redirect_chain=exc.redirect_chain,
-            ), []
+            return (
+                self._record_failure(
+                    scan,
+                    item,
+                    exc.error_type,
+                    str(exc),
+                    final_url=exc.final_url,
+                    http_status=exc.http_status,
+                    response_headers=exc.response_headers,
+                    redirect_chain=exc.redirect_chain,
+                ),
+                [],
+                [],
+            )
         except httpx.ConnectTimeout as exc:
-            return self._record_failure(scan, item, "connection_timeout", str(exc)), []
+            return self._record_failure(scan, item, "connection_timeout", str(exc)), [], []
         except httpx.ReadTimeout as exc:
-            return self._record_failure(scan, item, "read_timeout", str(exc)), []
+            return self._record_failure(scan, item, "read_timeout", str(exc)), [], []
         except httpx.ConnectError as exc:
-            return self._record_failure(scan, item, connect_error_type(exc), str(exc)), []
+            return self._record_failure(scan, item, connect_error_type(exc), str(exc)), [], []
         except (httpx.ReadError, httpx.RemoteProtocolError) as exc:
-            return self._record_failure(scan, item, connect_error_type(exc), str(exc)), []
+            return self._record_failure(scan, item, connect_error_type(exc), str(exc)), [], []
         except UnsafeDestinationError as exc:
-            return self._record_failure(scan, item, "unsafe_destination", str(exc)), []
+            return self._record_failure(scan, item, "unsafe_destination", str(exc)), [], []
         except httpx.InvalidURL as exc:
-            return self._record_failure(scan, item, "invalid_url", str(exc)), []
+            return self._record_failure(scan, item, "invalid_url", str(exc)), [], []
         except ValueError as exc:
-            return self._record_failure(scan, item, "invalid_url", str(exc)), []
+            return self._record_failure(scan, item, "invalid_url", str(exc)), [], []
 
     def _persist_anchors(
         self,
@@ -490,6 +548,10 @@ class StaticPageCrawler:
                 anchor.raw_href or "", snapshot.final_url or item.requested_url, seen
             )
             target = self._resource(result.normalized) if result.normalized else None
+            inferred = classify_response(
+                url=result.normalized.normalized_url if result.normalized else anchor.resolved_url,
+                content_type=None,
+            )
             self.db.add(
                 ResourceOccurrence(
                     source_snapshot_id=snapshot.id,
@@ -513,6 +575,9 @@ class StaticPageCrawler:
                     link_context_json=anchor.link_context_json,
                 )
             )
+            if target is not None and inferred.kind not in {"html_page", "unknown", "other"}:
+                self._discovered_resource_ids.add(target.id)
+                self._resource_reference_occurrence_count += 1
             if (
                 discover
                 and result.in_scope
@@ -529,6 +594,51 @@ class StaticPageCrawler:
                         item.depth + 1,
                     )
                 )
+
+    def _persist_resource_references(
+        self,
+        snapshot: ResourceSnapshot,
+        item: CrawlItem,
+        references: list[Any],
+        scope: ScopeEngine,
+    ) -> None:
+        for reference in references:
+            result = scope.evaluate(
+                reference.raw_url,
+                snapshot.final_url or item.requested_url,
+            )
+            if result.normalized is None:
+                continue
+            target = self._resource(result.normalized)
+            self.db.add(
+                ResourceReferenceOccurrence(
+                    source_snapshot_id=snapshot.id,
+                    target_resource_id=target.id,
+                    relation_type=reference.relation_type,
+                    element_tag=reference.element_tag,
+                    attribute_name=reference.attribute_name,
+                    raw_url=reference.raw_url,
+                    resolved_url=reference.resolved_url,
+                    normalized_target_url=result.normalized.normalized_url,
+                    inferred_kind=reference.inferred_kind,
+                    classification_rule=reference.classification_rule,
+                    dom_path=reference.dom_path,
+                    rel=reference.rel,
+                    media=reference.media,
+                    type_hint=reference.type_hint,
+                    as_hint=reference.as_hint,
+                    srcset_descriptor=reference.srcset_descriptor,
+                    alt_text=reference.alt_text,
+                    title=reference.title,
+                    width_attribute=reference.width_attribute,
+                    height_attribute=reference.height_attribute,
+                    in_scope=result.in_scope,
+                    scope_decision=result.decision,
+                    exclusion_reason=result.exclusion_reason,
+                )
+            )
+            self._discovered_resource_ids.add(target.id)
+            self._resource_reference_occurrence_count += 1
 
     def _replace_snapshot_outcome(
         self,
@@ -732,6 +842,17 @@ def _retry_decision(snapshot: ResourceSnapshot, config: ScopeConfig) -> RetryDec
             snapshot.retrieval_response_headers or {}, config.static_retry_max_delay_ms
         )
     return RetryDecision(True, f"http_{status}", retry_after_ms)
+
+
+def _content_length(headers: dict[str, Any]) -> int | None:
+    raw = next(
+        (value for key, value in headers.items() if key.casefold() == "content-length"), None
+    )
+    try:
+        value = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+    return value if value is not None and value >= 0 else None
 
 
 def _retry_delay_ms(

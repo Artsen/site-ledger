@@ -26,14 +26,15 @@ current implementations.
 ## Core Domain Model
 
 - WebsiteProperty is a saved Site with reusable configuration.
-- WebResource is the persistent Page identity.
+- WebResource is the persistent normalized URL identity shared by Page and Resource evidence.
 - SitePage associates a WebResource with one saved Site and owns Site-specific manual metadata.
-- ResourceSnapshot is one scan-specific Page observation.
+- ResourceSnapshot is one Scan-specific observation with representation classification.
 - ResourceOccurrence is one duplicate-preserving reference found in an observation.
 - ContentBlob stores exact compressed response evidence by SHA-256.
 - RenderedObservation optionally attaches browser evidence to one ResourceSnapshot; ArtifactBlob,
   RenderedArtifact, and bounded event rows preserve that evidence without changing static facts.
-- HtmlParseArtifact and HtmlParseAnchor store reusable deterministic parse output.
+- HtmlParseArtifact, HtmlParseAnchor, and HtmlParseResourceReference store reusable deterministic
+  parse output.
 - Scan stores one bounded collection run and its copied effective scope.
 - UrlSource, SourceRefresh, and UrlSourceEntry store URL-source configuration and Inventory.
 - ScanSeed and ScanSeedOrigin preserve explicit scan-input provenance.
@@ -48,13 +49,18 @@ Observation where the implementation names would be unnecessarily technical.
 - crawler.scope applies persisted scan scope and returns one deterministic decision per URL.
 - crawler.security validates destinations at the SSRF boundary.
 - crawler.safe_fetch performs bounded HTTP GET requests and validates redirects.
-- crawler.html_parser extracts head metadata and anchor provenance from best-effort HTML.
+- crawler.html_parser extracts head metadata, anchors, and embedded Resource references from
+  best-effort HTML.
 - crawler.static_crawler performs breadth-first traversal and persists partial results.
 - storage.content_store stores exact response bytes as gzip-compressed, content-addressed blobs.
 
 services.scan_execution owns queued Scan terminal state across static and optional rendered phases.
 Browser capture never discovers additional Pages and never replaces static HTML, parse artifacts,
 occurrences, or graph data. See [Browser-rendered observations](browser-rendered-observations.md).
+
+services.resource_queries aggregates observed non-HTML snapshots, anchor-linked files, and
+embedded references with set-based SQL. Embedded references are not automatically fetched and
+non-HTML response bodies are not retained. See [Resource Inventory](resource-inventory.md).
 
 The crawler does not execute JavaScript, submit forms, forward cookies, or send user credentials.
 Only HTTP and HTTPS are supported. Redirects are followed manually so every destination is checked
@@ -114,7 +120,7 @@ See [Background jobs](background-jobs.md).
 
 ## Page History And Reuse
 
-WebResource provides stable Page identity across scans. ResourceSnapshot retains one observation's
+WebResource provides stable normalized URL identity across scans. ResourceSnapshot retains one observation's
 requested URL, final URL, HTTP result, retrieval metadata, parsed metadata, evidence references, and
 error state.
 
@@ -163,12 +169,14 @@ See [Website graph](website-graph.md) and [Graph performance](graph-performance.
 
 ## API And Frontend
 
-app.api.routes exposes typed Site, Scan, Page observation, Source, Inventory, Graph, Activity, and
-HTML evidence endpoints. Existing API paths remain unversioned and stable.
+app.api.routes exposes typed Site, Scan, Page observation, Resource, Source, Inventory, Rendered,
+Graph, Activity, and HTML evidence endpoints. Existing API paths remain unversioned and stable.
 
 React routes cover new scans, scan history, scan details, scan observations, Sites, Site editing,
 Site Page catalogs, and persistent Page history. TanStack Query owns server state. URL parameters
 preserve tab, filter, pagination, graph, and presentation state where appropriate.
+Shared table pagination conventions and URL parameter isolation are documented in
+[Table pagination](table-pagination.md).
 
 Stored HTML is rendered only as escaped text. The raw HTML endpoint returns text/plain.
 
@@ -190,7 +198,7 @@ crawl behavior, or break operator configuration.
 
 ## Deferred Areas
 
-Browser rendering, screenshots, asset inventory, complete scan comparison, environment comparison,
+Resource-body storage, complete scan comparison, environment comparison,
 findings, accessibility and performance observations, analytics integrations, semantic analysis,
 investigation workflow, scheduling, notifications, authentication, and multi-user permissions are
 future direction.

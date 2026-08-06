@@ -9,10 +9,7 @@ from app.models import WebResource
 
 def get_or_create_resource(db: Session, normalized: NormalizedUrl) -> WebResource:
     resource = db.scalar(
-        select(WebResource).where(
-            WebResource.resource_type == "page",
-            WebResource.normalized_url == normalized.normalized_url,
-        )
+        select(WebResource).where(WebResource.normalized_url == normalized.normalized_url)
     )
     if resource:
         resource.last_seen_at = datetime.now(UTC)

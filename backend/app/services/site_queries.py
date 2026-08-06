@@ -68,8 +68,10 @@ def list_sites(
         "latest_scan_at": latest.c.created_at,
     }
     order_col = sort_map[sort]
+    order = order_col.desc() if direction == "desc" else order_col.asc()
+    id_order = WebsiteProperty.id.desc() if direction == "desc" else WebsiteProperty.id.asc()
     rows = db.execute(
-        query.order_by(order_col.desc() if direction == "desc" else order_col.asc())
+        query.order_by(order, id_order)
         .limit(limit)
         .offset(offset)
     ).all()

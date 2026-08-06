@@ -17,7 +17,7 @@ import { ScansPage } from "../src/pages/ScansPage";
 import { SiteDetailPage } from "../src/pages/SiteDetailPage";
 import { SiteFormPage } from "../src/pages/SiteFormPage";
 import { SitesPage } from "../src/pages/SitesPage";
-import type { PageList, Scan, Snapshot } from "../src/types/scans";
+import type { PageList, ResourceInventoryItem, Scan, Snapshot } from "../src/types/scans";
 
 const api = vi.hoisted(() => ({
   createScan: vi.fn(),
@@ -80,6 +80,11 @@ const api = vi.hoisted(() => ({
   getRenderedNetwork: vi.fn(),
   getRenderedConsole: vi.fn(),
   getRenderedErrors: vi.fn(),
+  listScanResources: vi.fn(),
+  getScanResourceSummary: vi.fn(),
+  listSiteResources: vi.fn(),
+  getSiteResourceSummary: vi.fn(),
+  listScanRenderedObservations: vi.fn(),
   renderedArtifactUrl: vi.fn((id: number) => `/api/rendered-artifacts/${id}/content`)
 }));
 
@@ -201,6 +206,11 @@ beforeEach(() => {
     service_workers: "blocked"
   });
   api.getRenderedObservation.mockRejectedValue(new Error("Snapshot has no rendered observation"));
+  api.listScanResources.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  api.listSiteResources.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  api.getScanResourceSummary.mockResolvedValue({ unique_resources: 0, observed_resources: 0, discovered_only_resources: 0, total_occurrences: 0, kind_counts: {} });
+  api.getSiteResourceSummary.mockResolvedValue({ unique_resources: 0, observed_resources: 0, discovered_only_resources: 0, total_occurrences: 0, kind_counts: {} });
+  api.listScanRenderedObservations.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
   api.cancelScan.mockResolvedValue({ ...scanFixture, status: "cancelled" });
   api.getScanDeletePreview.mockResolvedValue({
     scan_id: 1,
@@ -365,6 +375,44 @@ describe("new scan workflow", () => {
 });
 
 describe("scan results workflow", () => {
+  it("lists and filters observed and discovered Resources", async () => {
+    api.getScan.mockResolvedValue({ ...scanFixture, resource_discovered_count: 2 });
+    api.getScanResourceSummary.mockResolvedValue({ unique_resources: 2, observed_resources: 1, discovered_only_resources: 1, total_occurrences: 4, kind_counts: { document: 1, image: 1, script: 0, stylesheet: 0, font: 0 } });
+    api.listScanResources.mockResolvedValue({
+      total: 2, limit: 50, offset: 0, items: [
+        resourceFixture({ resource_id: 21, normalized_url: "https://example.com/guide.pdf", effective_kind: "document", effective_kind_label: "Document", observed: true, discovered_only: false, normalized_mime_type: "application/pdf", http_status: 200 }),
+        resourceFixture({ resource_id: 22, normalized_url: "https://example.com/hero.webp", effective_kind: "image", effective_kind_label: "Image", observed: false, discovered_only: true, normalized_mime_type: null, http_status: null })
+      ]
+    });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=resources");
+
+    expect(await screen.findByText("https://example.com/guide.pdf")).toBeInTheDocument();
+    expect(screen.getByText("https://example.com/hero.webp")).toBeInTheDocument();
+    expect(screen.getAllByText("Observed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Discovered only").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Document").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("navigation", { name: "Resources pagination" })).toHaveLength(2);
+    fireEvent.change(screen.getAllByLabelText("Resource rows per page")[0], { target: { value: "100" } });
+    await waitFor(() => expect(screen.getAllByLabelText("Resource rows per page").every((control) => (control as HTMLSelectElement).value === "100")).toBe(true));
+    await waitFor(() => expect(api.listScanResources).toHaveBeenLastCalledWith("1", expect.stringContaining("limit=100")));
+    fireEvent.change(screen.getByLabelText("Resource kind"), { target: { value: "document" } });
+    await waitFor(() => expect(api.listScanResources).toHaveBeenLastCalledWith("1", expect.stringContaining("resource_kind=document")));
+  });
+
+  it("lists rendered observations and links to exact evidence", async () => {
+    api.getScan.mockResolvedValue({ ...scanFixture, rendered_attempted_count: 1, scope_config: { ...scanFixture.scope_config, render_mode: "starting_page" } });
+    api.listScanRenderedObservations.mockResolvedValue({ items: [{
+      id: 31, snapshot_id: 9, capture_state: "completed_with_warnings", static_final_url: "https://example.com/page", page_title: "Rendered Page", navigation_http_status: 200, duration_ms: 450, warning_count: 1, page_error_count: 0, blocked_request_count: 2, console_message_count: 1, has_viewport_screenshot: true, has_full_page_screenshot: false, has_rendered_dom: true, started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z"
+    }], total: 1, limit: 50, offset: 0 });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=rendered");
+
+    const link = await screen.findByRole("link", { name: "Open rendered evidence for https://example.com/page" });
+    expect(screen.getAllByRole("navigation", { name: "rendered captures pagination" })).toHaveLength(2);
+    expect(link).toHaveAttribute("href", "/scans/1/pages/9?tab=rendered");
+    fireEvent.change(screen.getByLabelText("Rendered capture state"), { target: { value: "completed_with_warnings" } });
+    await waitFor(() => expect(api.listScanRenderedObservations).toHaveBeenLastCalledWith("1", expect.stringContaining("capture_state=completed_with_warnings")));
+  });
+
   it("distinguishes retry attempts from final failed pages", async () => {
     api.getScan.mockResolvedValue({
       ...scanFixture,
@@ -396,6 +444,7 @@ describe("scan results workflow", () => {
     renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=pages");
 
     await screen.findByText("No pages recorded");
+    expect(screen.getAllByRole("navigation", { name: "Pages pagination" })).toHaveLength(2);
     expect(screen.getByText("Completed")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Search pages"), { target: { value: "pricing" } });
@@ -548,6 +597,7 @@ describe("saved sites workflow", () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages");
 
     expect(await screen.findByText("https://example.com/page")).toBeInTheDocument();
+    expect(screen.getAllByRole("navigation", { name: "Pages pagination" })).toHaveLength(2);
     expect(screen.getByText("Observed Page")).toBeInTheDocument();
     expect(api.listSitePages).toHaveBeenCalledWith("3", expect.stringContaining(""));
 
@@ -591,6 +641,67 @@ describe("scan history workflow", () => {
 });
 
 describe("page detail workflow", () => {
+  it("keeps the associated Site Page workspace action visible across observation tabs", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshotFixture,
+      website_property_id: 3,
+      website_property_name: "Example Site",
+      site_page_id: 12,
+      has_persistent_page: true,
+      is_html_page: true,
+    });
+    api.getRenderedObservation.mockResolvedValue(renderedObservationFixture);
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+
+    const actionName = "Open Page workspace for Example page";
+    const action = await screen.findByRole("link", { name: actionName });
+    expect(action).toHaveAttribute("href", "/sites/3/pages/2");
+    expect(screen.getByText("Example Site")).toBeInTheDocument();
+    expect(screen.getByText(/This observation records what Site Ledger found/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Scan Pages" })).toBeInTheDocument();
+    expect(screen.getByTestId("observation-header-actions")).toHaveClass("flex-wrap");
+
+    for (const tabName of ["Head", "Outgoing links", "Inbound links", "HTML", "Rendered"]) {
+      fireEvent.click(screen.getByRole("tab", { name: new RegExp(tabName, "i") }));
+      expect(screen.getByRole("link", { name: actionName })).toHaveAttribute("href", "/sites/3/pages/2");
+    }
+  });
+
+  it("explains ad hoc and missing legacy Page workspace associations", async () => {
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+    expect(await screen.findByText(/ad hoc Scan and has no Site-scoped Page workspace/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open Page workspace/ })).not.toBeInTheDocument();
+
+    cleanup();
+    api.getSnapshot.mockResolvedValue({
+      ...snapshotFixture,
+      website_property_id: 8,
+      website_property_name: "Legacy Site",
+      site_page_id: null,
+      has_persistent_page: false,
+    });
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+    expect(await screen.findByText(/persistent Page workspace association is unavailable/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open Page workspace/ })).not.toBeInTheDocument();
+  });
+
+  it("does not offer a Page workspace for a non-HTML Resource observation", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshotFixture,
+      content_type: "application/pdf",
+      representation_kind: "document",
+      website_property_id: 3,
+      website_property_name: "Example Site",
+      site_page_id: 12,
+      has_persistent_page: false,
+      is_html_page: false,
+    });
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+    expect(await screen.findByText(/non-HTML Resource and does not have a Page workspace/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open Page workspace/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open live Resource" })).toBeInTheDocument();
+  });
+
   it("renders redirect chains as ordered fields", async () => {
     renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
 
@@ -644,15 +755,7 @@ describe("page detail workflow", () => {
   });
 
   it("inspects a browser-rendered observation without executing its DOM", async () => {
-    api.getRenderedObservation.mockResolvedValue({
-      id: 7, snapshot_id: 9, capture_state: "completed", started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z",
-      requested_url: "https://example.com/", final_url: "https://example.com/", navigation_http_status: 200, document_title: "Rendered",
-      browser_engine: "chromium", browser_version: "151", playwright_version: "1.62", renderer_version: "1", browser_policy_version: "1", capture_schema_version: "1",
-      user_agent: "Chromium", viewport_width: 1440, viewport_height: 900, device_scale_factor: 1, locale: "en-US", timezone_id: "UTC", color_scheme: "light", reduced_motion: "reduce",
-      readiness_state: "load", load_event_reached: true, fonts_ready_reached: true, duration_ms: 500, configuration_fingerprint: "a".repeat(64), network_entry_count: 1,
-      blocked_request_count: 0, console_message_count: 0, page_error_count: 0, warning_count: 0, network_truncated: false, console_truncated: false,
-      page_errors_truncated: false, total_encoded_network_bytes: 1200, error_type: null, error_message: null, warnings_json: [], artifacts: []
-    });
+    api.getRenderedObservation.mockResolvedValue(renderedObservationFixture);
     renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
     fireEvent.click(await screen.findByRole("tab", { name: "Rendered" }));
     expect(await screen.findByText(/chromium 151/i)).toBeInTheDocument();
@@ -702,6 +805,41 @@ function renderShell(initialEntry: string) {
       </MemoryRouter>
     </QueryClientProvider>
   );
+}
+
+function resourceFixture(overrides: Partial<ResourceInventoryItem>): ResourceInventoryItem {
+  return {
+    resource_id: 1,
+    normalized_url: "https://example.com/resource",
+    host: "example.com",
+    path: "/resource",
+    file_extension: null,
+    effective_kind: "other",
+    effective_kind_label: "Other",
+    classification_source: "extension",
+    observed: false,
+    discovered_only: true,
+    snapshot_id: null,
+    final_url: null,
+    http_status: null,
+    normalized_mime_type: null,
+    content_disposition_filename: null,
+    declared_content_length: null,
+    network_bytes_transferred: null,
+    fetched_at: null,
+    response_time_ms: null,
+    occurrence_count: 1,
+    source_page_count: 1,
+    anchor_occurrence_count: 0,
+    embedded_occurrence_count: 1,
+    in_scope_occurrence_count: 1,
+    out_of_scope_occurrence_count: 0,
+    first_discovered_at: "2026-08-06T01:00:00Z",
+    latest_discovered_at: "2026-08-06T01:00:00Z",
+    observation_count: 0,
+    scan_count: 1,
+    ...overrides
+  };
 }
 
 const scanFixture: Scan = {
@@ -848,7 +986,22 @@ const snapshotFixture: Snapshot = {
   etag: '"abc"',
   last_modified: "Wed, 05 Aug 2026 00:00:00 GMT",
   cache_control: null,
-  vary_header: null
+  vary_header: null,
+  website_property_id: null,
+  website_property_name: null,
+  site_page_id: null,
+  has_persistent_page: false,
+  is_html_page: true
+};
+
+const renderedObservationFixture = {
+  id: 7, snapshot_id: 9, capture_state: "completed", started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z",
+  requested_url: "https://example.com/", final_url: "https://example.com/", navigation_http_status: 200, document_title: "Rendered",
+  browser_engine: "chromium", browser_version: "151", playwright_version: "1.62", renderer_version: "1", browser_policy_version: "1", capture_schema_version: "1",
+  user_agent: "Chromium", viewport_width: 1440, viewport_height: 900, device_scale_factor: 1, locale: "en-US", timezone_id: "UTC", color_scheme: "light", reduced_motion: "reduce",
+  readiness_state: "load", load_event_reached: true, fonts_ready_reached: true, duration_ms: 500, configuration_fingerprint: "a".repeat(64), network_entry_count: 1,
+  blocked_request_count: 0, console_message_count: 0, page_error_count: 0, warning_count: 0, network_truncated: false, console_truncated: false,
+  page_errors_truncated: false, total_encoded_network_bytes: 1200, error_type: null, error_message: null, warnings_json: [], artifacts: []
 };
 
 const linkFixtures = [

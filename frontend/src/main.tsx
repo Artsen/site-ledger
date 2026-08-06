@@ -6,6 +6,7 @@ import { Navigate, RouterProvider, createBrowserRouter } from "react-router-dom"
 import { AppShell } from "./components/AppShell";
 import { PageDetailPage } from "./pages/PageDetailPage";
 import { PersistentPageDetailPage } from "./pages/PersistentPageDetailPage";
+import { ResourceDetailPage } from "./pages/ResourceDetailPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
 import { ScansPage } from "./pages/ScansPage";
 import { SiteDetailPage } from "./pages/SiteDetailPage";
@@ -24,11 +25,13 @@ const router = createBrowserRouter([
       { path: "sites/new", element: <SiteFormPage mode="create" /> },
       { path: "sites/:siteId", element: <SiteDetailPage /> },
       { path: "sites/:siteId/pages/:resourceId", element: <PersistentPageDetailPage /> },
+      { path: "sites/:siteId/resources/:resourceId", element: <ResourceDetailPage scope="site" /> },
       { path: "sites/:siteId/edit", element: <SiteFormPage mode="edit" /> },
       { path: "scans", element: <ScansPage /> },
       { path: "scans/new", element: <NewScanPage /> },
       { path: "scans/:scanId", element: <ScanDetailPage /> },
-      { path: "scans/:scanId/pages/:snapshotId", element: <PageDetailPage /> }
+      { path: "scans/:scanId/pages/:snapshotId", element: <PageDetailPage /> },
+      { path: "scans/:scanId/resources/:resourceId", element: <ResourceDetailPage scope="scan" /> }
     ]
   }
 ]);
