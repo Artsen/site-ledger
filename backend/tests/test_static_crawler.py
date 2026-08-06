@@ -386,7 +386,7 @@ async def test_complete_fixture_crawl(db_session, tmp_path) -> None:
 
     snapshots = db_session.query(ResourceSnapshot).all()
     occurrences = db_session.query(ResourceOccurrence).all()
-    assert scan.status == "completed_with_errors"
+    assert scan.status == "completed"
     assert {snapshot.http_status for snapshot in snapshots} >= {200, 404, 500}
     assert db_session.query(ContentBlob).count() >= 3
     assert (
@@ -401,6 +401,10 @@ async def test_complete_fixture_crawl(db_session, tmp_path) -> None:
     )
     assert any(occ.scope_decision == "excluded_path" for occ in occurrences)
     assert any(occ.scope_decision == "external" for occ in occurrences)
+    text_snapshot = next(item for item in snapshots if item.requested_url.endswith("/file.txt"))
+    assert text_snapshot.fetch_state == "fetched"
+    assert text_snapshot.representation_kind == "document"
+    assert text_snapshot.error_type is None
 
 
 @pytest.mark.asyncio
@@ -578,7 +582,7 @@ async def test_response_size_limits_are_enforced_while_streaming(db_session, tmp
         .all()
     )
     assert scan.status == "completed_with_errors"
-    assert len(oversized) == 2
+    assert len(oversized) == 1
     assert all(snapshot.html_blob_id is None for snapshot in oversized)
     assert db_session.query(ContentBlob).count() == 1
 

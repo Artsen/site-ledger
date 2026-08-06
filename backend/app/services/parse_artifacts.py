@@ -5,11 +5,17 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.crawler.html_parser import AnchorData, ParsedHtml, parse_html
-from app.models import ContentBlob, HtmlParseAnchor, HtmlParseArtifact, ResourceSnapshot
+from app.crawler.html_parser import AnchorData, ParsedHtml, ResourceReferenceData, parse_html
+from app.models import (
+    ContentBlob,
+    HtmlParseAnchor,
+    HtmlParseArtifact,
+    HtmlParseResourceReference,
+    ResourceSnapshot,
+)
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
-HTML_PARSER_VERSION = "html-parser-v2-link-roles"
+HTML_PARSER_VERSION = "html-parser-v3-resource-references"
 HTML_PARSER_CONFIG_VERSION = "default-v1"
 
 
@@ -17,6 +23,7 @@ HTML_PARSER_CONFIG_VERSION = "default-v1"
 class ArtifactResult:
     artifact: HtmlParseArtifact
     anchors: list[AnchorData]
+    resource_references: list[ResourceReferenceData]
     parsed: bool
 
     @property
@@ -59,15 +66,26 @@ def get_or_create_artifact(
         return ArtifactResult(
             artifact=existing,
             anchors=load_artifact_anchors(db, existing),
+            resource_references=load_artifact_resource_references(db, existing),
             parsed=False,
         )
 
     parsed = parse_html(content, resolution_base_url)
     if existing is not None:
-        return ArtifactResult(artifact=existing, anchors=parsed.anchors, parsed=True)
+        return ArtifactResult(
+            artifact=existing,
+            anchors=parsed.anchors,
+            resource_references=parsed.resource_references,
+            parsed=True,
+        )
 
     artifact = _create_artifact(db, blob, resolution_base_url, parsed)
-    return ArtifactResult(artifact=artifact, anchors=parsed.anchors, parsed=True)
+    return ArtifactResult(
+        artifact=artifact,
+        anchors=parsed.anchors,
+        resource_references=parsed.resource_references,
+        parsed=True,
+    )
 
 
 def ensure_artifact_for_snapshot(
@@ -116,6 +134,42 @@ def load_artifact_anchors(db: Session, artifact: HtmlParseArtifact) -> list[Anch
     ]
 
 
+def load_artifact_resource_references(
+    db: Session, artifact: HtmlParseArtifact
+) -> list[ResourceReferenceData]:
+    rows = db.scalars(
+        select(HtmlParseResourceReference)
+        .where(HtmlParseResourceReference.parse_artifact_id == artifact.id)
+        .order_by(HtmlParseResourceReference.position)
+    )
+    return [
+        ResourceReferenceData(
+            position=row.position,
+            relation_type=row.relation_type,
+            element_tag=row.element_tag,
+            attribute_name=row.attribute_name,
+            raw_url=row.raw_url or "",
+            resolved_url=row.resolved_url or "",
+            inferred_kind=row.inferred_kind,
+            classification_rule=row.classification_rule,
+            dom_path=row.dom_path or "",
+            rel=row.rel,
+            media=row.media,
+            type_hint=row.type_hint,
+            as_hint=row.as_hint,
+            srcset_descriptor=row.srcset_descriptor,
+            alt_text=row.alt_text,
+            title=row.title,
+            width_attribute=row.width_attribute,
+            height_attribute=row.height_attribute,
+            crossorigin=row.crossorigin,
+            loading=row.loading,
+            context_json=row.context_json or {},
+        )
+        for row in rows
+    ]
+
+
 def _create_artifact(
     db: Session,
     blob: ContentBlob,
@@ -137,6 +191,7 @@ def _create_artifact(
         head_sha256=parsed.head_sha256,
         parsed_head_json=parsed.head_json,
         anchor_count=len(parsed.anchors),
+        resource_reference_count=len(parsed.resource_references),
     )
     db.add(artifact)
     db.flush()
@@ -157,6 +212,33 @@ def _create_artifact(
             link_context_json=anchor.link_context_json,
         )
         for index, anchor in enumerate(parsed.anchors)
+    )
+    db.add_all(
+        HtmlParseResourceReference(
+            parse_artifact_id=artifact.id,
+            position=reference.position,
+            relation_type=reference.relation_type,
+            element_tag=reference.element_tag,
+            attribute_name=reference.attribute_name,
+            raw_url=reference.raw_url,
+            resolved_url=reference.resolved_url,
+            inferred_kind=reference.inferred_kind,
+            classification_rule=reference.classification_rule,
+            dom_path=reference.dom_path,
+            rel=reference.rel,
+            media=reference.media,
+            type_hint=reference.type_hint,
+            as_hint=reference.as_hint,
+            srcset_descriptor=reference.srcset_descriptor,
+            alt_text=reference.alt_text,
+            title=reference.title,
+            width_attribute=reference.width_attribute,
+            height_attribute=reference.height_attribute,
+            crossorigin=reference.crossorigin,
+            loading=reference.loading,
+            context_json=reference.context_json,
+        )
+        for reference in parsed.resource_references
     )
     db.flush()
     return artifact

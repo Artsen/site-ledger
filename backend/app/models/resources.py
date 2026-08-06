@@ -59,6 +59,10 @@ class Scan(Base):
     static_connection_timeout_count: Mapped[int] = mapped_column(Integer, default=0)
     static_read_timeout_count: Mapped[int] = mapped_column(Integer, default=0)
     static_connection_error_count: Mapped[int] = mapped_column(Integer, default=0)
+    html_page_observed_count: Mapped[int] = mapped_column(Integer, default=0)
+    resource_observed_count: Mapped[int] = mapped_column(Integer, default=0)
+    resource_discovered_count: Mapped[int] = mapped_column(Integer, default=0)
+    resource_reference_occurrence_count: Mapped[int] = mapped_column(Integer, default=0)
     stop_reason: Mapped[str | None] = mapped_column(String(128))
     fatal_error_message: Mapped[str | None] = mapped_column(Text)
 
@@ -137,9 +141,13 @@ class WebResource(Base):
     source_entries: Mapped[list["UrlSourceEntry"]] = relationship(back_populates="resource")
     scan_seeds: Mapped[list["ScanSeed"]] = relationship(back_populates="resource")
     site_pages: Mapped[list["SitePage"]] = relationship(back_populates="resource")
+    resource_reference_occurrences: Mapped[list["ResourceReferenceOccurrence"]] = relationship(
+        back_populates="target_resource"
+    )
 
     __table_args__ = (
         UniqueConstraint("resource_type", "normalized_url", name="uq_resource_type_url"),
+        Index("ux_web_resources_normalized_url", "normalized_url", unique=True),
     )
 
 
@@ -179,10 +187,14 @@ class HtmlParseArtifact(Base):
     head_sha256: Mapped[str] = mapped_column(String(64), index=True)
     parsed_head_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     anchor_count: Mapped[int] = mapped_column(Integer, default=0)
+    resource_reference_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     content_blob: Mapped[ContentBlob] = relationship(back_populates="parse_artifacts")
     anchors: Mapped[list["HtmlParseAnchor"]] = relationship(
+        back_populates="parse_artifact", cascade="all, delete-orphan"
+    )
+    resource_references: Mapped[list["HtmlParseResourceReference"]] = relationship(
         back_populates="parse_artifact", cascade="all, delete-orphan"
     )
     snapshots: Mapped[list["ResourceSnapshot"]] = relationship(back_populates="parse_artifact")
@@ -223,6 +235,45 @@ class HtmlParseAnchor(Base):
     __table_args__ = (
         UniqueConstraint("parse_artifact_id", "position", name="uq_parse_anchor_position"),
         Index("ix_parse_anchor_artifact_position", "parse_artifact_id", "position"),
+    )
+
+
+class HtmlParseResourceReference(Base):
+    __tablename__ = "html_parse_resource_references"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    parse_artifact_id: Mapped[int] = mapped_column(
+        ForeignKey("html_parse_artifacts.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    relation_type: Mapped[str] = mapped_column(String(32), index=True)
+    element_tag: Mapped[str] = mapped_column(String(32))
+    attribute_name: Mapped[str] = mapped_column(String(32))
+    raw_url: Mapped[str | None] = mapped_column(Text)
+    resolved_url: Mapped[str | None] = mapped_column(Text)
+    inferred_kind: Mapped[str] = mapped_column(String(32), index=True)
+    classification_rule: Mapped[str] = mapped_column(String(64))
+    dom_path: Mapped[str | None] = mapped_column(Text)
+    rel: Mapped[str | None] = mapped_column(Text)
+    media: Mapped[str | None] = mapped_column(Text)
+    type_hint: Mapped[str | None] = mapped_column(String(255))
+    as_hint: Mapped[str | None] = mapped_column(String(64))
+    srcset_descriptor: Mapped[str | None] = mapped_column(String(64))
+    alt_text: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)
+    width_attribute: Mapped[str | None] = mapped_column(String(32))
+    height_attribute: Mapped[str | None] = mapped_column(String(32))
+    crossorigin: Mapped[str | None] = mapped_column(String(64))
+    loading: Mapped[str | None] = mapped_column(String(64))
+    context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+    parse_artifact: Mapped[HtmlParseArtifact] = relationship(back_populates="resource_references")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "parse_artifact_id", "position", name="uq_parse_resource_reference_position"
+        ),
+        Index("ix_parse_resource_reference_artifact_position", "parse_artifact_id", "position"),
     )
 
 
@@ -270,6 +321,14 @@ class ResourceSnapshot(Base):
     last_modified: Mapped[str | None] = mapped_column(Text)
     cache_control: Mapped[str | None] = mapped_column(Text)
     vary_header: Mapped[str | None] = mapped_column(Text)
+    representation_kind: Mapped[str | None] = mapped_column(String(32), index=True)
+    representation_rule: Mapped[str | None] = mapped_column(String(64))
+    normalized_mime_type: Mapped[str | None] = mapped_column(String(255), index=True)
+    file_extension: Mapped[str | None] = mapped_column(String(32), index=True)
+    content_disposition_filename: Mapped[str | None] = mapped_column(String(255))
+    declared_content_length: Mapped[int | None] = mapped_column(Integer)
+    response_body_state: Mapped[str | None] = mapped_column(String(32))
+    inspected_prefix_byte_count: Mapped[int] = mapped_column(Integer, default=0)
 
     scan: Mapped[Scan] = relationship(back_populates="snapshots")
     resource: Mapped[WebResource] = relationship(back_populates="snapshots")
@@ -281,6 +340,9 @@ class ResourceSnapshot(Base):
         remote_side=[id], foreign_keys=[reused_from_snapshot_id]
     )
     occurrences: Mapped[list["ResourceOccurrence"]] = relationship(back_populates="source_snapshot")
+    resource_reference_occurrences: Mapped[list["ResourceReferenceOccurrence"]] = relationship(
+        back_populates="source_snapshot", cascade="all, delete-orphan"
+    )
     rendered_observation: Mapped["RenderedObservation | None"] = relationship(
         back_populates="snapshot", uselist=False, cascade="all, delete-orphan"
     )
@@ -293,6 +355,8 @@ class ResourceSnapshot(Base):
     __table_args__ = (
         Index("ix_snapshot_scan_resource", "scan_id", "resource_id"),
         Index("ix_snapshot_resource_fetched", "resource_id", "fetched_at", "id"),
+        Index("ix_snapshot_scan_representation", "scan_id", "representation_kind"),
+        Index("ix_snapshot_resource_representation", "resource_id", "representation_kind"),
     )
 
 
@@ -373,6 +437,52 @@ class ResourceOccurrence(Base):
         from app.crawler.link_roles import LINK_ROLE_LABELS
 
         return LINK_ROLE_LABELS.get(self.link_role, "Unknown")
+
+
+class ResourceReferenceOccurrence(Base):
+    __tablename__ = "resource_reference_occurrences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("resource_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    target_resource_id: Mapped[int] = mapped_column(ForeignKey("web_resources.id"), index=True)
+    relation_type: Mapped[str] = mapped_column(String(32), index=True)
+    element_tag: Mapped[str] = mapped_column(String(32))
+    attribute_name: Mapped[str] = mapped_column(String(32))
+    raw_url: Mapped[str | None] = mapped_column(Text)
+    resolved_url: Mapped[str | None] = mapped_column(Text)
+    normalized_target_url: Mapped[str] = mapped_column(Text, index=True)
+    inferred_kind: Mapped[str] = mapped_column(String(32), index=True)
+    classification_rule: Mapped[str] = mapped_column(String(64))
+    dom_path: Mapped[str | None] = mapped_column(Text)
+    rel: Mapped[str | None] = mapped_column(Text)
+    media: Mapped[str | None] = mapped_column(Text)
+    type_hint: Mapped[str | None] = mapped_column(String(255))
+    as_hint: Mapped[str | None] = mapped_column(String(64))
+    srcset_descriptor: Mapped[str | None] = mapped_column(String(64))
+    alt_text: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)
+    width_attribute: Mapped[str | None] = mapped_column(String(32))
+    height_attribute: Mapped[str | None] = mapped_column(String(32))
+    in_scope: Mapped[bool] = mapped_column(default=False)
+    scope_decision: Mapped[str] = mapped_column(String(64), index=True)
+    exclusion_reason: Mapped[str | None] = mapped_column(Text)
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    source_snapshot: Mapped[ResourceSnapshot] = relationship(
+        back_populates="resource_reference_occurrences"
+    )
+    target_resource: Mapped[WebResource] = relationship(
+        back_populates="resource_reference_occurrences"
+    )
+
+    __table_args__ = (
+        Index("ix_resource_reference_source_kind", "source_snapshot_id", "inferred_kind"),
+        Index("ix_resource_reference_target_source", "target_resource_id", "source_snapshot_id"),
+    )
 
 
 class SitePage(Base):

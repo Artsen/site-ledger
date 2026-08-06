@@ -7,6 +7,7 @@ from lxml import html
 from lxml.etree import ParserError
 
 from app.crawler.link_roles import classify_link_role
+from app.crawler.resource_classification import classify_reference
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,31 @@ class AnchorData:
 
 
 @dataclass(frozen=True)
+class ResourceReferenceData:
+    position: int
+    relation_type: str
+    element_tag: str
+    attribute_name: str
+    raw_url: str
+    resolved_url: str
+    inferred_kind: str
+    classification_rule: str
+    dom_path: str
+    rel: str | None
+    media: str | None
+    type_hint: str | None
+    as_hint: str | None
+    srcset_descriptor: str | None
+    alt_text: str | None
+    title: str | None
+    width_attribute: str | None
+    height_attribute: str | None
+    crossorigin: str | None
+    loading: str | None
+    context_json: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ParsedHtml:
     html_language: str | None
     title: str | None
@@ -36,6 +62,7 @@ class ParsedHtml:
     head_json: dict[str, Any]
     head_sha256: str
     anchors: list[AnchorData]
+    resource_references: list[ResourceReferenceData]
 
 
 def parse_html(content: bytes, base_url: str) -> ParsedHtml:
@@ -114,6 +141,8 @@ def parse_html(content: bytes, base_url: str) -> ParsedHtml:
             )
         )
 
+    resource_references = _extract_resource_references(document, base_url)
+
     doc_encoding = _as_str(document.getroottree().docinfo.encoding)
     head_json = {
         "encoding": doc_encoding,
@@ -137,6 +166,169 @@ def parse_html(content: bytes, base_url: str) -> ParsedHtml:
         head_json=head_json,
         head_sha256=hashlib.sha256(head_bytes).hexdigest(),
         anchors=anchors,
+        resource_references=resource_references,
+    )
+
+
+def _extract_resource_references(document: Any, base_url: str) -> list[ResourceReferenceData]:
+    references: list[ResourceReferenceData] = []
+    for element in cast(
+        list[Any],
+        document.xpath(
+            "//img[@src or @srcset] | //picture/source[@src or @srcset] | "
+            "//input[translate(@type,'IMAGE','image')='image'][@src] | //script[@src] | "
+            "//link[@href] | //video[@src or @poster] | //audio[@src] | "
+            "//video/source[@src or @srcset] | //audio/source[@src or @srcset] | "
+            "//track[@src] | //object[@data] | //embed[@src]"
+        ),
+    ):
+        tag = str(element.tag).casefold()
+        rel = _as_str(element.get("rel"))
+        attributes = _resource_attributes(tag, element, rel)
+        for attribute_name, relation_type in attributes:
+            raw_value = _as_str(element.get(attribute_name))
+            candidates = (
+                _parse_srcset(raw_value) if attribute_name == "srcset" else [(raw_value, None)]
+            )
+            for raw_url, descriptor in candidates:
+                if raw_url is None or not _is_resource_url(raw_url):
+                    continue
+                resolved = urljoin(base_url, raw_url)
+                classification = classify_reference(
+                    url=resolved,
+                    element_tag=tag,
+                    attribute_name=attribute_name,
+                    rel=rel,
+                    as_hint=_as_str(element.get("as")),
+                )
+                owner = _reference_owner(element)
+                references.append(
+                    ResourceReferenceData(
+                        position=len(references),
+                        relation_type=relation_type,
+                        element_tag=tag,
+                        attribute_name=attribute_name,
+                        raw_url=raw_url,
+                        resolved_url=resolved,
+                        inferred_kind=classification.kind,
+                        classification_rule=classification.rule,
+                        dom_path=_dom_path(element),
+                        rel=rel,
+                        media=_as_str(element.get("media")),
+                        type_hint=_as_str(element.get("type")),
+                        as_hint=_as_str(element.get("as")),
+                        srcset_descriptor=descriptor,
+                        alt_text=_as_str(owner.get("alt")) if owner is not None else None,
+                        title=_as_str(element.get("title")),
+                        width_attribute=_as_str(owner.get("width")) if owner is not None else None,
+                        height_attribute=_as_str(owner.get("height"))
+                        if owner is not None
+                        else None,
+                        crossorigin=_as_str(element.get("crossorigin")),
+                        loading=_as_str(owner.get("loading")) if owner is not None else None,
+                        context_json={
+                            "owner_tag": str(owner.tag).casefold() if owner is not None else tag
+                        },
+                    )
+                )
+    return references
+
+
+def _resource_attributes(tag: str, element: Any, rel: str | None) -> list[tuple[str, str]]:
+    if tag == "link":
+        rel_tokens = set((rel or "").casefold().split())
+        supported = {
+            "stylesheet",
+            "icon",
+            "apple-touch-icon",
+            "mask-icon",
+            "preload",
+            "modulepreload",
+            "manifest",
+            "alternate",
+        }
+        if not rel_tokens.intersection(supported):
+            return []
+        relation = next((item for item in supported if item in rel_tokens), "link_resource")
+        return [("href", relation)]
+    if tag == "object":
+        return [("data", "embedded_object")]
+    if tag == "video":
+        result = []
+        if element.get("src") is not None:
+            result.append(("src", "video"))
+        if element.get("poster") is not None:
+            result.append(("poster", "poster"))
+        return result
+    result = []
+    if element.get("src") is not None:
+        result.append(("src", _relation_type(tag, element)))
+    if element.get("srcset") is not None:
+        result.append(("srcset", "responsive_image"))
+    return result
+
+
+def _relation_type(tag: str, element: Any) -> str:
+    if tag in {"img", "input"}:
+        return "image"
+    if tag == "script":
+        return "script"
+    if tag == "audio":
+        return "audio"
+    if tag in {"video", "track"}:
+        return "video"
+    if tag == "source":
+        parent = element.getparent()
+        return str(parent.tag).casefold() if parent is not None else "media_source"
+    if tag == "embed":
+        return "embedded_object"
+    return "embedded_resource"
+
+
+def _reference_owner(element: Any) -> Any:
+    if str(element.tag).casefold() == "source":
+        parent = element.getparent()
+        if parent is not None and str(parent.tag).casefold() == "picture":
+            images = parent.xpath("./img[1]")
+            if images:
+                return images[0]
+    return element
+
+
+def _parse_srcset(value: str | None) -> list[tuple[str, str | None]]:
+    if not value:
+        return []
+    candidates: list[tuple[str, str | None]] = []
+    for raw_candidate in value.split(","):
+        parts = raw_candidate.strip().split()
+        if not parts:
+            continue
+        descriptor = parts[1] if len(parts) == 2 and re_srcset_descriptor(parts[1]) else None
+        if len(parts) > 2:
+            continue
+        candidates.append((parts[0], descriptor))
+    return candidates
+
+
+def re_srcset_descriptor(value: str) -> bool:
+    if value.endswith("w"):
+        return value[:-1].isdigit() and int(value[:-1]) > 0
+    if value.endswith("x"):
+        try:
+            return float(value[:-1]) > 0
+        except ValueError:
+            return False
+    return False
+
+
+def _is_resource_url(value: str | None) -> bool:
+    if not value:
+        return False
+    candidate = value.strip()
+    return (
+        bool(candidate)
+        and not candidate.startswith("#")
+        and not candidate.casefold().startswith(("data:", "javascript:", "mailto:", "tel:"))
     )
 
 

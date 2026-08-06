@@ -134,10 +134,19 @@ def list_scan_pages(
     min_depth: int | None,
     max_depth: int | None,
     error_state: Literal["any", "with_errors", "without_errors"],
-    sort: Literal["requested_url", "status", "title", "depth", "duration"],
+    sort: Literal["requested_url", "status", "title", "depth", "duration", "rendered_state"],
     direction: Literal["asc", "desc"],
     limit: int,
     offset: int,
+    rendered_state: Literal[
+        "any",
+        "not_requested",
+        "captured",
+        "captured_with_warnings",
+        "failed",
+        "skipped",
+        "interrupted",
+    ] = "any",
 ) -> PageList:
     source_snapshot = aliased(ResourceSnapshot)
     inbound = (
@@ -169,11 +178,27 @@ def list_scan_pages(
         .join(WebResource)
         .outerjoin(inbound, inbound.c.resource_id == WebResource.id)
         .outerjoin(RenderedObservation, RenderedObservation.snapshot_id == ResourceSnapshot.id)
-        .where(ResourceSnapshot.scan_id == scan_id)
+        .where(
+            ResourceSnapshot.scan_id == scan_id,
+            or_(
+                ResourceSnapshot.representation_kind == "html_page",
+                ResourceSnapshot.html_blob_id.is_not(None),
+                ResourceSnapshot.content_type.ilike("text/html%"),
+                ResourceSnapshot.content_type.ilike("application/xhtml+xml%"),
+            ),
+        )
     )
     base = _apply_page_filters(
         base, search, status, host, path_prefix, depth, min_depth, max_depth, error_state
     )
+    if rendered_state == "not_requested":
+        base = base.where(RenderedObservation.id.is_(None))
+    elif rendered_state == "captured":
+        base = base.where(RenderedObservation.capture_state == "completed")
+    elif rendered_state == "captured_with_warnings":
+        base = base.where(RenderedObservation.capture_state == "completed_with_warnings")
+    elif rendered_state != "any":
+        base = base.where(RenderedObservation.capture_state == rendered_state)
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     sort_map = {
         "requested_url": ResourceSnapshot.requested_url,
@@ -181,6 +206,7 @@ def list_scan_pages(
         "title": ResourceSnapshot.page_title,
         "depth": ResourceSnapshot.crawl_depth,
         "duration": ResourceSnapshot.response_time_ms,
+        "rendered_state": func.coalesce(RenderedObservation.capture_state, "not_requested"),
     }
     order_col = sort_map[sort]
     rows = db.execute(

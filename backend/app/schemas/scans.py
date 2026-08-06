@@ -101,6 +101,10 @@ class ScanRead(BaseModel):
     static_connection_timeout_count: int = 0
     static_read_timeout_count: int = 0
     static_connection_error_count: int = 0
+    html_page_observed_count: int = 0
+    resource_observed_count: int = 0
+    resource_discovered_count: int = 0
+    resource_reference_occurrence_count: int = 0
     stop_reason: str | None
     fatal_error_message: str | None
     note_count: int = 0
@@ -257,6 +261,14 @@ class SnapshotRead(BaseModel):
     last_modified: str | None = None
     cache_control: str | None = None
     vary_header: str | None = None
+    representation_kind: str | None = None
+    representation_rule: str | None = None
+    normalized_mime_type: str | None = None
+    file_extension: str | None = None
+    content_disposition_filename: str | None = None
+    declared_content_length: int | None = None
+    response_body_state: str | None = None
+    inspected_prefix_byte_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -382,6 +394,9 @@ class ScanDeletePreview(BaseModel):
     status: str
     snapshots: int
     link_occurrences: int
+    resource_reference_occurrences: int = 0
+    resources_observed: int = 0
+    resources_discovered: int = 0
     unique_resources: int
     html_blobs_referenced: int
     exclusive_html_blobs: int
@@ -404,6 +419,7 @@ class ScanDeleteResult(BaseModel):
     deleted_scan_id: int
     snapshots_deleted: int
     link_occurrences_deleted: int
+    resource_reference_occurrences_deleted: int = 0
     resources_deleted: int
     html_blob_records_deleted: int
     html_blob_files_deleted: int
