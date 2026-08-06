@@ -9,7 +9,7 @@ from app.crawler.html_parser import AnchorData, ParsedHtml, parse_html
 from app.models import ContentBlob, HtmlParseAnchor, HtmlParseArtifact, ResourceSnapshot
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
-HTML_PARSER_VERSION = "html-parser-v1"
+HTML_PARSER_VERSION = "html-parser-v2-link-roles"
 HTML_PARSER_CONFIG_VERSION = "default-v1"
 
 
@@ -108,6 +108,9 @@ def load_artifact_anchors(db: Session, artifact: HtmlParseArtifact) -> list[Anch
             rel=row.rel,
             target=row.target,
             dom_path=row.dom_path or "",
+            link_role=row.link_role or "unknown",
+            link_role_rule=row.link_role_rule or "fallback_unknown",
+            link_context_json=row.link_context_json or {},
         )
         for row in rows
     ]
@@ -149,6 +152,9 @@ def _create_artifact(
             rel=anchor.rel,
             target=anchor.target,
             dom_path=anchor.dom_path,
+            link_role=anchor.link_role,
+            link_role_rule=anchor.link_role_rule,
+            link_context_json=anchor.link_context_json,
         )
         for index, anchor in enumerate(parsed.anchors)
     )

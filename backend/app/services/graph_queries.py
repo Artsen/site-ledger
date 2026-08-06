@@ -241,6 +241,10 @@ def list_graph_edge_occurrences(
                 in_scope=occurrence.in_scope,
                 scope_decision=occurrence.scope_decision,
                 exclusion_reason=occurrence.exclusion_reason,
+                link_role=occurrence.link_role,
+                link_role_label=occurrence.link_role_label,
+                link_role_rule=occurrence.link_role_rule,
+                link_context_json=occurrence.link_context_json,
                 discovered_at=occurrence.discovered_at,
                 is_self_link=source_snapshot.resource_id == target_resource_id,
             )
@@ -578,7 +582,11 @@ def _load_edge_details(
     db: Session, edge_keys: set[tuple[int, int]]
 ) -> defaultdict[tuple[int, int], dict[str, object]]:
     details: defaultdict[tuple[int, int], dict[str, object]] = defaultdict(
-        lambda: {"sample_anchor_texts": [], "scope_decisions": Counter()}
+        lambda: {
+            "sample_anchor_texts": [],
+            "scope_decisions": Counter(),
+            "role_counts": Counter(),
+        }
     )
     if not edge_keys:
         return details
@@ -592,6 +600,7 @@ def _load_edge_details(
             ResourceOccurrence.source_snapshot_id,
             ResourceOccurrence.target_resource_id,
             ResourceOccurrence.scope_decision,
+            ResourceOccurrence.link_role,
             func.count(ResourceOccurrence.id),
         )
         .where(
@@ -602,14 +611,18 @@ def _load_edge_details(
             ResourceOccurrence.source_snapshot_id,
             ResourceOccurrence.target_resource_id,
             ResourceOccurrence.scope_decision,
+            ResourceOccurrence.link_role,
         )
     )
-    for source_snapshot_id, target_resource_id, scope_decision, count in scope_rows:
+    for source_snapshot_id, target_resource_id, scope_decision, role, count in scope_rows:
         if target_resource_id is None:
             continue
         decisions = details[(source_snapshot_id, target_resource_id)]["scope_decisions"]
         if isinstance(decisions, Counter):
             decisions[scope_decision] += count
+        counts = details[(source_snapshot_id, target_resource_id)]["role_counts"]
+        if isinstance(counts, Counter):
+            counts[role or "legacy_unclassified"] += count
 
     anchor_rows = db.execute(
         select(
@@ -670,6 +683,7 @@ def _edge_from_aggregate(
     )
     sample_anchor_texts = detail["sample_anchor_texts"]
     scope_decisions = detail["scope_decisions"]
+    role_counts = detail.get("role_counts")
     return GraphEdgeRead(
         id=_edge_id(source_snapshot.id, target_resource_id),
         source=source_id,
@@ -687,6 +701,7 @@ def _edge_from_aggregate(
         first_discovered_at=first_discovered_at,
         last_discovered_at=last_discovered_at,
         scope_decisions=dict(scope_decisions) if isinstance(scope_decisions, Counter) else {},
+        role_counts=dict(role_counts) if isinstance(role_counts, Counter) else {},
         dom_regions=dom_regions,
     )
 

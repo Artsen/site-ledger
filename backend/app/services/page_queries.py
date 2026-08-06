@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
-from app.models import HtmlParseArtifact, ResourceSnapshot, Scan, WebResource, WebsiteProperty
+from app.models import (
+    HtmlParseArtifact,
+    Note,
+    PageCategory,
+    PageCategoryAssignment,
+    ResourceSnapshot,
+    Scan,
+    SitePage,
+    WebResource,
+    WebsiteProperty,
+)
+from app.schemas.page_workspaces import PageCategoryRead
 from app.schemas.scans import (
     PageObservationList,
     PageObservationRead,
@@ -22,88 +35,60 @@ def list_site_pages(
     search: str | None = None,
     host: str | None = None,
     path_prefix: str | None = None,
-    sort: Literal["url", "observations", "first_observed", "latest_observed"] = "url",
+    category_id: int | None = None,
+    uncategorized: bool = False,
+    workflow_status: str | None = None,
+    owner: str | None = None,
+    unassigned_owner: bool = False,
+    has_notes: bool | None = None,
+    min_observations: int | None = None,
+    sort: Literal[
+        "url", "observations", "first_observed", "latest_observed", "owner", "workflow"
+    ] = "url",
     direction: Literal["asc", "desc"] = "asc",
     limit: int = 50,
     offset: int = 0,
 ) -> PersistentPageList | None:
     if db.get(WebsiteProperty, site_id) is None:
         return None
-    latest_snapshot = aliased(ResourceSnapshot)
-    latest_id = (
-        select(latest_snapshot.id)
-        .join(Scan, latest_snapshot.scan_id == Scan.id)
-        .where(
-            Scan.website_property_id == site_id,
-            latest_snapshot.resource_id == WebResource.id,
-        )
-        .order_by(latest_snapshot.fetched_at.desc(), latest_snapshot.id.desc())
-        .limit(1)
-        .scalar_subquery()
+    base = _site_page_query(site_id)
+    base = _apply_page_filters(
+        base,
+        search=search,
+        host=host,
+        path_prefix=path_prefix,
+        category_id=category_id,
+        uncategorized=uncategorized,
+        workflow_status=workflow_status,
+        owner=owner,
+        unassigned_owner=unassigned_owner,
+        has_notes=has_notes,
+        min_observations=min_observations,
     )
-    base = (
-        select(
-            WebResource,
-            func.count(ResourceSnapshot.id).label("observation_count"),
-            func.min(ResourceSnapshot.fetched_at).label("first_observed_at"),
-            func.max(ResourceSnapshot.fetched_at).label("latest_observed_at"),
-            latest_id.label("latest_snapshot_id"),
-        )
-        .join(ResourceSnapshot, ResourceSnapshot.resource_id == WebResource.id)
-        .join(Scan, ResourceSnapshot.scan_id == Scan.id)
-        .where(Scan.website_property_id == site_id)
-        .group_by(WebResource.id)
-    )
-    base = _apply_page_filters(base, search, host, path_prefix)
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     sort_map: dict[str, Any] = {
         "url": WebResource.normalized_url,
-        "observations": "observation_count",
-        "first_observed": "first_observed_at",
-        "latest_observed": "latest_observed_at",
+        "observations": base.selected_columns.observation_count,
+        "first_observed": base.selected_columns.first_observed_at,
+        "latest_observed": base.selected_columns.latest_observed_at,
+        "owner": SitePage.owner_label,
+        "workflow": SitePage.workflow_status,
     }
-    sort_col = sort_map[sort]
-    if isinstance(sort_col, str):
-        ordered = base.order_by(
-            getattr(base.selected_columns, sort_col).desc()
-            if direction == "desc"
-            else getattr(base.selected_columns, sort_col).asc()
-        )
-    else:
-        ordered = base.order_by(sort_col.desc() if direction == "desc" else sort_col.asc())
-    rows = db.execute(ordered.limit(limit).offset(offset)).all()
-    latest_ids = [latest_snapshot_id for *_rest, latest_snapshot_id in rows if latest_snapshot_id]
-    latest_by_id = _latest_snapshot_map(db, latest_ids)
-    return PersistentPageList(
-        items=[
-            _page_read(
-                resource,
-                observation_count,
-                first_observed_at,
-                latest_observed_at,
-                latest_by_id.get(latest_snapshot_id),
-            )
-            for (
-                resource,
-                observation_count,
-                first_observed_at,
-                latest_observed_at,
-                latest_snapshot_id,
-            ) in rows
-        ],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    order = sort_map[sort].desc() if direction == "desc" else sort_map[sort].asc()
+    rows = db.execute(base.order_by(order, SitePage.id).limit(limit).offset(offset)).all()
+    return _page_list_from_rows(db, rows, total=total, limit=limit, offset=offset)
 
 
 def get_site_page(db: Session, site_id: int, resource_id: int) -> PersistentPageDetail | None:
     site = db.get(WebsiteProperty, site_id)
     if site is None:
         return None
-    page = _page_for_resource(db, site_id, resource_id)
-    if page is None:
+    row = db.execute(
+        _site_page_query(site_id).where(SitePage.resource_id == resource_id)
+    ).one_or_none()
+    if row is None:
         return None
+    page = _page_list_from_rows(db, [row], total=1, limit=1, offset=0).items[0]
     return PersistentPageDetail(page=page, site_id=site.id, site_name=site.name)
 
 
@@ -113,10 +98,22 @@ def list_page_observations(
     resource_id: int,
     *,
     scope: Literal["site", "all"] = "site",
+    scan_status: str | None = None,
+    http_status: int | None = None,
+    fetch_state: str | None = None,
+    error_state: Literal["any", "with_errors", "without_errors"] = "any",
+    retrieval_method: str | None = None,
+    parse_method: str | None = None,
+    direction: Literal["asc", "desc"] = "desc",
     limit: int = 50,
     offset: int = 0,
 ) -> PageObservationList | None:
-    if db.get(WebsiteProperty, site_id) is None:
+    if db.get(WebsiteProperty, site_id) is None or not db.scalar(
+        select(SitePage.id).where(
+            SitePage.website_property_id == site_id,
+            SitePage.resource_id == resource_id,
+        )
+    ):
         return None
     artifact = aliased(HtmlParseArtifact)
     query = (
@@ -128,11 +125,28 @@ def list_page_observations(
     )
     if scope == "site":
         query = query.where(Scan.website_property_id == site_id)
+    if scan_status:
+        query = query.where(Scan.status == scan_status)
+    if http_status is not None:
+        query = query.where(ResourceSnapshot.http_status == http_status)
+    if fetch_state:
+        query = query.where(ResourceSnapshot.fetch_state == fetch_state)
+    if error_state == "with_errors":
+        query = query.where(ResourceSnapshot.error_type.is_not(None))
+    elif error_state == "without_errors":
+        query = query.where(ResourceSnapshot.error_type.is_(None))
+    if retrieval_method:
+        query = query.where(ResourceSnapshot.retrieval_method == retrieval_method)
+    if parse_method:
+        query = query.where(ResourceSnapshot.parse_method == parse_method)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    ordering = (
+        ResourceSnapshot.fetched_at.desc()
+        if direction == "desc"
+        else ResourceSnapshot.fetched_at.asc()
+    )
     rows = db.execute(
-        query.order_by(ResourceSnapshot.fetched_at.desc(), ResourceSnapshot.id.desc())
-        .limit(limit)
-        .offset(offset)
+        query.order_by(ordering, ResourceSnapshot.id.desc()).limit(limit).offset(offset)
     ).all()
     return PageObservationList(
         items=[
@@ -142,6 +156,9 @@ def list_page_observations(
                 site_id=site.id if site else None,
                 site_name=site.name if site else None,
                 scan_created_at=scan.created_at,
+                scan_status=scan.status,
+                scan_started_at=scan.started_at,
+                scan_finished_at=scan.finished_at,
                 observed_at=snapshot.fetched_at,
                 requested_url=snapshot.requested_url,
                 final_url=snapshot.final_url,
@@ -172,101 +189,154 @@ def list_page_observations(
     )
 
 
-def _page_for_resource(db: Session, site_id: int, resource_id: int) -> PersistentPageRead | None:
+def _site_page_query(site_id: int) -> Select[Any]:
+    observations = (
+        select(
+            ResourceSnapshot.resource_id.label("resource_id"),
+            func.count(ResourceSnapshot.id).label("observation_count"),
+            func.min(ResourceSnapshot.fetched_at).label("first_observed_at"),
+            func.max(ResourceSnapshot.fetched_at).label("latest_observed_at"),
+        )
+        .join(Scan, Scan.id == ResourceSnapshot.scan_id)
+        .where(Scan.website_property_id == site_id)
+        .group_by(ResourceSnapshot.resource_id)
+        .subquery()
+    )
     latest_snapshot = aliased(ResourceSnapshot)
     latest_id = (
         select(latest_snapshot.id)
         .join(Scan, latest_snapshot.scan_id == Scan.id)
         .where(
             Scan.website_property_id == site_id,
-            latest_snapshot.resource_id == WebResource.id,
+            latest_snapshot.resource_id == SitePage.resource_id,
         )
         .order_by(latest_snapshot.fetched_at.desc(), latest_snapshot.id.desc())
         .limit(1)
         .scalar_subquery()
     )
-    row = db.execute(
+    return (
         select(
+            SitePage,
             WebResource,
-            func.count(ResourceSnapshot.id).label("observation_count"),
-            func.min(ResourceSnapshot.fetched_at).label("first_observed_at"),
-            func.max(ResourceSnapshot.fetched_at).label("latest_observed_at"),
+            func.coalesce(observations.c.observation_count, 0).label("observation_count"),
+            observations.c.first_observed_at,
+            observations.c.latest_observed_at,
             latest_id.label("latest_snapshot_id"),
         )
-        .join(ResourceSnapshot, ResourceSnapshot.resource_id == WebResource.id)
-        .join(Scan, ResourceSnapshot.scan_id == Scan.id)
-        .where(Scan.website_property_id == site_id, WebResource.id == resource_id)
-        .group_by(WebResource.id)
-    ).one_or_none()
-    if row is None:
-        return None
-    resource, observation_count, first_observed_at, latest_observed_at, latest_snapshot_id = row
-    latest_snapshot_obj = (
-        db.get(ResourceSnapshot, latest_snapshot_id) if latest_snapshot_id is not None else None
-    )
-    return _page_read(
-        resource,
-        observation_count,
-        first_observed_at,
-        latest_observed_at,
-        latest_snapshot_obj,
+        .join(WebResource, WebResource.id == SitePage.resource_id)
+        .outerjoin(observations, observations.c.resource_id == SitePage.resource_id)
+        .where(SitePage.website_property_id == site_id)
     )
 
 
-def _apply_page_filters(
-    query: Select[tuple[WebResource, int, object, object, int]],
-    search: str | None,
-    host: str | None,
-    path_prefix: str | None,
-) -> Select[tuple[WebResource, int, object, object, int]]:
+def _apply_page_filters(query: Select[Any], **filters: Any) -> Select[Any]:
+    search = filters["search"]
     if search:
         pattern = f"%{search}%"
         query = query.where(
-            or_(
-                WebResource.normalized_url.ilike(pattern),
-                WebResource.path.ilike(pattern),
-            )
+            or_(WebResource.normalized_url.ilike(pattern), WebResource.path.ilike(pattern))
         )
-    if host:
-        query = query.where(WebResource.host == host.lower())
-    if path_prefix:
-        query = query.where(WebResource.path.startswith(path_prefix))
+    if filters["host"]:
+        query = query.where(WebResource.host == filters["host"].lower())
+    if filters["path_prefix"]:
+        query = query.where(WebResource.path.startswith(filters["path_prefix"]))
+    if filters["workflow_status"]:
+        query = query.where(SitePage.workflow_status == filters["workflow_status"])
+    if filters["owner"]:
+        query = query.where(SitePage.owner_label.ilike(f"%{filters['owner']}%"))
+    if filters["unassigned_owner"]:
+        query = query.where(SitePage.owner_label.is_(None))
+    assignment_exists = select(PageCategoryAssignment.id).where(
+        PageCategoryAssignment.site_page_id == SitePage.id
+    )
+    if filters["category_id"] is not None:
+        query = query.where(
+            assignment_exists.where(
+                PageCategoryAssignment.category_id == filters["category_id"]
+            ).exists()
+        )
+    if filters["uncategorized"]:
+        query = query.where(~assignment_exists.exists())
+    note_exists = select(Note.id).where(Note.site_page_id == SitePage.id).exists()
+    if filters["has_notes"] is True:
+        query = query.where(note_exists)
+    elif filters["has_notes"] is False:
+        query = query.where(~note_exists)
+    if filters["min_observations"] is not None:
+        query = query.where(
+            func.coalesce(query.selected_columns.observation_count, 0)
+            >= filters["min_observations"]
+        )
     return query
 
 
-def _latest_snapshot_map(
-    db: Session, snapshot_ids: list[int | None]
-) -> dict[int | None, ResourceSnapshot]:
-    ids = [snapshot_id for snapshot_id in snapshot_ids if snapshot_id is not None]
-    if not ids:
-        return {}
-    snapshots = db.scalars(select(ResourceSnapshot).where(ResourceSnapshot.id.in_(ids)))
-    return {snapshot.id: snapshot for snapshot in snapshots}
-
-
-def _page_read(
-    resource: WebResource,
-    observation_count: int,
-    first_observed_at: object,
-    latest_observed_at: object,
-    latest_snapshot: ResourceSnapshot | None,
-) -> PersistentPageRead:
-    return PersistentPageRead(
-        resource_id=resource.id,
-        normalized_url=resource.normalized_url,
-        host=resource.host,
-        path=resource.path,
-        query=resource.query,
-        observation_count=observation_count,
-        first_observed_at=first_observed_at,
-        latest_observed_at=latest_observed_at,
-        latest_snapshot_id=latest_snapshot.id if latest_snapshot else None,
-        latest_scan_id=latest_snapshot.scan_id if latest_snapshot else None,
-        latest_http_status=latest_snapshot.http_status if latest_snapshot else None,
-        latest_title=latest_snapshot.page_title if latest_snapshot else None,
-        latest_retrieval_method=latest_snapshot.retrieval_method if latest_snapshot else None,
-        latest_parse_method=latest_snapshot.parse_method if latest_snapshot else None,
-        latest_reused_from_snapshot_id=latest_snapshot.reused_from_snapshot_id
-        if latest_snapshot
-        else None,
+def _page_list_from_rows(
+    db: Session, rows: Sequence[Any], *, total: int, limit: int, offset: int
+) -> PersistentPageList:
+    site_page_ids = [row[0].id for row in rows]
+    latest_ids = [row[5] for row in rows if row[5] is not None]
+    latest = (
+        {
+            snapshot.id: snapshot
+            for snapshot in db.scalars(
+                select(ResourceSnapshot).where(ResourceSnapshot.id.in_(latest_ids))
+            )
+        }
+        if latest_ids
+        else {}
     )
+    categories: dict[int, list[PageCategoryRead]] = defaultdict(list)
+    if site_page_ids:
+        category_rows = db.execute(
+            select(PageCategoryAssignment.site_page_id, PageCategory)
+            .join(PageCategory, PageCategory.id == PageCategoryAssignment.category_id)
+            .where(PageCategoryAssignment.site_page_id.in_(site_page_ids))
+            .order_by(PageCategory.sort_order, PageCategory.normalized_name)
+        ).all()
+        for site_page_id, category in category_rows:
+            categories[site_page_id].append(PageCategoryRead.model_validate(category))
+    note_counts: dict[int, int] = {}
+    if site_page_ids:
+        for site_page_id, count in db.execute(
+            select(Note.site_page_id, func.count(Note.id))
+            .where(Note.site_page_id.in_(site_page_ids))
+            .group_by(Note.site_page_id)
+        ):
+            if site_page_id is not None:
+                note_counts[site_page_id] = count
+    items = []
+    for site_page, resource, count, first_at, latest_at, latest_id in rows:
+        snapshot = latest.get(latest_id)
+        assigned = categories[site_page.id]
+        items.append(
+            PersistentPageRead(
+                site_page_id=site_page.id,
+                resource_id=resource.id,
+                normalized_url=resource.normalized_url,
+                host=resource.host,
+                path=resource.path,
+                query=resource.query,
+                owner_label=site_page.owner_label,
+                workflow_status=site_page.workflow_status,
+                categories=assigned,
+                category_count=len(assigned),
+                note_count=note_counts.get(site_page.id, 0),
+                associated_at=site_page.created_at,
+                observation_count=count,
+                first_observed_at=first_at,
+                latest_observed_at=latest_at,
+                latest_snapshot_id=snapshot.id if snapshot else None,
+                latest_scan_id=snapshot.scan_id if snapshot else None,
+                latest_http_status=snapshot.http_status if snapshot else None,
+                latest_title=snapshot.page_title if snapshot else None,
+                latest_retrieval_method=snapshot.retrieval_method if snapshot else None,
+                latest_parse_method=snapshot.parse_method if snapshot else None,
+                latest_reused_from_snapshot_id=snapshot.reused_from_snapshot_id
+                if snapshot
+                else None,
+                latest_fetch_state=snapshot.fetch_state if snapshot else None,
+                latest_error_type=snapshot.error_type if snapshot else None,
+                latest_error_message=snapshot.error_message if snapshot else None,
+            )
+        )
+    return PersistentPageList(items=items, total=total, limit=limit, offset=offset)

@@ -1,23 +1,41 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 
 import {
   addManualUrls,
+  bulkPageCategories,
+  bulkPageMetadata,
   cancelSourceRefresh,
   createSource,
+  createPageCategory,
+  createSiteNote,
+  deletePageCategory,
   deleteSite,
   deleteSource,
   discoverRobots,
   getWorkerHealth,
   getSite,
   listInventory,
+  listPageCategories,
+  listSiteNotes,
   listJobs,
   listSitePages,
   listSources,
   refreshSource,
-  updateSite
+  updatePageCategory,
+  updateSite,
 } from "../api/client";
+import { NotesPanel } from "../components/NotesPanel";
+import {
+  PageCategoryBadges,
+  WorkflowStatusBadge,
+} from "../components/PageOrganization";
 import { Button } from "../components/ui/Button";
 import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -27,8 +45,19 @@ import { LoadingBlock } from "../components/ui/Loading";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { classificationLabel } from "../types/siteClassifications";
 import type { Job, WorkerHealth } from "../types/jobs";
-import type { InventoryItem, PersistentPage, Site, UrlSource } from "../types/scans";
-import { formatDate, formatStatus, isTerminalStatus, plural } from "../utils/format";
+import type {
+  InventoryItem,
+  PageCategory,
+  PersistentPage,
+  Site,
+  UrlSource,
+} from "../types/scans";
+import {
+  formatDate,
+  formatStatus,
+  isTerminalStatus,
+  plural,
+} from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 export function SiteDetailPage() {
@@ -37,116 +66,519 @@ export function SiteDetailPage() {
   const tab = searchParams.get("tab") ?? "overview";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const site = useQuery({ queryKey: ["site", siteId], queryFn: () => getSite(siteId) });
+  const site = useQuery({
+    queryKey: ["site", siteId],
+    queryFn: () => getSite(siteId),
+  });
   useDocumentTitle(site.data?.name ?? "Site");
   const toggleActive = useMutation({
     mutationFn: (next: boolean) => updateSite(siteId, { is_active: next }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["site", siteId] });
       await queryClient.invalidateQueries({ queryKey: ["sites"] });
-    }
+    },
   });
   const remove = useMutation({
     mutationFn: () => deleteSite(siteId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["sites"] });
       navigate("/sites");
-    }
+    },
   });
 
-  if (site.isLoading) return <PageFrame><LoadingBlock label="Loading site..." /></PageFrame>;
-  if (site.error) return <PageFrame><ErrorBanner error={site.error} title="Could not load site" /></PageFrame>;
-  if (!site.data) return <PageFrame><EmptyState title="Site not found" message="The saved site may have been deleted." /></PageFrame>;
+  if (site.isLoading)
+    return (
+      <PageFrame>
+        <LoadingBlock label="Loading site..." />
+      </PageFrame>
+    );
+  if (site.error)
+    return (
+      <PageFrame>
+        <ErrorBanner error={site.error} title="Could not load site" />
+      </PageFrame>
+    );
+  if (!site.data)
+    return (
+      <PageFrame>
+        <EmptyState
+          title="Site not found"
+          message="The saved site may have been deleted."
+        />
+      </PageFrame>
+    );
 
   return (
     <PageFrame>
       <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <div className="mb-2 text-sm text-stone-500"><Link to="/sites" className="underline">Sites</Link> / {site.data.name}</div>
+          <div className="mb-2 text-sm text-stone-500">
+            <Link to="/sites" className="underline">
+              Sites
+            </Link>{" "}
+            / {site.data.name}
+          </div>
           <h1 className="truncate text-2xl font-semibold">{site.data.name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <StatusBadge status={site.data.is_active ? "completed" : "interrupted"} label={site.data.is_active ? "Active" : "Inactive"} />
-            <span className="font-mono text-xs text-stone-600">{site.data.base_url}</span>
+            <StatusBadge
+              status={site.data.is_active ? "completed" : "interrupted"}
+              label={site.data.is_active ? "Active" : "Inactive"}
+            />
+            <span className="font-mono text-xs text-stone-600">
+              {site.data.base_url}
+            </span>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {site.data.is_active ? <Link className="rounded-md border border-neutral-900 bg-neutral-900 px-3 py-2 text-sm font-medium text-white" to={`/scans/new?site_id=${site.data.id}`}>Run scan</Link> : null}
-          <Link className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium" to={`/sites/${site.data.id}/edit`}>Edit site</Link>
-          <Button type="button" loading={toggleActive.isPending} onClick={() => toggleActive.mutate(!site.data!.is_active)}>{site.data.is_active ? "Disable" : "Reactivate"}</Button>
-          {site.data.total_scan_count === 0 ? <Button type="button" variant="danger" loading={remove.isPending} onClick={() => {
-            if (window.confirm(`Delete ${site.data?.name}? This cannot be undone.`)) remove.mutate();
-          }}>Delete</Button> : null}
+          {site.data.is_active ? (
+            <Link
+              className="rounded-md border border-neutral-900 bg-neutral-900 px-3 py-2 text-sm font-medium text-white"
+              to={`/scans/new?site_id=${site.data.id}`}
+            >
+              Run scan
+            </Link>
+          ) : null}
+          <Link
+            className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium"
+            to={`/sites/${site.data.id}/edit`}
+          >
+            Edit site
+          </Link>
+          <Button
+            type="button"
+            loading={toggleActive.isPending}
+            onClick={() => toggleActive.mutate(!site.data!.is_active)}
+          >
+            {site.data.is_active ? "Disable" : "Reactivate"}
+          </Button>
+          {site.data.total_scan_count === 0 ? (
+            <Button
+              type="button"
+              variant="danger"
+              loading={remove.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Delete ${site.data?.name}? This cannot be undone.`,
+                  )
+                )
+                  remove.mutate();
+              }}
+            >
+              Delete
+            </Button>
+          ) : null}
         </div>
       </div>
-      {toggleActive.error || remove.error ? <ErrorBanner error={toggleActive.error ?? remove.error} title="Site action failed" /> : null}
+      {toggleActive.error || remove.error ? (
+        <ErrorBanner
+          error={toggleActive.error ?? remove.error}
+          title="Site action failed"
+        />
+      ) : null}
       <div className="mb-5 flex gap-2 border-b border-stone-200 text-sm">
-        {["overview", "scans", "pages", "sources", "inventory"].map((item) => (
-          <button key={item} type="button" onClick={() => setTab(setSearchParams, item)} className={`border-b-2 px-3 py-2 capitalize ${tab === item ? "border-neutral-900 text-neutral-900" : "border-transparent text-stone-500"}`}>{item}</button>
+        {[
+          "overview",
+          "scans",
+          "pages",
+          "categories",
+          "sources",
+          "inventory",
+          "notes",
+        ].map((item) => (
+          <button
+            key={item}
+            type="button"
+            onClick={() => setTab(setSearchParams, item)}
+            className={`border-b-2 px-3 py-2 capitalize ${tab === item ? "border-neutral-900 text-neutral-900" : "border-transparent text-stone-500"}`}
+          >
+            {item}
+          </button>
         ))}
       </div>
       {tab === "overview" ? <OverviewTab site={site.data} /> : null}
       {tab === "scans" ? <ScansTab site={site.data} /> : null}
       {tab === "pages" ? <PagesTab site={site.data} /> : null}
+      {tab === "categories" ? <CategoriesTab site={site.data} /> : null}
       {tab === "sources" ? <SourcesTab site={site.data} /> : null}
       {tab === "inventory" ? <InventoryTab site={site.data} /> : null}
+      {tab === "notes" ? (
+        <NotesPanel
+          queryKey={["site-notes", siteId]}
+          list={(query) => listSiteNotes(siteId, query)}
+          create={(body, pinned) => createSiteNote(siteId, body, pinned)}
+          context={site.data.name}
+        />
+      ) : null}
     </PageFrame>
   );
 }
 
 function PagesTab({ site }: { site: Site }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = useState<number[]>([]);
+  const [bulkCategory, setBulkCategory] = useState("");
+  const [bulkOwner, setBulkOwner] = useState("");
+  const [bulkWorkflow, setBulkWorkflow] = useState("");
   const query = new URLSearchParams();
-  for (const key of ["search", "host", "path_prefix", "sort", "direction", "offset"]) {
+  for (const key of [
+    "search",
+    "host",
+    "path_prefix",
+    "category_id",
+    "uncategorized",
+    "workflow_status",
+    "owner",
+    "unassigned_owner",
+    "has_notes",
+    "sort",
+    "direction",
+    "offset",
+  ]) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
   const pages = useQuery({
     queryKey: ["site-pages", String(site.id), query.toString()],
-    queryFn: () => listSitePages(String(site.id), `?${query.toString()}`)
+    queryFn: () => listSitePages(String(site.id), `?${query.toString()}`),
+  });
+  const categories = useQuery({
+    queryKey: ["page-categories", String(site.id)],
+    queryFn: () =>
+      listPageCategories(String(site.id), "?active_state=all&limit=200"),
+  });
+  const bulk = useMutation({
+    mutationFn: async (action: "add" | "remove" | "owner" | "workflow") => {
+      if (action === "add" || action === "remove")
+        return bulkPageCategories(String(site.id), {
+          resource_ids: selected,
+          add_category_ids: action === "add" ? [Number(bulkCategory)] : [],
+          remove_category_ids:
+            action === "remove" ? [Number(bulkCategory)] : [],
+        });
+      return bulkPageMetadata(String(site.id), {
+        resource_ids: selected,
+        ...(action === "owner"
+          ? { owner_label: bulkOwner || null }
+          : { workflow_status: bulkWorkflow }),
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["site-pages", String(site.id)],
+      });
+      setSelected([]);
+    },
   });
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
-      <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <input aria-label="Search site pages" value={searchParams.get("search") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "search", event.target.value)} placeholder="Search pages" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
-        <input aria-label="Page host" value={searchParams.get("host") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "host", event.target.value)} placeholder="Host" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
-        <input aria-label="Page path prefix" value={searchParams.get("path_prefix") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "path_prefix", event.target.value)} placeholder="Path prefix" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
+      <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-4">
+        <input
+          aria-label="Search site pages"
+          value={searchParams.get("search") ?? ""}
+          onChange={(event) =>
+            setSearchParam(setSearchParams, "search", event.target.value)
+          }
+          placeholder="Search pages"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        />
+        <input
+          aria-label="Page host"
+          value={searchParams.get("host") ?? ""}
+          onChange={(event) =>
+            setSearchParam(setSearchParams, "host", event.target.value)
+          }
+          placeholder="Host"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        />
+        <input
+          aria-label="Page path prefix"
+          value={searchParams.get("path_prefix") ?? ""}
+          onChange={(event) =>
+            setSearchParam(setSearchParams, "path_prefix", event.target.value)
+          }
+          placeholder="Path prefix"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        />
+        <select
+          aria-label="Workflow status filter"
+          value={searchParams.get("workflow_status") ?? ""}
+          onChange={(event) => {
+            setSelected([]);
+            setSearchParam(
+              setSearchParams,
+              "workflow_status",
+              event.target.value,
+            );
+          }}
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        >
+          <option value="">All workflow statuses</option>
+          {[
+            "unreviewed",
+            "needs_review",
+            "approved",
+            "updating",
+            "deprecated",
+            "archived",
+          ].map((item) => (
+            <option key={item} value={item}>
+              {formatStatus(item)}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Category filter"
+          value={searchParams.get("category_id") ?? ""}
+          onChange={(event) => {
+            setSelected([]);
+            setSearchParam(setSearchParams, "category_id", event.target.value);
+          }}
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        >
+          <option value="">All categories</option>
+          {categories.data?.items.map((category) => (
+            <option key={category.id} value={category.id}>
+              {category.name}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label="Owner filter"
+          value={searchParams.get("owner") ?? ""}
+          onChange={(event) => {
+            setSelected([]);
+            setSearchParam(setSearchParams, "owner", event.target.value);
+          }}
+          placeholder="Owner"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        />
       </div>
-      {pages.error ? <ErrorBanner error={pages.error} title="Could not load pages" /> : null}
+      {selected.length ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2 border-y border-stone-200 py-3">
+          <strong className="text-sm">
+            {selected.length} selected on this page
+          </strong>
+          <select
+            aria-label="Bulk category"
+            value={bulkCategory}
+            onChange={(event) => setBulkCategory(event.target.value)}
+            className="rounded-md border border-stone-300 px-2 py-1 text-sm"
+          >
+            <option value="">Choose category</option>
+            {categories.data?.items.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+          <Button
+            type="button"
+            disabled={!bulkCategory}
+            onClick={() => bulk.mutate("add")}
+          >
+            Add category
+          </Button>
+          <Button
+            type="button"
+            disabled={!bulkCategory}
+            onClick={() => bulk.mutate("remove")}
+          >
+            Remove category
+          </Button>
+          <input
+            aria-label="Bulk owner"
+            value={bulkOwner}
+            onChange={(event) => setBulkOwner(event.target.value)}
+            placeholder="Owner or blank"
+            className="rounded-md border border-stone-300 px-2 py-1 text-sm"
+          />
+          <Button type="button" onClick={() => bulk.mutate("owner")}>
+            Set owner
+          </Button>
+          <select
+            aria-label="Bulk workflow status"
+            value={bulkWorkflow}
+            onChange={(event) => setBulkWorkflow(event.target.value)}
+            className="rounded-md border border-stone-300 px-2 py-1 text-sm"
+          >
+            <option value="">Choose workflow</option>
+            {[
+              "unreviewed",
+              "needs_review",
+              "approved",
+              "updating",
+              "deprecated",
+              "archived",
+            ].map((item) => (
+              <option key={item} value={item}>
+                {formatStatus(item)}
+              </option>
+            ))}
+          </select>
+          <Button
+            type="button"
+            disabled={!bulkWorkflow}
+            onClick={() => bulk.mutate("workflow")}
+          >
+            Set workflow
+          </Button>
+        </div>
+      ) : null}
+      {bulk.error ? (
+        <ErrorBanner error={bulk.error} title="Bulk update failed" />
+      ) : null}
+      {pages.error ? (
+        <ErrorBanner error={pages.error} title="Could not load pages" />
+      ) : null}
       {pages.isLoading ? <LoadingBlock label="Loading pages..." /> : null}
-      {pages.data?.items.length ? <SitePagesTable siteId={site.id} pages={pages.data.items} /> : !pages.isLoading ? <EmptyState title="No observed pages" message="Run a scan for this site to build a persistent Page catalog." /> : null}
-      {pages.data ? <Pagination total={pages.data.total} limit={pages.data.limit} offset={pages.data.offset} setSearchParams={setSearchParams} searchParams={searchParams} /> : null}
+      {pages.data?.items.length ? (
+        <SitePagesTable
+          siteId={site.id}
+          pages={pages.data.items}
+          selected={selected}
+          setSelected={setSelected}
+        />
+      ) : !pages.isLoading ? (
+        <EmptyState
+          title="No Site Pages"
+          message="Run a scan for this Site to associate observed Pages."
+        />
+      ) : null}
+      {pages.data ? (
+        <Pagination
+          total={pages.data.total}
+          limit={pages.data.limit}
+          offset={pages.data.offset}
+          setSearchParams={setSearchParams}
+          searchParams={searchParams}
+        />
+      ) : null}
     </section>
   );
 }
 
-function SitePagesTable({ siteId, pages }: { siteId: number; pages: PersistentPage[] }) {
+function SitePagesTable({
+  siteId,
+  pages,
+  selected,
+  setSelected,
+}: {
+  siteId: number;
+  pages: PersistentPage[];
+  selected: number[];
+  setSelected: (ids: number[]) => void;
+}) {
+  const allSelected =
+    pages.length > 0 &&
+    pages.every((page) => selected.includes(page.resource_id));
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
-          <tr>{["Page", "Observations", "First observed", "Latest observation", "Reuse", "Actions"].map((header) => <th key={header} scope="col" className="px-3 py-2">{header}</th>)}</tr>
+          <tr>
+            <th className="px-3 py-2">
+              <input
+                aria-label="Select all Pages on this loaded page"
+                type="checkbox"
+                checked={allSelected}
+                onChange={(event) =>
+                  setSelected(
+                    event.target.checked
+                      ? pages.map((page) => page.resource_id)
+                      : [],
+                  )
+                }
+              />
+            </th>
+            {[
+              "Page",
+              "Owner",
+              "Workflow",
+              "Categories",
+              "Notes",
+              "Observations",
+              "Latest observation",
+              "Actions",
+            ].map((header) => (
+              <th key={header} scope="col" className="px-3 py-2">
+                {header}
+              </th>
+            ))}
+          </tr>
         </thead>
         <tbody>
           {pages.map((page) => (
-            <tr key={page.resource_id} className="border-t border-stone-100 align-top">
-              <td className="max-w-xl px-3 py-2">
-                <Link to={`/sites/${siteId}/pages/${page.resource_id}`} className="block truncate font-mono text-xs underline">{page.normalized_url}</Link>
-                <span className="mt-1 block text-xs text-stone-500">{page.latest_title ?? "Untitled"}</span>
-              </td>
-              <td className="px-3 py-2">{plural(page.observation_count, "scan")}</td>
-              <td className="px-3 py-2">{formatDate(page.first_observed_at)}</td>
+            <tr
+              key={page.resource_id}
+              className="border-t border-stone-100 align-top"
+            >
               <td className="px-3 py-2">
-                {page.latest_http_status ? <StatusBadge status={String(page.latest_http_status)} label={String(page.latest_http_status)} /> : "Not available"}
-                <span className="mt-1 block text-xs text-stone-500">{formatDate(page.latest_observed_at)}</span>
+                <input
+                  aria-label={`Select ${page.normalized_url}`}
+                  type="checkbox"
+                  checked={selected.includes(page.resource_id)}
+                  onChange={(event) =>
+                    setSelected(
+                      event.target.checked
+                        ? [...selected, page.resource_id]
+                        : selected.filter((id) => id !== page.resource_id),
+                    )
+                  }
+                />
               </td>
-              <td className="px-3 py-2 text-xs">
-                <span className="block">{retrievalLabel(page.latest_retrieval_method)}</span>
-                <span className="block text-stone-500">{parseLabel(page.latest_parse_method)}</span>
+              <td className="max-w-xl px-3 py-2">
+                <Link
+                  to={`/sites/${siteId}/pages/${page.resource_id}`}
+                  className="block truncate font-mono text-xs underline"
+                >
+                  {page.normalized_url}
+                </Link>
+                <span className="mt-1 block text-xs text-stone-500">
+                  {page.latest_title ?? "Untitled"}
+                </span>
+              </td>
+              <td className="px-3 py-2">{page.owner_label ?? "Unassigned"}</td>
+              <td className="px-3 py-2">
+                <WorkflowStatusBadge status={page.workflow_status} />
+              </td>
+              <td className="px-3 py-2">
+                <PageCategoryBadges categories={page.categories} />
+              </td>
+              <td className="px-3 py-2">{page.note_count}</td>
+              <td className="px-3 py-2">
+                {plural(page.observation_count, "Scan")}
+              </td>
+              <td className="px-3 py-2">
+                {page.latest_http_status ? (
+                  <StatusBadge
+                    status={String(page.latest_http_status)}
+                    label={String(page.latest_http_status)}
+                  />
+                ) : (
+                  "Not available"
+                )}
+                <span className="mt-1 block text-xs text-stone-500">
+                  {formatDate(page.latest_observed_at)}
+                </span>
               </td>
               <td className="px-3 py-2">
                 <div className="flex flex-col gap-1 text-xs">
-                  <Link className="underline" to={`/sites/${siteId}/pages/${page.resource_id}`}>Open Page</Link>
-                  {page.latest_scan_id && page.latest_snapshot_id ? <Link className="underline" to={`/scans/${page.latest_scan_id}/pages/${page.latest_snapshot_id}`}>Latest observation</Link> : null}
+                  <Link
+                    className="underline"
+                    to={`/sites/${siteId}/pages/${page.resource_id}`}
+                  >
+                    Open Page
+                  </Link>
+                  {page.latest_scan_id && page.latest_snapshot_id ? (
+                    <Link
+                      className="underline"
+                      to={`/scans/${page.latest_scan_id}/pages/${page.latest_snapshot_id}`}
+                    >
+                      Latest observation
+                    </Link>
+                  ) : null}
                 </div>
               </td>
             </tr>
@@ -157,8 +589,208 @@ function SitePagesTable({ siteId, pages }: { siteId: number; pages: PersistentPa
   );
 }
 
+function CategoriesTab({ site }: { site: Site }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [color, setColor] = useState("stone");
+  const categories = useQuery({
+    queryKey: ["page-categories", String(site.id)],
+    queryFn: () =>
+      listPageCategories(String(site.id), "?active_state=all&limit=200"),
+  });
+  const refresh = () =>
+    queryClient.invalidateQueries({
+      queryKey: ["page-categories", String(site.id)],
+    });
+  const create = useMutation({
+    mutationFn: () =>
+      createPageCategory(String(site.id), { name, color_key: color }),
+    onSuccess: async () => {
+      setName("");
+      await refresh();
+    },
+  });
+  return (
+    <div className="space-y-4">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (name.trim()) create.mutate();
+        }}
+        className="rounded-md border border-stone-200 bg-white p-4 shadow-sm"
+      >
+        <h2 className="mb-3 text-base font-semibold">Create category</h2>
+        <div className="flex flex-wrap gap-3">
+          <label className="flex-1 text-sm font-medium">
+            Name
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              maxLength={100}
+              className="mt-1 w-full rounded-md border border-stone-300 px-3 py-2"
+            />
+          </label>
+          <label className="text-sm font-medium">
+            Color
+            <select
+              value={color}
+              onChange={(event) => setColor(event.target.value)}
+              className="mt-1 block rounded-md border border-stone-300 px-3 py-2"
+            >
+              {[
+                "stone",
+                "red",
+                "orange",
+                "amber",
+                "green",
+                "teal",
+                "blue",
+                "indigo",
+                "violet",
+                "pink",
+              ].map((item) => (
+                <option key={item} value={item}>
+                  {formatStatus(item)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            type="submit"
+            loading={create.isPending}
+            disabled={!name.trim()}
+          >
+            Create category
+          </Button>
+        </div>
+      </form>
+      {categories.error || create.error ? (
+        <ErrorBanner
+          error={categories.error ?? create.error}
+          title="Category action failed"
+        />
+      ) : null}
+      {categories.isLoading ? (
+        <LoadingBlock label="Loading categories..." />
+      ) : null}
+      {categories.data?.items.length ? (
+        <div className="space-y-3">
+          {categories.data.items.map((category) => (
+            <CategoryRow
+              key={category.id}
+              siteId={String(site.id)}
+              category={category}
+              refresh={refresh}
+            />
+          ))}
+        </div>
+      ) : !categories.isLoading ? (
+        <EmptyState
+          title="No categories"
+          message="Create a flat category to organize this Site's Pages."
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function CategoryRow({
+  siteId,
+  category,
+  refresh,
+}: {
+  siteId: string;
+  category: PageCategory;
+  refresh: () => Promise<unknown>;
+}) {
+  const [name, setName] = useState(category.name);
+  const [description, setDescription] = useState(category.description ?? "");
+  const save = useMutation({
+    mutationFn: () =>
+      updatePageCategory(siteId, category.id, {
+        name,
+        description: description || null,
+      }),
+    onSuccess: refresh,
+  });
+  const archive = useMutation({
+    mutationFn: () =>
+      updatePageCategory(siteId, category.id, {
+        is_active: !category.is_active,
+      }),
+    onSuccess: refresh,
+  });
+  const remove = useMutation({
+    mutationFn: () => deletePageCategory(siteId, category.id),
+    onSuccess: refresh,
+  });
+  return (
+    <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          save.mutate();
+        }}
+        className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_minmax(240px,2fr)_auto]"
+      >
+        <label className="text-sm font-medium">
+          Name
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            className="mt-1 w-full rounded-md border border-stone-300 px-3 py-2"
+          />
+        </label>
+        <label className="text-sm font-medium">
+          Description
+          <input
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            className="mt-1 w-full rounded-md border border-stone-300 px-3 py-2"
+          />
+        </label>
+        <div className="flex flex-wrap items-end gap-2">
+          <span className="self-center text-sm">
+            {plural(category.assignment_count, "assignment")}
+          </span>
+          <Button type="submit" loading={save.isPending}>
+            Save
+          </Button>
+          <Button type="button" onClick={() => archive.mutate()}>
+            {category.is_active ? "Archive" : "Reactivate"}
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete ${category.name}? This removes ${category.assignment_count} assignments but does not delete Pages or notes.`,
+                )
+              )
+                remove.mutate();
+            }}
+          >
+            Delete
+          </Button>
+        </div>
+      </form>
+      {save.error || archive.error || remove.error ? (
+        <ErrorBanner
+          error={save.error ?? archive.error ?? remove.error}
+          title="Category action failed"
+        />
+      ) : null}
+    </section>
+  );
+}
+
 function PageFrame({ children }: { children: React.ReactNode }) {
-  return <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</section>;
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      {children}
+    </section>
+  );
 }
 
 function OverviewTab({ site }: { site: Site }) {
@@ -167,23 +799,42 @@ function OverviewTab({ site }: { site: Site }) {
       <div className="space-y-5">
         <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
           <h2 className="mb-4 text-base font-semibold">Site details</h2>
-          <DefinitionList items={[
-            { label: "Base URL", value: site.base_url, copyValue: site.base_url },
-            { label: "Description", value: site.description ?? "Not provided" },
-            { label: "Group", value: classificationLabel(site.group_key) },
-            { label: "Locale", value: site.locale ?? "Not specified" },
-            { label: "Platform", value: classificationLabel(site.platform_key) },
-            { label: "Ownership", value: classificationLabel(site.ownership_key) },
-            { label: "Created", value: formatDate(site.created_at) },
-            { label: "Updated", value: formatDate(site.updated_at) }
-          ]} />
+          <DefinitionList
+            items={[
+              {
+                label: "Base URL",
+                value: site.base_url,
+                copyValue: site.base_url,
+              },
+              {
+                label: "Description",
+                value: site.description ?? "Not provided",
+              },
+              { label: "Group", value: classificationLabel(site.group_key) },
+              { label: "Locale", value: site.locale ?? "Not specified" },
+              {
+                label: "Platform",
+                value: classificationLabel(site.platform_key),
+              },
+              {
+                label: "Ownership",
+                value: classificationLabel(site.ownership_key),
+              },
+              { label: "Created", value: formatDate(site.created_at) },
+              { label: "Updated", value: formatDate(site.updated_at) },
+            ]}
+          />
         </section>
         <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
           <h2 className="mb-3 text-base font-semibold">Saved scope</h2>
           <ScopeSummary site={site} />
           <details className="mt-4">
-            <summary className="cursor-pointer text-sm font-medium">View saved scope JSON</summary>
-            <pre className="mt-3 max-h-80 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-3 text-xs">{JSON.stringify(site.scope_config, null, 2)}</pre>
+            <summary className="cursor-pointer text-sm font-medium">
+              View saved scope JSON
+            </summary>
+            <pre className="mt-3 max-h-80 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-3 text-xs">
+              {JSON.stringify(site.scope_config, null, 2)}
+            </pre>
           </details>
         </section>
       </div>
@@ -192,24 +843,55 @@ function OverviewTab({ site }: { site: Site }) {
   );
 }
 
-function ScansTab({ site, compact = false }: { site: Site; compact?: boolean }) {
+function ScansTab({
+  site,
+  compact = false,
+}: {
+  site: Site;
+  compact?: boolean;
+}) {
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <h2 className="mb-3 text-base font-semibold">Recent scans</h2>
-      <div className="mb-3 text-sm text-stone-600">{plural(site.total_scan_count, "scan")}</div>
+      <div className="mb-3 text-sm text-stone-600">
+        {plural(site.total_scan_count, "scan")}
+      </div>
       {site.recent_scans.length ? (
-        <div className={compact ? "space-y-2" : "grid grid-cols-1 gap-2 md:grid-cols-2"}>
+        <div
+          className={
+            compact ? "space-y-2" : "grid grid-cols-1 gap-2 md:grid-cols-2"
+          }
+        >
           {site.recent_scans.map((scan) => (
-            <div key={scan.id} className="rounded-md border border-stone-200 px-3 py-2 text-sm">
-              <Link to={`/scans/${scan.id}`} className="block hover:bg-stone-50">
+            <div
+              key={scan.id}
+              className="rounded-md border border-stone-200 px-3 py-2 text-sm"
+            >
+              <Link
+                to={`/scans/${scan.id}`}
+                className="block hover:bg-stone-50"
+              >
                 <StatusBadge status={scan.status} />
-                <span className="mt-1 block text-xs text-stone-500">{formatDate(scan.created_at)} - {scan.discovered_count} discovered - {scan.failed_count} failed</span>
+                <span className="mt-1 block text-xs text-stone-500">
+                  {formatDate(scan.created_at)} - {scan.discovered_count}{" "}
+                  discovered - {scan.failed_count} failed
+                </span>
               </Link>
-              <Link to={`/scans/${scan.id}?tab=graph`} className="mt-2 inline-block text-xs font-medium underline">View graph</Link>
+              <Link
+                to={`/scans/${scan.id}?tab=graph`}
+                className="mt-2 inline-block text-xs font-medium underline"
+              >
+                View graph
+              </Link>
             </div>
           ))}
         </div>
-      ) : <EmptyState title="No scans yet" message="Run a scan from this site to build history." />}
+      ) : (
+        <EmptyState
+          title="No scans yet"
+          message="Run a scan from this site to build history."
+        />
+      )}
     </section>
   );
 }
@@ -218,60 +900,103 @@ function SourcesTab({ site }: { site: Site }) {
   const queryClient = useQueryClient();
   const [sitemapUrl, setSitemapUrl] = useState("");
   const [manualUrls, setManualUrls] = useState("");
-  const sources = useQuery({ queryKey: ["sources", String(site.id)], queryFn: () => listSources(String(site.id), "?active_state=all&limit=100") });
+  const sources = useQuery({
+    queryKey: ["sources", String(site.id)],
+    queryFn: () => listSources(String(site.id), "?active_state=all&limit=100"),
+  });
   const sourceJobs = useQuery({
     queryKey: ["jobs", "site-sources", String(site.id)],
-    queryFn: () => listJobs(`?website_property_id=${site.id}&job_type=source_refresh&limit=50`),
-    refetchInterval: (query) => query.state.data?.items.some((job) => !isTerminalStatus(job.status)) ? 1500 : false,
-    placeholderData: (previous) => previous
+    queryFn: () =>
+      listJobs(
+        `?website_property_id=${site.id}&job_type=source_refresh&limit=50`,
+      ),
+    refetchInterval: (query) =>
+      query.state.data?.items.some((job) => !isTerminalStatus(job.status))
+        ? 1500
+        : false,
+    placeholderData: (previous) => previous,
   });
   const workerHealth = useQuery({
     queryKey: ["worker-health"],
     queryFn: getWorkerHealth,
-    enabled: Boolean(sourceJobs.data?.items.some((job) => !isTerminalStatus(job.status))),
+    enabled: Boolean(
+      sourceJobs.data?.items.some((job) => !isTerminalStatus(job.status)),
+    ),
     refetchInterval: 5000,
-    placeholderData: (previous) => previous
+    placeholderData: (previous) => previous,
   });
   const addSitemap = useMutation({
-    mutationFn: () => createSource(String(site.id), { source_type: "sitemap", name: sitemapUrl, source_url: sitemapUrl, is_active: true, discovery_mode: "configured", settings_json: {} }),
+    mutationFn: () =>
+      createSource(String(site.id), {
+        source_type: "sitemap",
+        name: sitemapUrl,
+        source_url: sitemapUrl,
+        is_active: true,
+        discovery_mode: "configured",
+        settings_json: {},
+      }),
     onSuccess: async () => {
       setSitemapUrl("");
-      await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
-    }
+      await queryClient.invalidateQueries({
+        queryKey: ["sources", String(site.id)],
+      });
+    },
   });
   const refresh = useMutation({
-    mutationFn: (source: UrlSource) => refreshSource(String(site.id), String(source.id)),
+    mutationFn: (source: UrlSource) =>
+      refreshSource(String(site.id), String(source.id)),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
-      await queryClient.invalidateQueries({ queryKey: ["inventory", String(site.id)] });
-      await queryClient.invalidateQueries({ queryKey: ["jobs", "site-sources", String(site.id)] });
-    }
+      await queryClient.invalidateQueries({
+        queryKey: ["sources", String(site.id)],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["inventory", String(site.id)],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["jobs", "site-sources", String(site.id)],
+      });
+    },
   });
   const robots = useMutation({
     mutationFn: () => discoverRobots(String(site.id)),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
-      await queryClient.invalidateQueries({ queryKey: ["jobs", "site-sources", String(site.id)] });
-    }
+      await queryClient.invalidateQueries({
+        queryKey: ["sources", String(site.id)],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["jobs", "site-sources", String(site.id)],
+      });
+    },
   });
   const cancelRefresh = useMutation({
-    mutationFn: (job: Job) => cancelSourceRefresh(String(job.source_refresh_id)),
+    mutationFn: (job: Job) =>
+      cancelSourceRefresh(String(job.source_refresh_id)),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
-      await queryClient.invalidateQueries({ queryKey: ["jobs", "site-sources", String(site.id)] });
-    }
+      await queryClient.invalidateQueries({
+        queryKey: ["sources", String(site.id)],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["jobs", "site-sources", String(site.id)],
+      });
+    },
   });
   const manual = useMutation({
     mutationFn: () => addManualUrls(String(site.id), manualUrls),
     onSuccess: async () => {
       setManualUrls("");
-      await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
-      await queryClient.invalidateQueries({ queryKey: ["inventory", String(site.id)] });
-    }
+      await queryClient.invalidateQueries({
+        queryKey: ["sources", String(site.id)],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["inventory", String(site.id)],
+      });
+    },
   });
   const remove = useMutation({
-    mutationFn: (source: UrlSource) => deleteSource(String(site.id), String(source.id)),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] })
+    mutationFn: (source: UrlSource) =>
+      deleteSource(String(site.id), String(source.id)),
+    onSuccess: async () =>
+      queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] }),
   });
 
   function submitSitemap(event: FormEvent) {
@@ -281,35 +1006,110 @@ function SourcesTab({ site }: { site: Site }) {
 
   return (
     <div className="space-y-5">
-      {addSitemap.error || refresh.error || robots.error || manual.error || remove.error || cancelRefresh.error ? <ErrorBanner error={addSitemap.error ?? refresh.error ?? robots.error ?? manual.error ?? remove.error ?? cancelRefresh.error} title="Source request failed" /> : null}
-      {sourceJobs.data?.items.some((job) => job.presentation_status === "waiting_for_worker") ? (
+      {addSitemap.error ||
+      refresh.error ||
+      robots.error ||
+      manual.error ||
+      remove.error ||
+      cancelRefresh.error ? (
+        <ErrorBanner
+          error={
+            addSitemap.error ??
+            refresh.error ??
+            robots.error ??
+            manual.error ??
+            remove.error ??
+            cancelRefresh.error
+          }
+          title="Source request failed"
+        />
+      ) : null}
+      {sourceJobs.data?.items.some(
+        (job) => job.presentation_status === "waiting_for_worker",
+      ) ? (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
           Source refresh work is queued and waiting for a background worker.
         </div>
       ) : null}
       <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-end">
-          <form onSubmit={submitSitemap} className="flex flex-1 flex-col gap-2 md:flex-row md:items-end">
+          <form
+            onSubmit={submitSitemap}
+            className="flex flex-1 flex-col gap-2 md:flex-row md:items-end"
+          >
             <Field id="sitemap-url" label="Sitemap source">
-              <input id="sitemap-url" value={sitemapUrl} onChange={(event) => setSitemapUrl(event.target.value)} placeholder="https://www.example.com/sitemap.xml" className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm" />
+              <input
+                id="sitemap-url"
+                value={sitemapUrl}
+                onChange={(event) => setSitemapUrl(event.target.value)}
+                placeholder="https://www.example.com/sitemap.xml"
+                className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm"
+              />
             </Field>
-            <Button type="submit" loading={addSitemap.isPending}>Add sitemap</Button>
+            <Button type="submit" loading={addSitemap.isPending}>
+              Add sitemap
+            </Button>
           </form>
-          <Button type="button" loading={robots.isPending} onClick={() => robots.mutate()}>Discover from robots.txt</Button>
+          <Button
+            type="button"
+            loading={robots.isPending}
+            onClick={() => robots.mutate()}
+          >
+            Discover from robots.txt
+          </Button>
         </div>
       </section>
       <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-base font-semibold">Manual URLs</h2>
-        <textarea value={manualUrls} onChange={(event) => setManualUrls(event.target.value)} rows={5} className="w-full rounded-md border border-stone-300 px-3 py-2 font-mono text-xs" placeholder={"/manual-page/\nhttps://www.example.com/landing"} />
-        <div className="mt-2"><Button type="button" loading={manual.isPending} disabled={!manualUrls.trim()} onClick={() => manual.mutate()}>Add manual URLs</Button></div>
-        {manual.data ? <div className="mt-2 text-sm text-stone-600">{manual.data.accepted_count} accepted - {manual.data.rejected_count} rejected - {manual.data.duplicate_count} duplicates</div> : null}
+        <textarea
+          value={manualUrls}
+          onChange={(event) => setManualUrls(event.target.value)}
+          rows={5}
+          className="w-full rounded-md border border-stone-300 px-3 py-2 font-mono text-xs"
+          placeholder={"/manual-page/\nhttps://www.example.com/landing"}
+        />
+        <div className="mt-2">
+          <Button
+            type="button"
+            loading={manual.isPending}
+            disabled={!manualUrls.trim()}
+            onClick={() => manual.mutate()}
+          >
+            Add manual URLs
+          </Button>
+        </div>
+        {manual.data ? (
+          <div className="mt-2 text-sm text-stone-600">
+            {manual.data.accepted_count} accepted - {manual.data.rejected_count}{" "}
+            rejected - {manual.data.duplicate_count} duplicates
+          </div>
+        ) : null}
       </section>
       <section className="rounded-md border border-stone-200 bg-white shadow-sm">
         <h2 className="p-4 text-base font-semibold">Sources</h2>
         {sources.isLoading ? <LoadingBlock label="Loading sources..." /> : null}
-        {sources.data?.items.length ? <SourceTable sources={sources.data.items} jobs={sourceJobs.data?.items ?? []} workerHealth={workerHealth.data} onRefresh={(source) => refresh.mutate(source)} onCancel={(job) => cancelRefresh.mutate(job)} onDelete={(source) => {
-          if (window.confirm(`Delete source ${source.name}? Scan history will be preserved.`)) remove.mutate(source);
-        }} /> : !sources.isLoading ? <EmptyState title="No sources" message="Add a sitemap, discover from robots.txt, or paste manual URLs." /> : null}
+        {sources.data?.items.length ? (
+          <SourceTable
+            sources={sources.data.items}
+            jobs={sourceJobs.data?.items ?? []}
+            workerHealth={workerHealth.data}
+            onRefresh={(source) => refresh.mutate(source)}
+            onCancel={(job) => cancelRefresh.mutate(job)}
+            onDelete={(source) => {
+              if (
+                window.confirm(
+                  `Delete source ${source.name}? Scan history will be preserved.`,
+                )
+              )
+                remove.mutate(source);
+            }}
+          />
+        ) : !sources.isLoading ? (
+          <EmptyState
+            title="No sources"
+            message="Add a sitemap, discover from robots.txt, or paste manual URLs."
+          />
+        ) : null}
       </section>
     </div>
   );
@@ -321,7 +1121,7 @@ function SourceTable({
   workerHealth,
   onRefresh,
   onCancel,
-  onDelete
+  onDelete,
 }: {
   sources: UrlSource[];
   jobs: Job[];
@@ -333,27 +1133,80 @@ function SourceTable({
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
-        <thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Source", "Type", "Status", "URLs", "Actions"].map((header) => <th key={header} className="px-3 py-2">{header}</th>)}</tr></thead>
+        <thead className="bg-stone-100 text-xs uppercase text-stone-500">
+          <tr>
+            {["Source", "Type", "Status", "URLs", "Actions"].map((header) => (
+              <th key={header} className="px-3 py-2">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
         <tbody>
           {sources.map((source) => {
             const activeJob = activeSourceJob(jobs, source.id);
-            const displayStatus = activeJob?.presentation_status ?? source.last_refresh_status ?? "never_refreshed";
-            const waiting = activeJob?.presentation_status === "waiting_for_worker" || (activeJob?.status === "queued" && workerHealth?.queued_work_has_worker === false);
+            const displayStatus =
+              activeJob?.presentation_status ??
+              source.last_refresh_status ??
+              "never_refreshed";
+            const waiting =
+              activeJob?.presentation_status === "waiting_for_worker" ||
+              (activeJob?.status === "queued" &&
+                workerHealth?.queued_work_has_worker === false);
             return (
               <tr key={source.id} className="border-t border-stone-100">
-                <td className="max-w-md px-3 py-2"><span className="block font-medium">{source.name}</span><span className="block truncate font-mono text-xs text-stone-500">{source.source_url ?? "Manual collection"}</span></td>
+                <td className="max-w-md px-3 py-2">
+                  <span className="block font-medium">{source.name}</span>
+                  <span className="block truncate font-mono text-xs text-stone-500">
+                    {source.source_url ?? "Manual collection"}
+                  </span>
+                </td>
                 <td className="px-3 py-2 capitalize">{source.source_type}</td>
                 <td className="px-3 py-2">
-                  <StatusBadge status={displayStatus} label={formatStatus(displayStatus)} />
-                  {activeJob?.current_operation ? <span className="mt-1 block text-xs text-stone-500">{activeJob.current_operation}</span> : null}
-                  {waiting ? <span className="mt-1 block text-xs text-amber-700">Waiting for worker</span> : null}
+                  <StatusBadge
+                    status={displayStatus}
+                    label={formatStatus(displayStatus)}
+                  />
+                  {activeJob?.current_operation ? (
+                    <span className="mt-1 block text-xs text-stone-500">
+                      {activeJob.current_operation}
+                    </span>
+                  ) : null}
+                  {waiting ? (
+                    <span className="mt-1 block text-xs text-amber-700">
+                      Waiting for worker
+                    </span>
+                  ) : null}
                 </td>
                 <td className="px-3 py-2">{source.current_entry_count}</td>
-                <td className="px-3 py-2"><div className="flex gap-2">
-                  <button type="button" className="underline disabled:text-stone-400" disabled={Boolean(activeJob)} onClick={() => onRefresh(source)}>Refresh</button>
-                  {activeJob?.source_refresh_id ? <button type="button" className="text-red-700 underline" onClick={() => onCancel(activeJob)}>Cancel</button> : null}
-                  <button type="button" className="text-red-700 underline" onClick={() => onDelete(source)}>Delete</button>
-                </div></td>
+                <td className="px-3 py-2">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="underline disabled:text-stone-400"
+                      disabled={Boolean(activeJob)}
+                      onClick={() => onRefresh(source)}
+                    >
+                      Refresh
+                    </button>
+                    {activeJob?.source_refresh_id ? (
+                      <button
+                        type="button"
+                        className="text-red-700 underline"
+                        onClick={() => onCancel(activeJob)}
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="text-red-700 underline"
+                      onClick={() => onDelete(source)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </td>
               </tr>
             );
           })}
@@ -364,27 +1217,89 @@ function SourceTable({
 }
 
 function activeSourceJob(jobs: Job[], sourceId: number) {
-  return jobs.find((job) => !isTerminalStatus(job.status) && Number(job.payload_json.source_id) === sourceId);
+  return jobs.find(
+    (job) =>
+      !isTerminalStatus(job.status) &&
+      Number(job.payload_json.source_id) === sourceId,
+  );
 }
 
 function InventoryTab({ site }: { site: Site }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = new URLSearchParams();
-  for (const key of ["search", "source_type", "scope_decision", "validation_state", "offset"]) {
+  for (const key of [
+    "search",
+    "source_type",
+    "scope_decision",
+    "validation_state",
+    "offset",
+  ]) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
-  const inventory = useQuery({ queryKey: ["inventory", String(site.id), query.toString()], queryFn: () => listInventory(String(site.id), `?${query.toString()}`) });
+  const inventory = useQuery({
+    queryKey: ["inventory", String(site.id), query.toString()],
+    queryFn: () => listInventory(String(site.id), `?${query.toString()}`),
+  });
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-        <input aria-label="Search inventory" value={searchParams.get("search") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "search", event.target.value)} placeholder="Search URLs" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
-        <input aria-label="Source type" value={searchParams.get("source_type") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "source_type", event.target.value)} placeholder="Source type" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
-        <input aria-label="Scope state" value={searchParams.get("scope_decision") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "scope_decision", event.target.value)} placeholder="Scope state" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
-        <input aria-label="Validation state" value={searchParams.get("validation_state") ?? ""} onChange={(event) => setSearchParam(setSearchParams, "validation_state", event.target.value)} placeholder="Validation state" className="rounded-md border border-stone-300 px-3 py-2 text-sm" />
+        <input
+          aria-label="Search inventory"
+          value={searchParams.get("search") ?? ""}
+          onChange={(event) =>
+            setSearchParam(setSearchParams, "search", event.target.value)
+          }
+          placeholder="Search URLs"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        />
+        <input
+          aria-label="Source type"
+          value={searchParams.get("source_type") ?? ""}
+          onChange={(event) =>
+            setSearchParam(setSearchParams, "source_type", event.target.value)
+          }
+          placeholder="Source type"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        />
+        <input
+          aria-label="Scope state"
+          value={searchParams.get("scope_decision") ?? ""}
+          onChange={(event) =>
+            setSearchParam(
+              setSearchParams,
+              "scope_decision",
+              event.target.value,
+            )
+          }
+          placeholder="Scope state"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        />
+        <input
+          aria-label="Validation state"
+          value={searchParams.get("validation_state") ?? ""}
+          onChange={(event) =>
+            setSearchParam(
+              setSearchParams,
+              "validation_state",
+              event.target.value,
+            )
+          }
+          placeholder="Validation state"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        />
       </div>
-      {inventory.isLoading ? <LoadingBlock label="Loading inventory..." /> : null}
-      {inventory.data?.items.length ? <InventoryTable items={inventory.data.items} /> : !inventory.isLoading ? <EmptyState title="No inventory URLs" message="Refresh a source or add manual URLs to build this inventory." /> : null}
+      {inventory.isLoading ? (
+        <LoadingBlock label="Loading inventory..." />
+      ) : null}
+      {inventory.data?.items.length ? (
+        <InventoryTable items={inventory.data.items} />
+      ) : !inventory.isLoading ? (
+        <EmptyState
+          title="No inventory URLs"
+          message="Refresh a source or add manual URLs to build this inventory."
+        />
+      ) : null}
     </section>
   );
 }
@@ -393,12 +1308,44 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
-        <thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["URL", "Sources", "Scope", "Validation", "Classification"].map((header) => <th key={header} className="px-3 py-2">{header}</th>)}</tr></thead>
+        <thead className="bg-stone-100 text-xs uppercase text-stone-500">
+          <tr>
+            {["URL", "Sources", "Scope", "Validation", "Classification"].map(
+              (header) => (
+                <th key={header} className="px-3 py-2">
+                  {header}
+                </th>
+              ),
+            )}
+          </tr>
+        </thead>
         <tbody>
           {items.map((item) => (
-            <tr key={item.normalized_url ?? item.sources.map((source) => source.entry_id).join(",")} className="border-t border-stone-100 align-top">
-              <td className="max-w-xl px-3 py-2 font-mono text-xs">{item.normalized_url ?? "Invalid URL"}</td>
-              <td className="px-3 py-2">{item.source_count}<details><summary className="cursor-pointer text-xs underline">View</summary><ul className="mt-1 space-y-1 text-xs">{item.sources.map((source) => <li key={String(source.entry_id)}>{String(source.name)} - {String(source.type)}</li>)}</ul></details></td>
+            <tr
+              key={
+                item.normalized_url ??
+                item.sources.map((source) => source.entry_id).join(",")
+              }
+              className="border-t border-stone-100 align-top"
+            >
+              <td className="max-w-xl px-3 py-2 font-mono text-xs">
+                {item.normalized_url ?? "Invalid URL"}
+              </td>
+              <td className="px-3 py-2">
+                {item.source_count}
+                <details>
+                  <summary className="cursor-pointer text-xs underline">
+                    View
+                  </summary>
+                  <ul className="mt-1 space-y-1 text-xs">
+                    {item.sources.map((source) => (
+                      <li key={String(source.entry_id)}>
+                        {String(source.name)} - {String(source.type)}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              </td>
               <td className="px-3 py-2">{item.scope_decision}</td>
               <td className="px-3 py-2">{item.validation_state}</td>
               <td className="px-3 py-2">{item.classification}</td>
@@ -413,19 +1360,38 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
 function ScopeSummary({ site }: { site: Site }) {
   const scope = site.scope_config;
   const allowed = scope.allowed_host_patterns.length;
-  const included = scope.included_path_prefixes.filter((path) => path !== "/").length;
+  const included = scope.included_path_prefixes.filter(
+    (path) => path !== "/",
+  ).length;
   return (
     <div className="flex flex-wrap gap-2 text-xs">
-      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">{allowed ? plural(allowed, "allowed host") : `Exact hostname from ${new URL(site.base_url).hostname}`}</span>
-      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">{scope.follow_subdomains ? "Subdomains included" : "Subdomains excluded"}</span>
-      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">{included ? plural(included, "included path") : "All paths included"}</span>
-      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">Maximum {scope.max_pages} pages</span>
-      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">Maximum depth {scope.max_depth}</span>
+      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">
+        {allowed
+          ? plural(allowed, "allowed host")
+          : `Exact hostname from ${new URL(site.base_url).hostname}`}
+      </span>
+      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">
+        {scope.follow_subdomains
+          ? "Subdomains included"
+          : "Subdomains excluded"}
+      </span>
+      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">
+        {included ? plural(included, "included path") : "All paths included"}
+      </span>
+      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">
+        Maximum {scope.max_pages} pages
+      </span>
+      <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1">
+        Maximum depth {scope.max_depth}
+      </span>
     </div>
   );
 }
 
-function setTab(setSearchParams: ReturnType<typeof useSearchParams>[1], tab: string) {
+function setTab(
+  setSearchParams: ReturnType<typeof useSearchParams>[1],
+  tab: string,
+) {
   setSearchParams((current) => {
     const next = new URLSearchParams(current);
     next.set("tab", tab);
@@ -433,19 +1399,55 @@ function setTab(setSearchParams: ReturnType<typeof useSearchParams>[1], tab: str
   });
 }
 
-function Pagination({ total, limit, offset, setSearchParams, searchParams }: { total: number; limit: number; offset: number; setSearchParams: ReturnType<typeof useSearchParams>[1]; searchParams: URLSearchParams }) {
+function Pagination({
+  total,
+  limit,
+  offset,
+  setSearchParams,
+  searchParams,
+}: {
+  total: number;
+  limit: number;
+  offset: number;
+  setSearchParams: ReturnType<typeof useSearchParams>[1];
+  searchParams: URLSearchParams;
+}) {
   return (
     <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
       <span>{plural(total, "item")}</span>
       <div className="flex gap-2">
-        <Button type="button" disabled={offset <= 0} onClick={() => setOffset(setSearchParams, searchParams, Math.max(0, offset - limit))}>Previous</Button>
-        <Button type="button" disabled={offset + limit >= total} onClick={() => setOffset(setSearchParams, searchParams, offset + limit)}>Next</Button>
+        <Button
+          type="button"
+          disabled={offset <= 0}
+          onClick={() =>
+            setOffset(
+              setSearchParams,
+              searchParams,
+              Math.max(0, offset - limit),
+            )
+          }
+        >
+          Previous
+        </Button>
+        <Button
+          type="button"
+          disabled={offset + limit >= total}
+          onClick={() =>
+            setOffset(setSearchParams, searchParams, offset + limit)
+          }
+        >
+          Next
+        </Button>
       </div>
     </div>
   );
 }
 
-function setOffset(setSearchParams: ReturnType<typeof useSearchParams>[1], searchParams: URLSearchParams, offset: number) {
+function setOffset(
+  setSearchParams: ReturnType<typeof useSearchParams>[1],
+  searchParams: URLSearchParams,
+  offset: number,
+) {
   setSearchParams(() => {
     const next = new URLSearchParams(searchParams);
     next.set("offset", String(offset));
@@ -453,29 +1455,11 @@ function setOffset(setSearchParams: ReturnType<typeof useSearchParams>[1], searc
   });
 }
 
-function retrievalLabel(value: string | null) {
-  const labels: Record<string, string> = {
-    full_fetch: "Full download",
-    full_fetch_after_revalidation_fallback: "Full download",
-    conditional_not_modified: "Revalidated",
-    non_html: "Non-HTML",
-    failed: "Failed"
-  };
-  return value ? labels[value] ?? value : "Legacy observation";
-}
-
-function parseLabel(value: string | null) {
-  const labels: Record<string, string> = {
-    parsed: "Full parse",
-    reused_exact_hash: "Parsed result reused",
-    reused_not_modified: "Parsed result reused",
-    not_applicable: "No parse",
-    failed: "Parse failed"
-  };
-  return value ? labels[value] ?? value : "Legacy parse state";
-}
-
-function setSearchParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string) {
+function setSearchParam(
+  setSearchParams: ReturnType<typeof useSearchParams>[1],
+  key: string,
+  value: string,
+) {
   setSearchParams((current) => {
     const next = new URLSearchParams(current);
     if (value) next.set(key, value);

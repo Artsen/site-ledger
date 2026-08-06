@@ -9,6 +9,7 @@ from app.services.scan_queries import (
     list_scan_history,
     list_scan_pages,
     list_snapshot_inbound_links,
+    list_snapshot_outgoing_links,
 )
 from app.storage.content_store import LocalContentStore
 
@@ -111,6 +112,82 @@ def test_inbound_links_are_scan_specific_paginated_and_summarized(db_session: Se
     assert self_result is not None
     assert self_result.summary.self_link_occurrences == 1
     assert self_result.items[0].is_self_link is True
+
+
+def test_link_role_filters_counts_and_duplicate_occurrences_are_preserved(
+    db_session: Session,
+) -> None:
+    scan, _, target_resource = _two_scan_graph(db_session)
+    target = (
+        db_session.query(ResourceSnapshot)
+        .filter_by(scan_id=scan.id, resource_id=target_resource.id)
+        .one()
+    )
+    occurrences = list(
+        db_session.scalars(
+            db_session.query(ResourceOccurrence)
+            .join(ResourceSnapshot)
+            .filter(ResourceSnapshot.scan_id == scan.id)
+            .statement
+        )
+    )
+    role_values = ["navigation", "footer", "navigation", None]
+    for occurrence, role in zip(occurrences, role_values, strict=True):
+        occurrence.link_role = role
+        occurrence.link_role_rule = f"test_{role}" if role else None
+    db_session.commit()
+
+    navigation = list_snapshot_inbound_links(
+        db_session,
+        snapshot_id=target.id,
+        search=None,
+        scope_decision=None,
+        source_status=None,
+        rel=None,
+        link_role="navigation",
+        limit=10,
+        offset=0,
+    )
+    legacy = list_snapshot_inbound_links(
+        db_session,
+        snapshot_id=target.id,
+        search=None,
+        scope_decision=None,
+        source_status=None,
+        rel=None,
+        link_role="legacy_unclassified",
+        limit=10,
+        offset=0,
+    )
+    assert navigation is not None and navigation.total == 2
+    assert navigation.summary.role_counts == {"navigation": 2}
+    assert all(item.link_role_label == "Navigation" for item in navigation.items)
+    assert all(item.scope_decision == "crawlable" for item in navigation.items)
+    assert legacy is not None and legacy.total == 1
+    assert legacy.items[0].link_role_label == "Unclassified legacy link"
+
+    source_snapshot_id = navigation.items[0].source_snapshot_id
+    queries: list[str] = []
+
+    def before_cursor_execute(*args) -> None:
+        queries.append(str(args[2]))
+
+    event.listen(db_session.bind, "before_cursor_execute", before_cursor_execute)
+    try:
+        outgoing = list_snapshot_outgoing_links(
+            db_session,
+            source_snapshot_id,
+            link_role="navigation",
+            limit=1,
+            offset=0,
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", before_cursor_execute)
+
+    assert outgoing is not None and outgoing.total >= 1
+    assert outgoing.items[0].link_role_rule == "test_navigation"
+    assert outgoing.summary.role_counts == {"navigation": outgoing.total}
+    assert len(queries) <= 6
 
 
 def test_deleting_scan_preserves_other_scan_counts_and_shared_blobs(

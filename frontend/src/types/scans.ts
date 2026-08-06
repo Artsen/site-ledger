@@ -311,11 +311,18 @@ export type Snapshot = {
 };
 
 export type PersistentPage = {
+  site_page_id: number;
   resource_id: number;
   normalized_url: string;
   host: string;
   path: string;
   query: string;
+  owner_label: string | null;
+  workflow_status: string;
+  categories: PageCategory[];
+  category_count: number;
+  note_count: number;
+  associated_at: string;
   observation_count: number;
   first_observed_at: string | null;
   latest_observed_at: string | null;
@@ -326,6 +333,9 @@ export type PersistentPage = {
   latest_retrieval_method: string | null;
   latest_parse_method: string | null;
   latest_reused_from_snapshot_id: number | null;
+  latest_fetch_state: string | null;
+  latest_error_type: string | null;
+  latest_error_message: string | null;
 };
 
 export type PersistentPageList = {
@@ -347,6 +357,9 @@ export type PageObservation = {
   site_id: number | null;
   site_name: string | null;
   scan_created_at: string;
+  scan_status: string;
+  scan_started_at: string | null;
+  scan_finished_at: string | null;
   observed_at: string | null;
   requested_url: string;
   final_url: string | null;
@@ -392,6 +405,10 @@ export type LinkOccurrence = {
   in_scope: boolean;
   scope_decision: string;
   exclusion_reason: string | null;
+  link_role: string | null;
+  link_role_label: string;
+  link_role_rule: string | null;
+  link_context_json: Record<string, unknown> | null;
   discovered_at: string;
 };
 
@@ -418,7 +435,66 @@ export type InboundLinkList = {
     unique_anchor_texts: number;
     nofollow_occurrences: number;
     self_link_occurrences: number;
+    role_counts: Record<string, number>;
   };
+};
+
+export type OutgoingLinkList = {
+  items: LinkOccurrence[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: {
+    total_occurrences: number;
+    nofollow_occurrences: number;
+    in_scope_occurrences: number;
+    role_counts: Record<string, number>;
+  };
+};
+
+export type PageCategory = {
+  id: number;
+  website_property_id: number;
+  name: string;
+  description: string | null;
+  color_key: string;
+  sort_order: number;
+  is_active: boolean;
+  assignment_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PageCategoryList = {
+  items: PageCategory[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type Note = {
+  id: number;
+  website_property_id: number | null;
+  scan_id: number | null;
+  site_page_id: number | null;
+  body: string;
+  is_pinned: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NoteList = {
+  items: Note[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type BulkMutationResult = {
+  selected: number;
+  changed: number;
+  unchanged: number;
+  rejected: number;
 };
 
 export type ScanHistory = {

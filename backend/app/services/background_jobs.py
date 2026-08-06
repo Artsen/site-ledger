@@ -210,6 +210,7 @@ def heartbeat_job(
     if result.rowcount != 1:
         db.rollback()
         raise StaleLeaseError("Job lease is no longer active.")
+    _touch_assigned_worker(db, job_id, now)
     db.commit()
 
 
@@ -256,7 +257,18 @@ def update_progress(
     if result.rowcount != 1:
         db.rollback()
         raise StaleLeaseError("Job lease is no longer active.")
+    _touch_assigned_worker(db, job_id, now)
     db.commit()
+
+
+def _touch_assigned_worker(db: Session, job_id: int, now: datetime) -> None:
+    worker_id = db.scalar(select(BackgroundJob.worker_id).where(BackgroundJob.id == job_id))
+    if worker_id:
+        db.execute(
+            update(WorkerInstance)
+            .where(WorkerInstance.worker_id == worker_id)
+            .values(last_seen_at=now, status="online", stopped_at=None)
+        )
 
 
 def complete_job(

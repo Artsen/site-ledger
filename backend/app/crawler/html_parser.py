@@ -6,6 +6,8 @@ from urllib.parse import urljoin
 from lxml import html
 from lxml.etree import ParserError
 
+from app.crawler.link_roles import classify_link_role
+
 
 @dataclass(frozen=True)
 class AnchorData:
@@ -17,6 +19,9 @@ class AnchorData:
     rel: str | None
     target: str | None
     dom_path: str
+    link_role: str
+    link_role_rule: str
+    link_context_json: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,7 @@ def parse_html(content: bytes, base_url: str) -> ParsedHtml:
     for anchor in cast(list[Any], document.xpath("//a")):
         raw_href = _as_str(anchor.get("href"))
         resolved = urljoin(base_url, raw_href) if raw_href else None
+        link_role = classify_link_role(anchor, resolved)
         anchors.append(
             AnchorData(
                 raw_href=raw_href,
@@ -102,6 +108,9 @@ def parse_html(content: bytes, base_url: str) -> ParsedHtml:
                 rel=_as_str(anchor.get("rel")),
                 target=_as_str(anchor.get("target")),
                 dom_path=_dom_path(anchor),
+                link_role=link_role.role,
+                link_role_rule=link_role.rule,
+                link_context_json=link_role.context,
             )
         )
 

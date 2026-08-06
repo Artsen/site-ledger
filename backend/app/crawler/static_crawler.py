@@ -26,8 +26,9 @@ from app.services.cache_policy import (
     request_variant_fingerprint,
     response_header_value,
 )
-from app.services.parse_artifacts import get_or_create_artifact, load_artifact_anchors
+from app.services.parse_artifacts import get_or_create_artifact
 from app.services.repositories import get_or_create_resource
+from app.services.site_pages import ensure_site_page
 from app.storage.content_store import LocalContentStore
 
 
@@ -115,6 +116,9 @@ class StaticPageCrawler:
                         in_scope=result.in_scope,
                         scope_decision=result.decision,
                         exclusion_reason=result.exclusion_reason,
+                        link_role=anchor.link_role,
+                        link_role_rule=anchor.link_role_rule,
+                        link_context_json=anchor.link_context_json,
                     )
                     self.db.add(occurrence)
                     if (
@@ -199,29 +203,15 @@ class StaticPageCrawler:
                 scan.conditional_request_count += 1
             if candidate is not None and result.http_status == 304:
                 if result.final_url == candidate.snapshot.final_url and candidate.snapshot.blob:
-                    artifact_result = (
-                        get_or_create_artifact(
-                            self.db,
-                            blob=candidate.snapshot.blob,
-                            content=self.store.get(candidate.snapshot.blob),
-                            resolution_base_url=candidate.snapshot.final_url
-                            or candidate.snapshot.requested_url,
-                        )
-                        if candidate.snapshot.parse_artifact_id is None
-                        else None
+                    revalidation_artifact_result = get_or_create_artifact(
+                        self.db,
+                        blob=candidate.snapshot.blob,
+                        content=self.store.get(candidate.snapshot.blob),
+                        resolution_base_url=candidate.snapshot.final_url
+                        or candidate.snapshot.requested_url,
                     )
-                    artifact = (
-                        artifact_result.artifact
-                        if artifact_result
-                        else candidate.snapshot.parse_artifact
-                    )
-                    anchors = (
-                        artifact_result.anchors
-                        if artifact_result
-                        else load_artifact_anchors(self.db, artifact)
-                        if artifact
-                        else []
-                    )
+                    revalidation_artifact = revalidation_artifact_result.artifact
+                    anchors = revalidation_artifact_result.anchors
                     snapshot = ResourceSnapshot(
                         scan_id=scan.id,
                         resource_id=resource.id,
@@ -236,30 +226,16 @@ class StaticPageCrawler:
                         response_headers=candidate.snapshot.response_headers,
                         redirect_chain=result.redirect_chain,
                         html_blob_id=candidate.snapshot.html_blob_id,
-                        parse_artifact_id=artifact.id if artifact else None,
+                        parse_artifact_id=revalidation_artifact.id,
                         reused_from_snapshot_id=candidate.snapshot.id,
                         raw_html_sha256=candidate.snapshot.raw_html_sha256,
-                        head_sha256=artifact.head_sha256
-                        if artifact
-                        else candidate.snapshot.head_sha256,
-                        page_title=artifact.page_title
-                        if artifact
-                        else candidate.snapshot.page_title,
-                        html_language=artifact.html_language
-                        if artifact
-                        else candidate.snapshot.html_language,
-                        meta_description=artifact.meta_description
-                        if artifact
-                        else candidate.snapshot.meta_description,
-                        meta_robots=artifact.meta_robots
-                        if artifact
-                        else candidate.snapshot.meta_robots,
-                        canonical_url=artifact.canonical_url
-                        if artifact
-                        else candidate.snapshot.canonical_url,
-                        parsed_head_json=artifact.parsed_head_json
-                        if artifact
-                        else candidate.snapshot.parsed_head_json,
+                        head_sha256=revalidation_artifact.head_sha256,
+                        page_title=revalidation_artifact.page_title,
+                        html_language=revalidation_artifact.html_language,
+                        meta_description=revalidation_artifact.meta_description,
+                        meta_robots=revalidation_artifact.meta_robots,
+                        canonical_url=revalidation_artifact.canonical_url,
+                        parsed_head_json=revalidation_artifact.parsed_head_json,
                         fetch_state="fetched",
                         error_type=None,
                         error_message=None,
@@ -276,6 +252,12 @@ class StaticPageCrawler:
                     )
                     self.db.add(snapshot)
                     self.db.flush()
+                    ensure_site_page(
+                        self.db,
+                        scan=scan,
+                        resource=resource,
+                        associated_at=snapshot.fetched_at,
+                    )
                     scan.not_modified_count += 1
                     scan.parse_reuse_count += 1
                     scan.reused_content_bytes += candidate.snapshot.blob.raw_byte_size
@@ -353,6 +335,12 @@ class StaticPageCrawler:
             )
             self.db.add(snapshot)
             self.db.flush()
+            ensure_site_page(
+                self.db,
+                scan=scan,
+                resource=resource,
+                associated_at=snapshot.fetched_at,
+            )
             if not is_html:
                 scan.skipped_count += 1
             return snapshot, anchors
@@ -427,6 +415,12 @@ class StaticPageCrawler:
         scan.failed_count += 1
         self.db.add(snapshot)
         self.db.flush()
+        ensure_site_page(
+            self.db,
+            scan=scan,
+            resource=resource,
+            associated_at=snapshot.fetched_at,
+        )
         return snapshot
 
     @staticmethod

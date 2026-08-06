@@ -130,6 +130,8 @@ class WebsitePropertyRead(BaseModel):
     total_scan_count: int = 0
     latest_scan: ScanSummary | None = None
     recent_scans: list[ScanSummary] = Field(default_factory=list)
+    note_count: int = 0
+    category_count: int = 0
 
     model_config = {"from_attributes": True}
 

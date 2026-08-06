@@ -47,6 +47,8 @@ Implemented capabilities include:
 - Sitemap, robots-discovered sitemap, and manual URL Sources.
 - URL Inventory and scan-seed provenance.
 - Persistent Pages and Page observation history.
+- Site-scoped Page workspaces, categories, owner labels, workflow status, and plain-text notes.
+- Deterministic occurrence-specific link roles and classification provenance.
 - Conditional HTTP revalidation and parsed-result reuse.
 - Stored HTML evidence and parsed metadata.
 - Inbound and outgoing link provenance.
@@ -85,6 +87,8 @@ behavior. Keep storage behind the existing content-store abstraction.
 - services.source_* owns Sources, refresh, and Inventory.
 - services.scan_* owns scan inputs, queries, and deletion.
 - services.page_queries owns persistent Page catalogs and observation history.
+- services.site_pages, services.page_categories, and services.notes own Site-scoped Page workflow.
+- crawler.link_roles owns pure deterministic link-role classification.
 - services.cache_policy and services.parse_artifacts own conservative reuse.
 - services.graph_config owns graph capabilities and limits.
 - services.graph_queries owns scan-specific topology queries and aggregation.

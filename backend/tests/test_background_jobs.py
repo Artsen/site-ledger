@@ -1,9 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import BackgroundJob, Scan, SourceRefresh
+from app.models import BackgroundJob, Scan, SourceRefresh, WorkerInstance
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate
 from app.schemas.sources import UrlSourceCreate
@@ -16,6 +17,7 @@ from app.services.background_jobs import (
     recover_expired_jobs,
     register_worker,
     request_cancellation,
+    update_progress,
     worker_health,
 )
 from app.services.site_management import create_site
@@ -80,6 +82,23 @@ def test_worker_health_and_expired_scan_recovery(db_session: Session) -> None:
 
     claimed = claim_next_job(db_session, worker_id="worker-a", lease_seconds=1)
     assert claimed is not None
+    worker = db_session.scalar(select(WorkerInstance).where(WorkerInstance.worker_id == "worker-a"))
+    assert worker is not None
+    worker.last_seen_at = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.commit()
+
+    update_progress(
+        db_session,
+        job_id=claimed.job.id,
+        lease_token=claimed.lease_token,
+        phase="running",
+        current=1,
+        total=2,
+        unit="pages",
+    )
+    db_session.refresh(worker)
+    assert worker.last_seen_at.replace(tzinfo=UTC) > datetime.now(UTC) - timedelta(seconds=5)
+
     job = db_session.get(BackgroundJob, claimed.job.id)
     assert job is not None
     job.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)

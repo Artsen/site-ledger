@@ -61,6 +61,7 @@ class GraphEdgeRead(BaseModel):
     first_discovered_at: datetime | None
     last_discovered_at: datetime | None
     scope_decisions: dict[str, int]
+    role_counts: dict[str, int] = Field(default_factory=dict)
     dom_regions: dict[str, int] = Field(default_factory=dict)
 
 

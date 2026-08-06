@@ -25,6 +25,7 @@ current implementations.
 
 - WebsiteProperty is a saved Site with reusable configuration.
 - WebResource is the persistent Page identity.
+- SitePage associates a WebResource with one saved Site and owns Site-specific manual metadata.
 - ResourceSnapshot is one scan-specific Page observation.
 - ResourceOccurrence is one duplicate-preserving reference found in an observation.
 - ContentBlob stores exact compressed response evidence by SHA-256.
@@ -109,7 +110,9 @@ WebResource provides stable Page identity across scans. ResourceSnapshot retains
 requested URL, final URL, HTTP result, retrieval metadata, parsed metadata, evidence references, and
 error state.
 
-services.page_queries provides Site-scoped Page catalogs and observation history. An explicit
+services.page_queries provides Site-scoped Page catalogs based on SitePage and left-joined
+observation history. services.site_pages, services.page_categories, and services.notes own manual
+organization and exactly-one-target notes. An explicit
 all-sites observation mode can inspect the same normalized Page identity outside the selected Site.
 
 Parse artifacts are identified by content blob, parser version, parser configuration, and final URL
@@ -121,6 +124,7 @@ a new observation, records the actual retrieval status separately from the effec
 and recreates current-scan link occurrences.
 
 See [Page history and reuse](page-history-and-reuse.md).
+See [Page workspaces](page-workspaces.md).
 
 ## Scan Queries And Lifecycle
 

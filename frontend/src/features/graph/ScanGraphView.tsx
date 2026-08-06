@@ -3,6 +3,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState, type MutableRefOb
 import { Link, useSearchParams } from "react-router-dom";
 
 import { getGraphCapabilities, getGraphEdgeOccurrences, getScanGraph } from "../../api/client";
+import { LinkRoleBadge } from "../../components/PageOrganization";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
@@ -353,7 +354,7 @@ function NodeInspector({ scanId, node, setSearchParams }: { scanId: string; node
   );
 }
 
-function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams, setSearchParams, capabilities }: { scanId: string; edge: RendererEdge; occurrences?: { items: Array<{ id: number; anchor_text: string | null; raw_href: string | null; dom_path: string | null; rel: string | null; scope_decision: string; discovered_at: string }>; total: number; limit: number; offset: number }; loading: boolean; error: unknown; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1]; capabilities: GraphCapabilities }) {
+function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams, setSearchParams, capabilities }: { scanId: string; edge: RendererEdge; occurrences?: { items: Array<{ id: number; anchor_text: string | null; raw_href: string | null; dom_path: string | null; rel: string | null; scope_decision: string; discovered_at: string; link_role: string | null; link_role_label: string; link_role_rule: string | null }>; total: number; limit: number; offset: number }; loading: boolean; error: unknown; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1]; capabilities: GraphCapabilities }) {
   const search = searchParams.get("edge_search") ?? "";
   const limit = occurrences?.limit ?? capabilities.occurrence_page_default;
   const offset = occurrences?.offset ?? Number(searchParams.get("edge_offset") ?? 0);
@@ -376,6 +377,7 @@ function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams
         {(occurrences?.items ?? []).map((item) => (
           <div key={item.id} className="py-2 text-xs">
             <div className="font-medium">{item.anchor_text || "Empty anchor"}</div>
+            <div className="my-1"><LinkRoleBadge role={item.link_role} label={item.link_role_label} rule={item.link_role_rule} /></div>
             <div className="break-all font-mono text-stone-600">{item.raw_href}</div>
             <div className="text-stone-500">{item.scope_decision}{item.rel ? ` - rel=${item.rel}` : ""}{item.dom_path ? ` - ${item.dom_path}` : ""}</div>
           </div>

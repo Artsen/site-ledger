@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models import (
     BackgroundJob,
     JobEvent,
+    Note,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -16,9 +17,26 @@ from app.models import (
 )
 from app.schemas.graph import GraphCapabilitiesRead, GraphEdgeOccurrenceList, GraphResponse
 from app.schemas.jobs import JobEventList, JobEventRead, JobList, JobRead, WorkerHealth
+from app.schemas.page_workspaces import (
+    BulkMutationResult,
+    BulkPageCategories,
+    BulkPageMetadata,
+    NoteCreate,
+    NoteList,
+    NoteRead,
+    NoteSort,
+    NoteUpdate,
+    PageCategoryCreate,
+    PageCategoryDeletionPreview,
+    PageCategoryList,
+    PageCategoryRead,
+    PageCategoryUpdate,
+    PageMetadataUpdate,
+)
 from app.schemas.scans import (
     InboundLinkList,
     LinkRead,
+    OutgoingLinkList,
     PageList,
     PageObservationList,
     PersistentPageDetail,
@@ -68,6 +86,23 @@ from app.services.graph_queries import (
     get_scan_graph,
     list_graph_edge_occurrences,
 )
+from app.services.notes import (
+    create_note,
+    delete_note,
+    find_page_target,
+    list_notes,
+    scan_exists,
+    site_exists,
+    update_note,
+)
+from app.services.page_categories import (
+    DuplicateCategoryError,
+    create_category,
+    delete_category,
+    list_categories,
+    preview_category_deletion,
+    update_category,
+)
 from app.services.page_queries import get_site_page, list_page_observations, list_site_pages
 from app.services.scan_deletion import delete_scan as delete_scan_service
 from app.services.scan_deletion import preview_scan_deletion
@@ -75,6 +110,7 @@ from app.services.scan_queries import (
     list_scan_history,
     list_scan_pages,
     list_snapshot_inbound_links,
+    list_snapshot_outgoing_links,
 )
 from app.services.site_management import (
     DuplicateSiteError,
@@ -84,6 +120,12 @@ from app.services.site_management import (
     create_site,
     delete_site,
     update_site,
+)
+from app.services.site_pages import (
+    bulk_categories,
+    bulk_metadata,
+    find_site_page,
+    update_page_metadata,
 )
 from app.services.site_queries import get_site_detail, list_site_scans, list_sites
 from app.services.source_management import (
@@ -555,6 +597,99 @@ def get_site_inventory(
     return result
 
 
+@router.get("/sites/{site_id}/page-categories", response_model=PageCategoryList)
+def get_page_categories(
+    site_id: int,
+    db: DbSession,
+    search: str | None = None,
+    active_state: Literal["active", "archived", "all"] = "all",
+    sort: Literal["name", "sort_order", "created_at"] = "sort_order",
+    direction: Literal["asc", "desc"] = "asc",
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> PageCategoryList:
+    result = list_categories(
+        db,
+        site_id,
+        search=search,
+        active_state=active_state,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.post("/sites/{site_id}/page-categories", response_model=PageCategoryRead, status_code=201)
+def post_page_category(
+    site_id: int, payload: PageCategoryCreate, db: DbSession
+) -> PageCategoryRead:
+    try:
+        category = create_category(db, site_id, payload)
+    except DuplicateCategoryError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if category is None:
+        raise HTTPException(404, "Site not found")
+    return PageCategoryRead.model_validate(category)
+
+
+@router.patch("/sites/{site_id}/page-categories/{category_id}", response_model=PageCategoryRead)
+def patch_page_category(
+    site_id: int, category_id: int, payload: PageCategoryUpdate, db: DbSession
+) -> PageCategoryRead:
+    try:
+        category = update_category(db, site_id, category_id, payload)
+    except DuplicateCategoryError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if category is None:
+        raise HTTPException(404, "Category not found")
+    return PageCategoryRead.model_validate(category)
+
+
+@router.get(
+    "/sites/{site_id}/page-categories/{category_id}/deletion-preview",
+    response_model=PageCategoryDeletionPreview,
+)
+def get_page_category_deletion_preview(
+    site_id: int, category_id: int, db: DbSession
+) -> PageCategoryDeletionPreview:
+    result = preview_category_deletion(db, site_id, category_id)
+    if result is None:
+        raise HTTPException(404, "Category not found")
+    return result
+
+
+@router.delete("/sites/{site_id}/page-categories/{category_id}")
+def delete_page_category(site_id: int, category_id: int, db: DbSession) -> dict[str, int]:
+    deleted = delete_category(db, site_id, category_id)
+    if deleted is None:
+        raise HTTPException(404, "Category not found")
+    return {"deleted_category_id": deleted}
+
+
+@router.post("/sites/{site_id}/pages/bulk-categories", response_model=BulkMutationResult)
+def post_bulk_page_categories(
+    site_id: int, payload: BulkPageCategories, db: DbSession
+) -> BulkMutationResult:
+    try:
+        return bulk_categories(db, site_id, payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/sites/{site_id}/pages/bulk-metadata", response_model=BulkMutationResult)
+def post_bulk_page_metadata(
+    site_id: int, payload: BulkPageMetadata, db: DbSession
+) -> BulkMutationResult:
+    try:
+        return bulk_metadata(db, site_id, payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.get("/sites/{site_id}/pages", response_model=PersistentPageList)
 def get_site_pages(
     site_id: int,
@@ -562,7 +697,16 @@ def get_site_pages(
     search: str | None = None,
     host: str | None = None,
     path_prefix: str | None = None,
-    sort: Literal["url", "observations", "first_observed", "latest_observed"] = "url",
+    category_id: int | None = None,
+    uncategorized: bool = False,
+    workflow_status: str | None = None,
+    owner: str | None = None,
+    unassigned_owner: bool = False,
+    has_notes: bool | None = None,
+    min_observations: int | None = Query(default=None, ge=0),
+    sort: Literal[
+        "url", "observations", "first_observed", "latest_observed", "owner", "workflow"
+    ] = "url",
     direction: Literal["asc", "desc"] = "asc",
     limit: PageLimit = 50,
     offset: PageOffset = 0,
@@ -573,6 +717,13 @@ def get_site_pages(
         search=search,
         host=host,
         path_prefix=path_prefix,
+        category_id=category_id,
+        uncategorized=uncategorized,
+        workflow_status=workflow_status,
+        owner=owner,
+        unassigned_owner=unassigned_owner,
+        has_notes=has_notes,
+        min_observations=min_observations,
         sort=sort,
         direction=direction,
         limit=limit,
@@ -591,6 +742,23 @@ def get_site_page_detail(site_id: int, resource_id: int, db: DbSession) -> Persi
     return result
 
 
+@router.patch("/sites/{site_id}/pages/{resource_id}/metadata", response_model=PersistentPageDetail)
+def patch_site_page_metadata(
+    site_id: int, resource_id: int, payload: PageMetadataUpdate, db: DbSession
+) -> PersistentPageDetail:
+    site_page = find_site_page(db, site_id, resource_id)
+    if site_page is None:
+        raise HTTPException(404, "Page not found")
+    try:
+        update_page_metadata(db, site_page, payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    result = get_site_page(db, site_id, resource_id)
+    if result is None:
+        raise HTTPException(404, "Page not found")
+    return result
+
+
 @router.get(
     "/sites/{site_id}/pages/{resource_id}/observations",
     response_model=PageObservationList,
@@ -600,6 +768,13 @@ def get_site_page_observations(
     resource_id: int,
     db: DbSession,
     scope: Literal["site", "all"] = "site",
+    scan_status: str | None = None,
+    http_status: int | None = None,
+    fetch_state: str | None = None,
+    error_state: Literal["any", "with_errors", "without_errors"] = "any",
+    retrieval_method: str | None = None,
+    parse_method: str | None = None,
+    direction: Literal["asc", "desc"] = "desc",
     limit: PageLimit = 50,
     offset: PageOffset = 0,
 ) -> PageObservationList:
@@ -608,12 +783,134 @@ def get_site_page_observations(
         site_id,
         resource_id,
         scope=scope,
+        scan_status=scan_status,
+        http_status=http_status,
+        fetch_state=fetch_state,
+        error_state=error_state,
+        retrieval_method=retrieval_method,
+        parse_method=parse_method,
+        direction=direction,
         limit=limit,
         offset=offset,
     )
     if result is None:
         raise HTTPException(404, "Page not found")
     return result
+
+
+@router.get("/sites/{site_id}/notes", response_model=NoteList)
+def get_site_notes(
+    site_id: int,
+    db: DbSession,
+    pinned: bool | None = None,
+    search: str | None = None,
+    sort: NoteSort = "updated_at",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: ScanListLimit = 25,
+    offset: PageOffset = 0,
+) -> NoteList:
+    if not site_exists(db, site_id):
+        raise HTTPException(404, "Site not found")
+    return list_notes(
+        db,
+        website_property_id=site_id,
+        pinned=pinned,
+        search=search,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/sites/{site_id}/notes", response_model=NoteRead, status_code=201)
+def post_site_note(site_id: int, payload: NoteCreate, db: DbSession) -> NoteRead:
+    if not site_exists(db, site_id):
+        raise HTTPException(404, "Site not found")
+    return NoteRead.model_validate(create_note(db, payload, website_property_id=site_id))
+
+
+@router.get("/scans/{scan_id}/notes", response_model=NoteList)
+def get_scan_notes(
+    scan_id: int,
+    db: DbSession,
+    pinned: bool | None = None,
+    search: str | None = None,
+    sort: NoteSort = "updated_at",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: ScanListLimit = 25,
+    offset: PageOffset = 0,
+) -> NoteList:
+    if not scan_exists(db, scan_id):
+        raise HTTPException(404, "Scan not found")
+    return list_notes(
+        db,
+        scan_id=scan_id,
+        pinned=pinned,
+        search=search,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/scans/{scan_id}/notes", response_model=NoteRead, status_code=201)
+def post_scan_note(scan_id: int, payload: NoteCreate, db: DbSession) -> NoteRead:
+    if not scan_exists(db, scan_id):
+        raise HTTPException(404, "Scan not found")
+    return NoteRead.model_validate(create_note(db, payload, scan_id=scan_id))
+
+
+@router.get("/sites/{site_id}/pages/{resource_id}/notes", response_model=NoteList)
+def get_page_notes(
+    site_id: int,
+    resource_id: int,
+    db: DbSession,
+    pinned: bool | None = None,
+    search: str | None = None,
+    sort: NoteSort = "updated_at",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: ScanListLimit = 25,
+    offset: PageOffset = 0,
+) -> NoteList:
+    site_page = find_page_target(db, site_id, resource_id)
+    if site_page is None:
+        raise HTTPException(404, "Page not found")
+    return list_notes(
+        db,
+        site_page_id=site_page.id,
+        pinned=pinned,
+        search=search,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/sites/{site_id}/pages/{resource_id}/notes", response_model=NoteRead, status_code=201)
+def post_page_note(site_id: int, resource_id: int, payload: NoteCreate, db: DbSession) -> NoteRead:
+    site_page = find_page_target(db, site_id, resource_id)
+    if site_page is None:
+        raise HTTPException(404, "Page not found")
+    return NoteRead.model_validate(create_note(db, payload, site_page_id=site_page.id))
+
+
+@router.patch("/notes/{note_id}", response_model=NoteRead)
+def patch_note(note_id: int, payload: NoteUpdate, db: DbSession) -> NoteRead:
+    note = update_note(db, note_id, payload)
+    if note is None:
+        raise HTTPException(404, "Note not found")
+    return NoteRead.model_validate(note)
+
+
+@router.delete("/notes/{note_id}")
+def remove_note(note_id: int, db: DbSession) -> dict[str, int]:
+    deleted = delete_note(db, note_id)
+    if deleted is None:
+        raise HTTPException(404, "Note not found")
+    return {"deleted_note_id": deleted}
 
 
 @router.get("/scans/{scan_id}/seeds", response_model=ScanSeedList)
@@ -656,11 +953,13 @@ def get_site_scans(
 
 
 @router.get("/scans/{scan_id}", response_model=ScanRead)
-def get_scan(scan_id: int, db: DbSession) -> Scan:
+def get_scan(scan_id: int, db: DbSession) -> ScanRead:
     scan = db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(404, "Scan not found")
-    return scan
+    result = ScanRead.model_validate(scan, from_attributes=True)
+    result.note_count = db.scalar(select(func.count(Note.id)).where(Note.scan_id == scan.id)) or 0
+    return result
 
 
 @router.post("/scans/{scan_id}/cancel", response_model=ScanRead)
@@ -865,6 +1164,30 @@ def get_snapshot_links(snapshot_id: int, db: DbSession) -> list[ResourceOccurren
     )
 
 
+@router.get("/snapshots/{snapshot_id}/outgoing-links", response_model=OutgoingLinkList)
+def get_snapshot_outgoing_links(
+    snapshot_id: int,
+    db: DbSession,
+    search: str | None = None,
+    scope_decision: str | None = None,
+    link_role: str | None = None,
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> OutgoingLinkList:
+    result = list_snapshot_outgoing_links(
+        db,
+        snapshot_id,
+        search=search,
+        scope_decision=scope_decision,
+        link_role=link_role,
+        limit=limit,
+        offset=offset,
+    )
+    if result is None:
+        raise HTTPException(404, "Snapshot not found")
+    return result
+
+
 @router.get("/snapshots/{snapshot_id}/inbound-links", response_model=InboundLinkList)
 def get_snapshot_inbound_links(
     snapshot_id: int,
@@ -873,6 +1196,7 @@ def get_snapshot_inbound_links(
     scope_decision: str | None = None,
     source_status: int | None = None,
     rel: str | None = None,
+    link_role: str | None = None,
     sort: Literal["source_url", "anchor_text", "scope_decision", "source_status"] = "source_url",
     direction: Literal["asc", "desc"] = "asc",
     limit: PageLimit = 50,
@@ -885,6 +1209,7 @@ def get_snapshot_inbound_links(
         scope_decision=scope_decision,
         source_status=source_status,
         rel=rel,
+        link_role=link_role,
         sort=sort,
         direction=direction,
         limit=limit,

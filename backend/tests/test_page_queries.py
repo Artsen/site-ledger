@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.models import ResourceSnapshot, Scan, WebResource, WebsiteProperty
 from app.services.page_queries import list_page_observations, list_site_pages
+from app.services.site_pages import ensure_site_page
 
 
 def test_site_pages_collapses_observations_by_resource(db_session) -> None:
@@ -126,4 +127,13 @@ def _snapshot(
     )
     db_session.add(snapshot)
     db_session.flush()
+    scan = db_session.get(Scan, scan_id)
+    resource = db_session.get(WebResource, resource_id)
+    assert scan is not None and resource is not None
+    ensure_site_page(
+        db_session,
+        scan=scan,
+        resource=resource,
+        associated_at=fetched_at,
+    )
     return snapshot

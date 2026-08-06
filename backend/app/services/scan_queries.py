@@ -8,10 +8,81 @@ from app.schemas.scans import (
     InboundLinkList,
     InboundLinkRead,
     InboundLinkSummary,
+    LinkRead,
+    OutgoingLinkList,
+    OutgoingLinkSummary,
     PageList,
     PageRead,
     ScanHistory,
 )
+
+
+def list_snapshot_outgoing_links(
+    db: Session,
+    snapshot_id: int,
+    *,
+    search: str | None = None,
+    scope_decision: str | None = None,
+    link_role: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> OutgoingLinkList | None:
+    if db.get(ResourceSnapshot, snapshot_id) is None:
+        return None
+    query = select(ResourceOccurrence).where(
+        ResourceOccurrence.source_snapshot_id == snapshot_id,
+        ResourceOccurrence.relation_type == "page_link",
+    )
+    if search:
+        pattern = f"%{search}%"
+        query = query.where(
+            or_(
+                ResourceOccurrence.anchor_text.ilike(pattern),
+                ResourceOccurrence.raw_href.ilike(pattern),
+                ResourceOccurrence.resolved_url.ilike(pattern),
+            )
+        )
+    if scope_decision:
+        query = query.where(ResourceOccurrence.scope_decision == scope_decision)
+    if link_role == "legacy_unclassified":
+        query = query.where(ResourceOccurrence.link_role.is_(None))
+    elif link_role:
+        query = query.where(ResourceOccurrence.link_role == link_role)
+    filtered = query.subquery()
+    total = db.scalar(select(func.count()).select_from(filtered)) or 0
+    nofollow = (
+        db.scalar(
+            select(func.count()).select_from(filtered).where(filtered.c.rel.ilike("%nofollow%"))
+        )
+        or 0
+    )
+    in_scope = (
+        db.scalar(select(func.count()).select_from(filtered).where(filtered.c.in_scope.is_(True)))
+        or 0
+    )
+    role_counts = {
+        (role or "legacy_unclassified"): count
+        for role, count in db.execute(
+            select(filtered.c.link_role, func.count())
+            .select_from(filtered)
+            .group_by(filtered.c.link_role)
+        )
+    }
+    occurrences = list(
+        db.scalars(query.order_by(ResourceOccurrence.id).limit(limit).offset(offset))
+    )
+    return OutgoingLinkList(
+        items=[LinkRead.model_validate(item) for item in occurrences],
+        total=total,
+        limit=limit,
+        offset=offset,
+        summary=OutgoingLinkSummary(
+            total_occurrences=total,
+            nofollow_occurrences=nofollow,
+            in_scope_occurrences=in_scope,
+            role_counts=role_counts,
+        ),
+    )
 
 
 def list_scan_history(
@@ -154,6 +225,7 @@ def list_snapshot_inbound_links(
     scope_decision: str | None,
     source_status: int | None,
     rel: str | None,
+    link_role: str | None = None,
     sort: Literal["source_url", "anchor_text", "scope_decision", "source_status"] = "source_url",
     direction: Literal["asc", "desc"] = "asc",
     limit: int = 50,
@@ -172,12 +244,14 @@ def list_snapshot_inbound_links(
             source_snapshot.scan_id == target.scan_id,
         )
     )
-    base = _apply_inbound_filters(base, search, scope_decision, source_status, rel, source_snapshot)
+    base = _apply_inbound_filters(
+        base, search, scope_decision, source_status, rel, link_role, source_snapshot
+    )
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     summary = _inbound_summary(
         db,
         target,
-        _apply_inbound_filters(base, search, scope_decision, source_status, rel, source_snapshot),
+        base,
     )
     sort_map = {
         "source_url": func.coalesce(source_snapshot.final_url, source_snapshot.requested_url),
@@ -214,6 +288,9 @@ def list_snapshot_inbound_links(
                 in_scope=occurrence.in_scope,
                 scope_decision=occurrence.scope_decision,
                 exclusion_reason=occurrence.exclusion_reason,
+                link_role=occurrence.link_role,
+                link_role_label=occurrence.link_role_label,
+                link_role_rule=occurrence.link_role_rule,
                 discovered_at=occurrence.discovered_at,
                 is_self_link=source.id == target.id,
             )
@@ -255,12 +332,21 @@ def _inbound_summary(
         db.scalar(select(func.count()).select_from(filtered).where(filtered.c.id_1 == target.id))
         or 0
     )
+    role_counts = {
+        (role or "legacy_unclassified"): count
+        for role, count in db.execute(
+            select(filtered.c.link_role, func.count())
+            .select_from(filtered)
+            .group_by(filtered.c.link_role)
+        )
+    }
     return InboundLinkSummary(
         total_occurrences=total,
         unique_source_pages=unique_sources,
         unique_anchor_texts=unique_anchor_texts,
         nofollow_occurrences=nofollow,
         self_link_occurrences=self_links,
+        role_counts=role_counts,
     )
 
 
@@ -309,6 +395,7 @@ def _apply_inbound_filters(
     scope_decision: str | None,
     source_status: int | None,
     rel: str | None,
+    link_role: str | None,
     source_snapshot: Any,
 ) -> Select[tuple[ResourceOccurrence, ResourceSnapshot]]:
     if search:
@@ -329,4 +416,8 @@ def _apply_inbound_filters(
         query = query.where(source_snapshot.http_status == source_status)
     if rel:
         query = query.where(ResourceOccurrence.rel.ilike(f"%{rel}%"))
+    if link_role == "legacy_unclassified":
+        query = query.where(ResourceOccurrence.link_role.is_(None))
+    elif link_role:
+        query = query.where(ResourceOccurrence.link_role == link_role)
     return query

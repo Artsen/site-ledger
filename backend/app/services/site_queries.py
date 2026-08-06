@@ -3,7 +3,7 @@ from typing import Any, Literal
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Scan, WebsiteProperty
+from app.models import Note, PageCategory, Scan, WebsiteProperty
 from app.schemas.sites import (
     ScanSummary,
     SiteScans,
@@ -145,6 +145,12 @@ def get_site_detail(db: Session, site_id: int) -> WebsitePropertyRead | None:
         total_scan_count=total,
         latest_scan=_scan_summary(latest) if latest else None,
         recent_scans=[_scan_summary(scan) for scan in recent],
+        note_count=db.scalar(select(func.count(Note.id)).where(Note.website_property_id == site.id))
+        or 0,
+        category_count=db.scalar(
+            select(func.count(PageCategory.id)).where(PageCategory.website_property_id == site.id)
+        )
+        or 0,
     )
 
 
