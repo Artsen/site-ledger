@@ -35,6 +35,7 @@ from app.services.ai_document_sources import (
     discover_ai_document_sources,
     get_ai_source,
     preview_ai_source_deletion,
+    update_ai_source,
 )
 from app.services.background_jobs import active_job_for_source_refresh
 from app.services.source_management import DuplicateSourceError
@@ -72,6 +73,27 @@ def create(site_id: int, payload: AiDocumentSourceCreate, db: DbSession) -> AiDo
 @router.get("/ai-document-sources/{source_id}", response_model=AiDocumentSourceRead)
 def detail(source_id: int, db: DbSession) -> AiDocumentSourceRead:
     result = get_ai_source(db, source_id)
+    if result is None:
+        raise HTTPException(404, "AI Document Source not found")
+    return result
+
+
+@router.patch("/ai-document-sources/{source_id}", response_model=AiDocumentSourceRead)
+def update(
+    source_id: int,
+    payload: AiDocumentSourceCreate,
+    db: DbSession,
+) -> AiDocumentSourceRead:
+    try:
+        result = update_ai_source(
+            db,
+            source_id,
+            entry_url=payload.entry_url,
+            is_active=payload.is_active,
+            settings=payload.settings,
+        )
+    except (DuplicateSourceError, ValueError) as exc:
+        raise HTTPException(409, str(exc)) from exc
     if result is None:
         raise HTTPException(404, "AI Document Source not found")
     return result

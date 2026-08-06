@@ -273,7 +273,13 @@ def _ensure_unique_source(
 def _delete_unreferenced_source_resources(db: Session, resource_ids: list[int]) -> None:
     if not resource_ids:
         return
-    from app.models import ResourceOccurrence, ResourceSnapshot, ScanSeed
+    from app.models import (
+        AiDocumentReference,
+        AiDocumentSnapshot,
+        ResourceOccurrence,
+        ResourceSnapshot,
+        ScanSeed,
+    )
 
     referenced = set(
         db.scalars(
@@ -300,6 +306,18 @@ def _delete_unreferenced_source_resources(db: Session, resource_ids: list[int]) 
                 | (
                     select(func.count(ScanSeed.id))
                     .where(ScanSeed.resource_id == WebResource.id)
+                    .scalar_subquery()
+                    > 0
+                )
+                | (
+                    select(func.count(AiDocumentSnapshot.id))
+                    .where(AiDocumentSnapshot.resource_id == WebResource.id)
+                    .scalar_subquery()
+                    > 0
+                )
+                | (
+                    select(func.count(AiDocumentReference.id))
+                    .where(AiDocumentReference.target_resource_id == WebResource.id)
                     .scalar_subquery()
                     > 0
                 ),

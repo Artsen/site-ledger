@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -40,7 +41,11 @@ from app.schemas.ai_documents import (
     AiSourceDeletePreview,
 )
 from app.services.repositories import get_or_create_resource
-from app.services.source_management import DuplicateSourceError, upsert_source_entry
+from app.services.source_management import (
+    DuplicateSourceError,
+    _delete_unreferenced_source_resources,
+    upsert_source_entry,
+)
 from app.storage.ai_document_store import LocalAiDocumentStore
 
 
@@ -51,6 +56,10 @@ class _QueuedDocument:
     role: str
     explicit_relation: str | None
     ancestors: frozenset[str]
+
+
+class AiDocumentCancellationRequested(RuntimeError):
+    pass
 
 
 async def discover_ai_document_sources(
@@ -161,6 +170,52 @@ def get_ai_source(db: Session, source_id: int) -> AiDocumentSourceRead | None:
     )
     if source is None or source.normalized_source_url is None:
         return None
+    return _serialize_ai_source(db, source)
+
+
+def update_ai_source(
+    db: Session,
+    source_id: int,
+    *,
+    entry_url: str | None = None,
+    is_active: bool | None = None,
+    settings: AiDocumentSettings | None = None,
+) -> AiDocumentSourceRead | None:
+    source = db.scalar(
+        select(UrlSource).where(UrlSource.id == source_id, UrlSource.source_type == "ai_document")
+    )
+    if source is None:
+        return None
+    if entry_url is not None:
+        normalized = _in_scope_url(source.website_property, entry_url)
+        duplicate = db.scalar(
+            select(UrlSource.id).where(
+                UrlSource.website_property_id == source.website_property_id,
+                UrlSource.source_type == "ai_document",
+                UrlSource.normalized_source_url == normalized,
+                UrlSource.id != source.id,
+            )
+        )
+        if duplicate:
+            raise DuplicateSourceError("An AI Document Source with this entry URL already exists.")
+        source.source_url = normalized
+        source.normalized_source_url = normalized
+    if is_active is not None:
+        source.is_active = is_active
+    if settings is not None:
+        source.settings_json = settings.model_dump()
+    db.commit()
+    return get_ai_source(db, source.id)
+
+
+def _serialize_ai_source(db: Session, source: UrlSource) -> AiDocumentSourceRead:
+    assert source.normalized_source_url is not None
+    latest_source_refresh = db.scalar(
+        select(SourceRefresh)
+        .where(SourceRefresh.url_source_id == source.id)
+        .order_by(SourceRefresh.id.desc())
+        .limit(1)
+    )
     latest = db.scalar(
         select(AiDocumentRefresh)
         .join(SourceRefresh)
@@ -181,7 +236,8 @@ def get_ai_source(db: Session, source_id: int) -> AiDocumentSourceRead | None:
         warnings = (
             db.scalar(
                 select(func.count(AiDocumentValidation.id)).where(
-                    AiDocumentValidation.refresh_id == latest.id
+                    AiDocumentValidation.refresh_id == latest.id,
+                    AiDocumentValidation.severity.in_({"warning", "error"}),
                 )
             )
             or 0
@@ -199,6 +255,7 @@ def get_ai_source(db: Session, source_id: int) -> AiDocumentSourceRead | None:
         last_successful_refresh_at=source.last_successful_refresh_at,
         current_entry_count=current,
         latest_refresh_id=latest.id if latest else None,
+        latest_source_refresh_id=latest_source_refresh.id if latest_source_refresh else None,
         document_count=latest.document_saved_count if latest else 0,
         reference_count=latest.reference_count if latest else 0,
         warning_count=warnings,
@@ -248,12 +305,14 @@ async def execute_ai_document_refresh(
         previous = _previous_snapshot(db, source.id, resource.id)
         headers = _conditional_headers(previous)
         try:
-            result = await _fetch(
+            result = await _fetch_document(
                 source.website_property,
                 normalized,
-                settings.max_individual_document_bytes,
-                transport,
+                settings,
+                transport=transport,
                 headers=headers,
+                allow_external=settings.follow_external_documents,
+                should_cancel=should_cancel,
             )
             evidence.total_network_bytes += result.network_bytes_transferred
             if evidence.total_network_bytes > settings.max_total_network_bytes:
@@ -269,7 +328,24 @@ async def execute_ai_document_refresh(
                 content,
                 explicit_relation=item.explicit_relation,
             )
-            accepted = kind in {
+            response_mime = _mime(result.content_type)
+            if response_mime in {"text/html", "application/xhtml+xml"}:
+                kind, rule = "html_page_reference", "mime_html_response_mismatch"
+                _validation(
+                    db,
+                    evidence,
+                    "warning",
+                    "document_representation_mismatch",
+                    "The advertised AI document returned HTML; its body was not retained.",
+                )
+            elif response_mime and not (
+                response_mime.startswith("text/")
+                or "json" in response_mime
+                or "yaml" in response_mime
+            ):
+                kind, rule = "unsupported_binary", "mime_unsupported_binary"
+            successful_response = 200 <= result.http_status < 300 or result.http_status == 304
+            accepted = successful_response and kind in {
                 "llms_index",
                 "llms_full",
                 "markdown_document",
@@ -307,7 +383,15 @@ async def execute_ai_document_refresh(
                 document_role=item.role,
                 document_kind=kind,
                 classification_rule=rule,
-                fetch_state="saved" if blob else "metadata_only",
+                fetch_state=(
+                    "saved"
+                    if blob
+                    else "not_found"
+                    if result.http_status == 404
+                    else "http_error"
+                    if not successful_response
+                    else "metadata_only"
+                ),
                 http_status=result.http_status,
                 normalized_mime_type=_mime(result.content_type),
                 encoding=result.encoding or "utf-8",
@@ -331,7 +415,28 @@ async def execute_ai_document_refresh(
             evidence.document_saved_count += int(blob is not None)
             evidence.document_unchanged_count += int(change_state == "unchanged")
             evidence.document_changed_count += int(change_state in {"new", "changed"})
-            if kind == "llms_index" and content is not None:
+            if not successful_response:
+                evidence.document_skipped_count += 1
+                if result.http_status == 404 and item.depth == 0:
+                    _validation(
+                        db,
+                        evidence,
+                        "info",
+                        "root_candidate_not_found",
+                        "The configured AI document entry point was not found.",
+                        snapshot=snapshot,
+                    )
+                else:
+                    evidence.document_failed_count += 1
+                    _validation(
+                        db,
+                        evidence,
+                        "warning",
+                        "document_http_error",
+                        f"Document retrieval returned HTTP {result.http_status}.",
+                        snapshot=snapshot,
+                    )
+            elif kind == "llms_index" and content is not None:
                 index_count += 1
                 parsed = parse_ai_index(content, result.final_url, snapshot.encoding or "utf-8")
                 snapshot.parsed_title, snapshot.parsed_summary, snapshot.parsed_intro = (
@@ -381,6 +486,10 @@ async def execute_ai_document_refresh(
                 source_refresh.accepted_entry_count = evidence.document_saved_count
                 source_refresh.rejected_entry_count = evidence.document_failed_count
                 progress_callback(source_refresh)
+        except AiDocumentCancellationRequested:
+            evidence.status = source_refresh.status = "cancelled"
+            evidence.stop_reason = "cancelled_by_user"
+            break
         except Exception as exc:
             snapshot = AiDocumentSnapshot(
                 refresh_id=evidence.id,
@@ -428,7 +537,8 @@ async def execute_ai_document_refresh(
     warning_count = (
         db.scalar(
             select(func.count(AiDocumentValidation.id)).where(
-                AiDocumentValidation.refresh_id == evidence.id
+                AiDocumentValidation.refresh_id == evidence.id,
+                AiDocumentValidation.severity.in_({"warning", "error"}),
             )
         )
         or 0
@@ -539,17 +649,47 @@ def delete_ai_source(db: Session, source_id: int, store: LocalAiDocumentStore) -
             .distinct()
         )
     )
-    db.delete(source)
-    db.flush()
     orphan_blobs = list(
         db.scalars(
             select(AiDocumentBlob).where(
                 AiDocumentBlob.id.in_(candidate_blob_ids),
                 ~select(AiDocumentSnapshot.id)
-                .where(AiDocumentSnapshot.retained_blob_id == AiDocumentBlob.id)
+                .where(
+                    AiDocumentSnapshot.retained_blob_id == AiDocumentBlob.id,
+                    AiDocumentSnapshot.refresh_id.not_in(refresh_ids),
+                )
                 .exists(),
             )
         )
+    )
+    resource_ids = list(
+        db.scalars(
+            select(AiDocumentSnapshot.resource_id).where(
+                AiDocumentSnapshot.refresh_id.in_(refresh_ids)
+            )
+        )
+    ) + list(
+        db.scalars(
+            select(AiDocumentReference.target_resource_id)
+            .join(
+                AiDocumentSnapshot,
+                AiDocumentSnapshot.id == AiDocumentReference.parent_snapshot_id,
+            )
+            .where(
+                AiDocumentSnapshot.refresh_id.in_(refresh_ids),
+                AiDocumentReference.target_resource_id.is_not(None),
+            )
+        )
+    )
+    for evidence in db.scalars(
+        select(AiDocumentRefresh).where(AiDocumentRefresh.id.in_(refresh_ids))
+    ):
+        db.delete(evidence)
+    db.flush()
+    db.delete(source)
+    db.flush()
+    _delete_unreferenced_source_resources(
+        db, [resource_id for resource_id in resource_ids if resource_id is not None]
     )
     for blob in orphan_blobs:
         db.delete(blob)
@@ -618,15 +758,17 @@ def _reference(
             "external_reference",
         }
         if eligible_inventory:
-            entry, _ = upsert_source_entry(
-                db,
-                source,
-                normalized,
-                site=source.website_property,
-                source_type="ai_document",
-                refresh_id=evidence.source_refresh_id,
-                metadata={
-                    "ai_refresh_id": evidence.id,
+            prior_entry = db.scalar(
+                select(UrlSourceEntry).where(
+                    UrlSourceEntry.url_source_id == source.id,
+                    UrlSourceEntry.normalized_url == normalized,
+                )
+            )
+            origins = []
+            if prior_entry and prior_entry.last_refresh_id == evidence.source_refresh_id:
+                origins = list(prior_entry.source_metadata_json.get("ai_origins", []))
+            origins.append(
+                {
                     "parent_snapshot_id": snapshot.id,
                     "parent_url": snapshot.final_url or snapshot.requested_url,
                     "section": reference.section_title,
@@ -637,20 +779,31 @@ def _reference(
                     "discovery_depth": reference.discovery_depth,
                     "raw_url": raw_url,
                     "resolved_url": resolved,
+                }
+            )
+            entry, _ = upsert_source_entry(
+                db,
+                source,
+                normalized,
+                site=source.website_property,
+                source_type="ai_document",
+                refresh_id=evidence.source_refresh_id,
+                metadata={
+                    "ai_refresh_id": evidence.id,
+                    "ai_origins": origins,
                 },
             )
             reference.inventory_entry_id = entry.id
             if entry.normalized_url:
                 seen_inventory.add(entry.normalized_url)
+        source_settings = AiDocumentSettings.model_validate(source.settings_json or {})
         should_fetch = (
-            scope.in_scope
+            (scope.in_scope or source_settings.follow_external_documents)
             and not forms_cycle
             and (
                 kind == "llms_index"
                 or (
-                    AiDocumentSettings.model_validate(
-                        source.settings_json or {}
-                    ).save_declared_documents
+                    source_settings.save_declared_documents
                     and kind
                     in {
                         "llms_full",
@@ -715,26 +868,64 @@ async def _fetch(
     max_bytes: int,
     transport: httpx.AsyncBaseTransport | None,
     headers: dict[str, str] | None = None,
+    allow_external: bool = False,
+    timeout_seconds: float | None = None,
 ) -> SafeFetchResult:
     config = ScopeConfig.from_dict(site.scope_config)
     fetcher = SafeHttpFetcher(
         FetchLimits(
-            timeout_seconds=config.request_timeout_seconds,
+            timeout_seconds=timeout_seconds or config.request_timeout_seconds,
             max_response_bytes=max_bytes,
             max_redirects=config.max_redirects,
             user_agent=config.user_agent,
             allow_private_networks=config.allow_private_networks,
         ),
         transport=transport,
-        redirect_validator=lambda redirect_url: _redirect(site, redirect_url),
+        redirect_validator=lambda redirect_url: _redirect(site, redirect_url, allow_external),
     )
     return await fetcher.get(url, headers=headers)
 
 
+async def _fetch_document(
+    site: WebsiteProperty,
+    url: str,
+    settings: AiDocumentSettings,
+    *,
+    transport: httpx.AsyncBaseTransport | None,
+    headers: dict[str, str],
+    allow_external: bool,
+    should_cancel: Callable[[], bool] | None,
+) -> SafeFetchResult:
+    for attempt in range(settings.max_attempts):
+        if should_cancel and should_cancel():
+            raise AiDocumentCancellationRequested("Cancellation requested during document retry.")
+        try:
+            result = await _fetch(
+                site,
+                url,
+                settings.max_individual_document_bytes,
+                transport,
+                headers=headers,
+                allow_external=allow_external,
+                timeout_seconds=settings.request_timeout_seconds,
+            )
+            if result.http_status not in {408, 425, 429, 500, 502, 503, 504}:
+                return result
+            if attempt == settings.max_attempts - 1:
+                return result
+        except (httpx.TransportError, OSError):
+            if attempt == settings.max_attempts - 1:
+                raise
+        await asyncio.sleep(min(1.0, 0.1 * (2**attempt)))
+    raise RuntimeError("AI document retry loop ended unexpectedly.")
+
+
 async def _redirect(
-    site: WebsiteProperty, url: str
+    site: WebsiteProperty, url: str, allow_external: bool = False
 ) -> tuple[bool, str | None, str | None, str | None]:
     result = ScopeEngine(ScopeConfig.from_dict(site.scope_config), site.base_url).evaluate(url)
+    if allow_external and result.normalized is not None:
+        return True, None, None, result.normalized.normalized_url
     if result.normalized is None or not result.in_scope:
         return (
             False,

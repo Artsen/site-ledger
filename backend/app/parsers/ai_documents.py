@@ -184,7 +184,7 @@ def _links(token: Token) -> list[tuple[str, str, str]]:
         description = (
             "".join(item.content for item in children[close + 1 :] if item.type == "text")
             .strip()
-            .lstrip(":-– ")
+            .lstrip(":- ")
         )
         if href:
             result.append((href, label, description))

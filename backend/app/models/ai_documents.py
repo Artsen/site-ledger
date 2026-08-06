@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
@@ -15,6 +15,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.resources import SourceRefresh
 
 
 class AiDocumentRefresh(Base):
@@ -45,6 +48,7 @@ class AiDocumentRefresh(Base):
     snapshots: Mapped[list["AiDocumentSnapshot"]] = relationship(
         back_populates="refresh", cascade="all, delete-orphan"
     )
+    source_refresh: Mapped["SourceRefresh"] = relationship(back_populates="ai_document_refresh")
     validations: Mapped[list["AiDocumentValidation"]] = relationship(
         back_populates="refresh", cascade="all, delete-orphan"
     )

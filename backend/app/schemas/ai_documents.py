@@ -14,6 +14,8 @@ class AiDocumentSettings(BaseModel):
     max_total_network_bytes: int = Field(250_000_000, ge=1024, le=1_000_000_000)
     follow_external_documents: bool = False
     save_declared_documents: bool = True
+    request_timeout_seconds: float = Field(10, gt=0, le=120)
+    max_attempts: int = Field(2, ge=1, le=5)
 
     @model_validator(mode="after")
     def validate_totals(self) -> "AiDocumentSettings":
@@ -57,6 +59,7 @@ class AiDocumentSourceRead(BaseModel):
     last_successful_refresh_at: datetime | None
     current_entry_count: int = 0
     latest_refresh_id: int | None = None
+    latest_source_refresh_id: int | None = None
     document_count: int = 0
     reference_count: int = 0
     warning_count: int = 0
@@ -89,6 +92,7 @@ class AiDocumentRefreshRead(BaseModel):
 
 class AiDocumentSnapshotRead(BaseModel):
     id: int
+    source_id: int | None = None
     refresh_id: int
     resource_id: int
     requested_url: str

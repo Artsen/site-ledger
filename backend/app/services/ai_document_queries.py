@@ -179,19 +179,22 @@ def get_ai_tree(db: Session, refresh_id: int) -> AiDocumentTree:
         limit=5000,
         offset=0,
     )
+    cycle_ids = set(
+        db.scalars(
+            select(AiDocumentReference.child_snapshot_id)
+            .where(
+                AiDocumentReference.child_snapshot_id.is_not(None),
+                AiDocumentReference.forms_cycle.is_(True),
+            )
+            .distinct()
+        )
+    )
     return AiDocumentTree(
         items=[
             AiDocumentTreeNode(
                 snapshot=item,
                 parent_count=item.parent_count,
-                cycle=bool(
-                    db.scalar(
-                        select(func.count(AiDocumentReference.id)).where(
-                            AiDocumentReference.child_snapshot_id == item.id,
-                            AiDocumentReference.forms_cycle.is_(True),
-                        )
-                    )
-                ),
+                cycle=item.id in cycle_ids,
             )
             for item in documents.items
         ]
@@ -210,14 +213,18 @@ def list_ai_validations(db: Session, refresh_id: int) -> list[AiValidationRead]:
 
 
 def get_ai_snapshot(db: Session, snapshot_id: int) -> AiDocumentSnapshotRead | None:
-    snapshot = db.scalar(
-        select(AiDocumentSnapshot)
+    row = db.execute(
+        select(AiDocumentSnapshot, SourceRefresh.url_source_id)
+        .join(AiDocumentRefresh, AiDocumentRefresh.id == AiDocumentSnapshot.refresh_id)
+        .join(SourceRefresh, SourceRefresh.id == AiDocumentRefresh.source_refresh_id)
         .options(joinedload(AiDocumentSnapshot.blob))
         .where(AiDocumentSnapshot.id == snapshot_id)
-    )
-    if snapshot is None:
+    ).one_or_none()
+    if row is None:
         return None
+    snapshot, source_id = row
     item = AiDocumentSnapshotRead.model_validate(snapshot)
+    item.source_id = source_id
     item.raw_byte_size = snapshot.blob.raw_byte_size if snapshot.blob else None
     item.stored_byte_size = snapshot.blob.stored_byte_size if snapshot.blob else None
     item.parent_count = (

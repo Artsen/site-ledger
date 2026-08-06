@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.ai_documents import AiDocumentRefresh
     from app.models.rendered import RenderedObservation
 
 
@@ -688,6 +689,9 @@ class SourceRefresh(Base):
     url_source: Mapped[UrlSource] = relationship(back_populates="refreshes")
     jobs: Mapped[list["BackgroundJob"]] = relationship(
         back_populates="source_refresh", cascade="all, delete-orphan"
+    )
+    ai_document_refresh: Mapped["AiDocumentRefresh | None"] = relationship(
+        back_populates="source_refresh", cascade="all, delete-orphan", uselist=False
     )
 
 
