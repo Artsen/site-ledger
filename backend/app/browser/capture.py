@@ -122,6 +122,7 @@ class BrowserRenderer:
         page: Any = None
         request_rows: dict[int, dict[str, Any]] = {}
         main_navigation_count = 0
+        network_sequence = 0
 
         def elapsed() -> int:
             return int((time.monotonic() - started) * 1000)
@@ -131,7 +132,9 @@ class BrowserRenderer:
                 result.warnings.append({"type": kind, "message": redact_text(message, 1000)})
 
         async def route_request(route: Any, request: Any) -> None:
-            nonlocal main_navigation_count
+            nonlocal main_navigation_count, network_sequence
+            network_sequence += 1
+            sequence = network_sequence
             reason: str | None = None
             method = request.method.upper()
             scheme = request.url.split(":", 1)[0].lower()
@@ -164,7 +167,7 @@ class BrowserRenderer:
                     reason = "unsafe_destination"
             redacted, digest = redact_url(request.url)
             row = {
-                "sequence": len(result.network) + 1,
+                "sequence": sequence,
                 "request_key": hashlib.sha256(f"{id(request)}:{request.url}".encode()).hexdigest(),
                 "redacted_url": redacted,
                 "url_sha256": digest,

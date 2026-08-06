@@ -53,24 +53,32 @@ class SafeHttpFetcher:
         transport: httpx.AsyncBaseTransport | None = None,
         redirect_validator: RedirectValidator | None = None,
         destination_validator: DestinationValidator = validate_public_destination,
+        client: httpx.AsyncClient | None = None,
     ):
         self.limits = limits
         self.transport = transport
         self.redirect_validator = redirect_validator
         self.destination_validator = destination_validator
+        self.client = client
 
     async def get(self, url: str, headers: dict[str, str] | None = None) -> SafeFetchResult:
         started = monotonic()
         request_headers = {"User-Agent": self.limits.user_agent}
         request_headers.update(_validated_request_headers(headers or {}))
-        async with httpx.AsyncClient(
-            follow_redirects=False,
-            max_redirects=self.limits.max_redirects,
-            timeout=self.limits.timeout_seconds,
-            headers=request_headers,
-            transport=self.transport,
-        ) as client:
-            response, content, chain = await self._get_with_validated_redirects(client, url)
+        if self.client is not None:
+            response, content, chain = await self._get_with_validated_redirects(
+                self.client, url, request_headers
+            )
+        else:
+            async with httpx.AsyncClient(
+                follow_redirects=False,
+                max_redirects=self.limits.max_redirects,
+                timeout=self.limits.timeout_seconds,
+                transport=self.transport,
+            ) as client:
+                response, content, chain = await self._get_with_validated_redirects(
+                    client, url, request_headers
+                )
         return SafeFetchResult(
             requested_url=url,
             final_url=str(response.url),
@@ -83,7 +91,7 @@ class SafeHttpFetcher:
         )
 
     async def _get_with_validated_redirects(
-        self, client: httpx.AsyncClient, start_url: str
+        self, client: httpx.AsyncClient, start_url: str, request_headers: dict[str, str]
     ) -> tuple[httpx.Response, bytes, list[dict[str, Any]]]:
         current_url = start_url
         seen_redirects = {start_url}
@@ -91,7 +99,7 @@ class SafeHttpFetcher:
 
         for _hop in range(self.limits.max_redirects + 1):
             await self.destination_validator(current_url, self.limits.allow_private_networks)
-            async with client.stream("GET", current_url) as response:
+            async with client.stream("GET", current_url, headers=request_headers) as response:
                 if response.status_code not in REDIRECT_STATUSES:
                     content = await self._read_limited_response(response, redirect_chain)
                     return response, content, redirect_chain

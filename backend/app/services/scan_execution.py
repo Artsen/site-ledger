@@ -86,6 +86,13 @@ class ScanExecutionCoordinator:
                         "skipped": active.skipped_count,
                     },
                 ),
+                retry_progress_callback=lambda current, total: self.context.progress(
+                    phase="retrying_errors",
+                    current_operation="Retrying transient fetch errors",
+                    current=current,
+                    total=total,
+                    unit="pages",
+                ),
             )
             static = await crawler.collect(scan)
             if static.fatal_error:

@@ -107,6 +107,46 @@ async def test_saved_site_failed_observation_creates_site_page(db_session, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_transient_failure_is_retried_after_the_crawl(db_session, tmp_path) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectTimeout("temporary timeout", request=request)
+        return httpx.Response(
+            200,
+            content=b"<html><body><a href='/next'>Next</a></body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_pages=1,
+        ),
+    )
+    await StaticPageCrawler(
+        db_session,
+        LocalContentStore(tmp_path),
+        transport=httpx.MockTransport(handler),
+    ).run(scan)
+
+    snapshot = db_session.query(ResourceSnapshot).one()
+    assert attempts == 2
+    assert snapshot.fetch_state == "fetched"
+    assert snapshot.error_type is None
+    assert scan.failed_count == 0
+    assert scan.status == "completed"
+    assert (
+        db_session.query(ResourceOccurrence).filter_by(source_snapshot_id=snapshot.id).count() == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_complete_fixture_crawl(db_session, tmp_path) -> None:
     scan = _scan(
         db_session,

@@ -19,7 +19,7 @@ from app.crawler.safe_fetch import (
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.security import UnsafeDestinationError, validate_public_destination
 from app.crawler.url_normalizer import NormalizedUrl
-from app.models import ResourceOccurrence, ResourceSnapshot, Scan, ScanSeed
+from app.models import ResourceOccurrence, ResourceSnapshot, Scan, ScanSeed, WebResource
 from app.services.cache_policy import (
     find_revalidation_candidate,
     representation_headers,
@@ -30,6 +30,14 @@ from app.services.parse_artifacts import get_or_create_artifact
 from app.services.repositories import get_or_create_resource
 from app.services.site_pages import ensure_site_page
 from app.storage.content_store import LocalContentStore
+
+TRANSIENT_FETCH_ERRORS = {
+    "connection_timeout",
+    "read_timeout",
+    "connection_error",
+    "dns_error",
+    "tls_error",
+}
 
 
 @dataclass(frozen=True)
@@ -55,12 +63,15 @@ class StaticPageCrawler:
         transport: httpx.AsyncBaseTransport | None = None,
         should_cancel: Callable[[], bool] | None = None,
         progress_callback: Callable[[Scan], None] | None = None,
+        retry_progress_callback: Callable[[int, int], None] | None = None,
     ):
         self.db = db
         self.store = store
         self.transport = transport
         self.should_cancel = should_cancel
         self.progress_callback = progress_callback
+        self.retry_progress_callback = retry_progress_callback
+        self._resource_cache: dict[str, WebResource] = {}
 
     async def run(self, scan: Scan) -> None:
         await self._execute(scan, finalize=True)
@@ -69,6 +80,7 @@ class StaticPageCrawler:
         return await self._execute(scan, finalize=False)
 
     async def _execute(self, scan: Scan, *, finalize: bool) -> StaticCrawlResult:
+        self._resource_cache.clear()
         config = ScopeConfig.from_dict(scan.scope_config)
         scope = ScopeEngine(config, scan.starting_url)
         initial = scope.evaluate(scan.starting_url)
@@ -87,85 +99,92 @@ class StaticPageCrawler:
         queue = self._initial_queue(scan, initial.normalized)
         seen = {item.normalized.normalized_url for item in queue}
         fetched: set[str] = set()
+        transient_failures: list[tuple[CrawlItem, ResourceSnapshot]] = []
         had_errors = False
         self._update_counts(scan, len(seen), len(fetched), len(queue))
         self.db.commit()
 
-        while queue and scan.status != "cancelled" and len(fetched) < config.max_pages:
-            if self._cancel_requested():
-                scan.status = "cancelled"
-                break
-            item = queue.popleft()
-            scan.queued_count = len(queue)
-            self.db.commit()
-            if item.depth > config.max_depth:
-                scan.skipped_count += 1
-                continue
-            try:
-                snapshot, anchors = await self._fetch_one(scan, item, config, scope)
-                fetched.add(item.normalized.normalized_url)
-                self._mark_seed(scan.id, item.normalized.normalized_url, "fetched")
-                if snapshot.error_type:
+        client = httpx.AsyncClient(
+            follow_redirects=False,
+            max_redirects=config.max_redirects,
+            timeout=config.request_timeout_seconds,
+            transport=self.transport,
+            limits=httpx.Limits(
+                max_connections=max(2, config.concurrent_requests_per_host),
+                max_keepalive_connections=max(2, config.concurrent_requests_per_host),
+            ),
+        )
+
+        try:
+            while queue and scan.status != "cancelled" and len(fetched) < config.max_pages:
+                if self._cancel_requested():
+                    scan.status = "cancelled"
+                    break
+                item = queue.popleft()
+                scan.queued_count = len(queue)
+                self.db.commit()
+                if item.depth > config.max_depth:
+                    scan.skipped_count += 1
+                    continue
+                try:
+                    snapshot, anchors = await self._fetch_one(scan, item, config, scope, client)
+                    fetched.add(item.normalized.normalized_url)
+                    self._mark_seed(scan.id, item.normalized.normalized_url, "fetched")
+                    if snapshot.error_type in TRANSIENT_FETCH_ERRORS:
+                        transient_failures.append((item, snapshot))
+                    elif snapshot.error_type:
+                        had_errors = True
+                    self._persist_anchors(
+                        scan, snapshot, item, anchors, config, scope, seen, queue, discover=True
+                    )
+                    self._update_counts(scan, len(seen), len(fetched), len(queue))
+                    self.db.commit()
+                    self._progress(scan)
+                # Page-level failures are persisted instead of failing the whole scan.
+                except Exception as exc:
                     had_errors = True
-                for anchor in anchors:
-                    result = scope.evaluate(
-                        anchor.raw_href or "", snapshot.final_url or item.requested_url, seen
+                    self._record_failure(scan, item, "connection_error", str(exc))
+                    fetched.add(item.normalized.normalized_url)
+                    self._mark_seed(scan.id, item.normalized.normalized_url, "failed")
+                    self._update_counts(scan, len(seen), len(fetched), len(queue))
+                    self.db.commit()
+                    self._progress(scan)
+                if config.delay_between_requests_ms:
+                    await self._sleep_with_cancellation(
+                        config.delay_between_requests_ms / 1000, scan
                     )
-                    target = (
-                        get_or_create_resource(self.db, result.normalized)
-                        if result.normalized
-                        else None
+
+            if scan.status != "cancelled":
+                for retry_index, (item, failed_snapshot) in enumerate(transient_failures, 1):
+                    if self._cancel_requested():
+                        scan.status = "cancelled"
+                        break
+                    retry_snapshot, anchors = await self._fetch_one(
+                        scan, item, config, scope, client
                     )
-                    occurrence = ResourceOccurrence(
-                        source_snapshot_id=snapshot.id,
-                        raw_href=anchor.raw_href,
-                        resolved_url=anchor.resolved_url,
-                        normalized_target_url=result.normalized.normalized_url
-                        if result.normalized
-                        else None,
-                        target_resource_id=target.id if target else None,
-                        anchor_text=anchor.anchor_text,
-                        title=anchor.title,
-                        aria_label=anchor.aria_label,
-                        rel=anchor.rel,
-                        target=anchor.target,
-                        dom_path=anchor.dom_path,
-                        in_scope=result.in_scope,
-                        scope_decision=result.decision,
-                        exclusion_reason=result.exclusion_reason,
-                        link_role=anchor.link_role,
-                        link_role_rule=anchor.link_role_rule,
-                        link_context_json=anchor.link_context_json,
-                    )
-                    self.db.add(occurrence)
-                    if (
-                        result.in_scope
-                        and result.normalized is not None
-                        and result.normalized.normalized_url not in seen
-                        and item.depth + 1 <= config.max_depth
-                        and len(seen) < config.max_pages
-                    ):
-                        seen.add(result.normalized.normalized_url)
-                        queue.append(
-                            CrawlItem(
-                                result.normalized,
-                                result.normalized.normalized_url,
-                                item.depth + 1,
-                            )
+                    self.db.delete(failed_snapshot)
+                    scan.failed_count = max(0, scan.failed_count - 1)
+                    if retry_snapshot.error_type:
+                        had_errors = True
+                        self._mark_seed(scan.id, item.normalized.normalized_url, "failed")
+                    else:
+                        self._mark_seed(scan.id, item.normalized.normalized_url, "fetched")
+                        self._persist_anchors(
+                            scan,
+                            retry_snapshot,
+                            item,
+                            anchors,
+                            config,
+                            scope,
+                            seen,
+                            queue,
+                            discover=False,
                         )
-                self._update_counts(scan, len(seen), len(fetched), len(queue))
-                self.db.commit()
-                self._progress(scan)
-            except Exception as exc:  # page-level failures are persisted, not fatal scan failures
-                had_errors = True
-                self._record_failure(scan, item, "connection_error", str(exc))
-                fetched.add(item.normalized.normalized_url)
-                self._mark_seed(scan.id, item.normalized.normalized_url, "failed")
-                self._update_counts(scan, len(seen), len(fetched), len(queue))
-                self.db.commit()
-                self._progress(scan)
-            if config.delay_between_requests_ms:
-                await self._sleep_with_cancellation(config.delay_between_requests_ms / 1000, scan)
+                    self.db.commit()
+                    if self.retry_progress_callback:
+                        self.retry_progress_callback(retry_index, len(transient_failures))
+        finally:
+            await client.aclose()
 
         cancelled = scan.status == "cancelled"
         stop_reason = (
@@ -189,8 +208,9 @@ class StaticPageCrawler:
         item: CrawlItem,
         config: ScopeConfig,
         scope: ScopeEngine,
+        client: httpx.AsyncClient,
     ) -> tuple[ResourceSnapshot, list[Any]]:
-        resource = get_or_create_resource(self.db, item.normalized)
+        resource = self._resource(item.normalized)
         try:
             await validate_public_destination(item.requested_url, config.allow_private_networks)
             request_headers = representation_headers(config.user_agent)
@@ -220,6 +240,7 @@ class StaticPageCrawler:
                 transport=self.transport,
                 redirect_validator=lambda url: _validate_redirect(scope, url),
                 destination_validator=validate_public_destination,
+                client=client,
             )
             result = await fetcher.get(item.requested_url, headers=fetch_headers)
             if candidate is not None:
@@ -397,6 +418,64 @@ class StaticPageCrawler:
         except ValueError as exc:
             return self._record_failure(scan, item, "invalid_url", str(exc)), []
 
+    def _persist_anchors(
+        self,
+        scan: Scan,
+        snapshot: ResourceSnapshot,
+        item: CrawlItem,
+        anchors: list[Any],
+        config: ScopeConfig,
+        scope: ScopeEngine,
+        seen: set[str],
+        queue: deque[CrawlItem],
+        *,
+        discover: bool,
+    ) -> None:
+        for anchor in anchors:
+            result = scope.evaluate(
+                anchor.raw_href or "", snapshot.final_url or item.requested_url, seen
+            )
+            target = self._resource(result.normalized) if result.normalized else None
+            self.db.add(
+                ResourceOccurrence(
+                    source_snapshot_id=snapshot.id,
+                    raw_href=anchor.raw_href,
+                    resolved_url=anchor.resolved_url,
+                    normalized_target_url=(
+                        result.normalized.normalized_url if result.normalized else None
+                    ),
+                    target_resource_id=target.id if target else None,
+                    anchor_text=anchor.anchor_text,
+                    title=anchor.title,
+                    aria_label=anchor.aria_label,
+                    rel=anchor.rel,
+                    target=anchor.target,
+                    dom_path=anchor.dom_path,
+                    in_scope=result.in_scope,
+                    scope_decision=result.decision,
+                    exclusion_reason=result.exclusion_reason,
+                    link_role=anchor.link_role,
+                    link_role_rule=anchor.link_role_rule,
+                    link_context_json=anchor.link_context_json,
+                )
+            )
+            if (
+                discover
+                and result.in_scope
+                and result.normalized is not None
+                and result.normalized.normalized_url not in seen
+                and item.depth + 1 <= config.max_depth
+                and len(seen) < config.max_pages
+            ):
+                seen.add(result.normalized.normalized_url)
+                queue.append(
+                    CrawlItem(
+                        result.normalized,
+                        result.normalized.normalized_url,
+                        item.depth + 1,
+                    )
+                )
+
     def _record_failure(
         self,
         scan: Scan,
@@ -408,7 +487,7 @@ class StaticPageCrawler:
         response_headers: dict[str, Any] | None = None,
         redirect_chain: list[dict[str, Any]] | None = None,
     ) -> ResourceSnapshot:
-        resource = get_or_create_resource(self.db, item.normalized)
+        resource = self._resource(item.normalized)
         snapshot = ResourceSnapshot(
             scan_id=scan.id,
             resource_id=resource.id,
@@ -445,6 +524,14 @@ class StaticPageCrawler:
             associated_at=snapshot.fetched_at,
         )
         return snapshot
+
+    def _resource(self, normalized: NormalizedUrl) -> WebResource:
+        cached = self._resource_cache.get(normalized.normalized_url)
+        if cached is not None:
+            return cached
+        resource = get_or_create_resource(self.db, normalized)
+        self._resource_cache[normalized.normalized_url] = resource
+        return resource
 
     @staticmethod
     def _update_counts(scan: Scan, discovered: int, fetched: int, queued: int) -> None:
