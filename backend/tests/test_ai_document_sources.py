@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from app.models import (
     AiDocumentBlob,
     AiDocumentReference,
+    AiDocumentRefresh,
     AiDocumentSnapshot,
     ResourceSnapshot,
     UrlSourceEntry,
@@ -15,10 +16,14 @@ from app.models import (
 from app.schemas.ai_documents import AiDocumentSettings, AiDocumentSourceCreate
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate
+from app.services.ai_document_queries import list_ai_documents, list_ai_references
 from app.services.ai_document_sources import (
     create_ai_document_source,
+    delete_ai_source,
     discover_ai_document_sources,
     execute_ai_document_refresh,
+    get_ai_source,
+    preview_ai_source_deletion,
 )
 from app.services.site_management import create_site
 from app.services.source_refresh import create_source_refresh
@@ -97,6 +102,10 @@ async def test_nested_refresh_retains_exact_evidence_and_provenance(db_session, 
     )
     db_session.commit()
 
+    source_read = get_ai_source(db_session, source.id)
+    assert source_read is not None
+    assert source_read.latest_refresh_id == evidence.id
+    assert source_read.latest_source_refresh_id == refresh.id
     assert evidence.document_fetched_count == 3
     assert requests.count("/guide.md") == 1
     assert evidence.reference_count == 5
@@ -118,11 +127,79 @@ async def test_nested_refresh_retains_exact_evidence_and_provenance(db_session, 
     )
     entries = list(db_session.scalars(select(UrlSourceEntry)))
     assert [item.normalized_url for item in entries] == ["https://example.com/guide.md"]
-    assert entries[0].source_metadata_json["parent_snapshot_id"]
+    origins = entries[0].source_metadata_json["ai_origins"]
+    assert len(origins) == 2
+    assert {origin["label"] for origin in origins} == {"Guide", "Guide too"}
     external = db_session.scalar(
         select(AiDocumentReference).where(AiDocumentReference.scope_decision == "external")
     )
     assert external is not None and external.inventory_entry_id is None
+
+
+@pytest.mark.asyncio
+async def test_advertised_index_does_not_retain_html_response(db_session, tmp_path) -> None:
+    site = create_site(db_session, _site_payload())
+    source = create_ai_document_source(
+        db_session,
+        site.id,
+        AiDocumentSourceCreate(entry_url="/llms.txt", name="AI docs"),
+    )
+    assert source is not None
+    refresh = create_source_refresh(db_session, site.id, source.id)
+    assert refresh is not None
+
+    evidence = await execute_ai_document_refresh(
+        db_session,
+        refresh,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                content=b"<html><body>Not an AI document</body></html>",
+            )
+        ),
+        store=LocalAiDocumentStore(tmp_path / "ai"),
+    )
+    db_session.commit()
+
+    snapshot = db_session.scalar(select(AiDocumentSnapshot))
+    assert snapshot is not None
+    assert snapshot.document_kind == "html_page_reference"
+    assert snapshot.retained_blob_id is None
+    assert evidence.document_saved_count == 0
+
+
+@pytest.mark.asyncio
+async def test_missing_root_is_neutral_and_transient_statuses_retry(db_session, tmp_path) -> None:
+    site = create_site(db_session, _site_payload())
+    source = create_ai_document_source(
+        db_session,
+        site.id,
+        AiDocumentSourceCreate(entry_url="/llms.txt", name="AI docs"),
+    )
+    assert source is not None
+    refresh = create_source_refresh(db_session, site.id, source.id)
+    assert refresh is not None
+    attempts = 0
+
+    def transient_then_missing(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503 if attempts == 1 else 404, content=b"Not found")
+
+    evidence = await execute_ai_document_refresh(
+        db_session,
+        refresh,
+        transport=httpx.MockTransport(transient_then_missing),
+        store=LocalAiDocumentStore(tmp_path / "ai"),
+    )
+    db_session.commit()
+
+    snapshot = db_session.scalar(select(AiDocumentSnapshot))
+    assert attempts == 2
+    assert snapshot is not None and snapshot.fetch_state == "not_found"
+    assert snapshot.retained_blob_id is None
+    assert evidence.status == "completed"
 
 
 @pytest.mark.asyncio
@@ -191,3 +268,76 @@ def _site_payload() -> WebsitePropertyCreate:
         scope_config=ScopeConfigPayload(allowed_host_patterns=["example.com"]),
         is_active=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_queries_paginate_and_deletion_preserves_shared_blobs(db_session, tmp_path) -> None:
+    site = create_site(db_session, _site_payload())
+    store = LocalAiDocumentStore(tmp_path / "ai")
+    sources = []
+    for path in ("/llms.txt", "/docs/llms.txt"):
+        source = create_ai_document_source(
+            db_session,
+            site.id,
+            AiDocumentSourceCreate(entry_url=path, name=path),
+        )
+        assert source is not None
+        sources.append(source)
+        refresh = create_source_refresh(db_session, site.id, source.id)
+        assert refresh is not None
+        await execute_ai_document_refresh(
+            db_session,
+            refresh,
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/plain"},
+                    content=b"# Shared\n\n## Docs\n- [Page](/page)\n",
+                )
+            ),
+            store=store,
+        )
+        db_session.commit()
+
+    latest = db_session.scalar(select(AiDocumentRefresh).order_by(AiDocumentRefresh.id.desc()))
+    assert latest is not None
+    files = list_ai_documents(
+        db_session,
+        latest.id,
+        search="llms",
+        kind="llms_index",
+        role=None,
+        fetch_state=None,
+        parse_state=None,
+        changed=None,
+        depth=None,
+        sort="url",
+        direction="asc",
+        limit=25,
+        offset=0,
+    )
+    references = list_ai_references(
+        db_session,
+        latest.id,
+        search="Page",
+        in_scope=True,
+        optional=False,
+        fetched=False,
+        limit=25,
+        offset=0,
+    )
+    assert files.total == 1
+    assert references.total == 1
+
+    preview = preview_ai_source_deletion(db_session, sources[0].id)
+    assert preview is not None
+    assert preview.shared_blob_count == 1
+    blob = db_session.scalar(select(AiDocumentBlob))
+    assert blob is not None
+    path = store.root / blob.storage_key
+    assert delete_ai_source(db_session, sources[0].id, store) == sources[0].id
+    assert db_session.get(AiDocumentBlob, blob.id) is not None
+    assert path.exists()
+    assert delete_ai_source(db_session, sources[1].id, store) == sources[1].id
+    assert db_session.get(AiDocumentBlob, blob.id) is None
+    assert not path.exists()

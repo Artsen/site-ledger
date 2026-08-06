@@ -47,6 +47,8 @@ const api = vi.hoisted(() => ({
   refreshSource: vi.fn(),
   cancelSourceRefresh: vi.fn(),
   discoverRobots: vi.fn(),
+  discoverAiDocumentSources: vi.fn(),
+  createAiDocumentSource: vi.fn(),
   listSourceEntries: vi.fn(),
   addManualUrls: vi.fn(),
   listInventory: vi.fn(),
