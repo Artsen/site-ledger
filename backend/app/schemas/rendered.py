@@ -121,3 +121,31 @@ class RenderedEventList(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class RenderedObservationIndexItem(BaseModel):
+    id: int
+    snapshot_id: int
+    resource_id: int
+    page_title: str | None
+    static_final_url: str | None
+    browser_final_url: str | None
+    capture_state: str
+    static_http_status: int | None
+    navigation_http_status: int | None
+    duration_ms: int | None
+    warning_count: int
+    blocked_request_count: int
+    console_message_count: int
+    page_error_count: int
+    has_viewport_screenshot: bool
+    has_full_page_screenshot: bool
+    has_rendered_dom: bool
+    finished_at: datetime | None
+
+
+class RenderedObservationIndexList(BaseModel):
+    items: list[RenderedObservationIndexItem]
+    total: int
+    limit: int
+    offset: int

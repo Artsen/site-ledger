@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import event
 
 from app.browser.config import DEFAULTS, capabilities, validate_render_config
 from app.browser.privacy import redact_url, sanitize_headers
@@ -14,6 +15,7 @@ from app.models import (
     WebResource,
 )
 from app.services.rendered_capture import create_observation, select_render_candidates
+from app.services.rendered_queries import list_scan_rendered_observations
 from app.services.scan_deletion import delete_scan
 from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
@@ -167,3 +169,71 @@ def test_scan_deletion_removes_unreferenced_rendered_files(db_session, tmp_path)
     assert delete_scan(db_session, scan.id, content_store, artifact_store) is not None
     assert db_session.get(ArtifactBlob, artifact_blob.id) is None
     assert not artifact_path.exists()
+
+
+def test_scan_rendered_index_is_filterable_and_exposes_artifact_flags(db_session, tmp_path) -> None:
+    store = LocalArtifactStore(tmp_path / "rendered-index")
+    scan = Scan(starting_url="https://example.com/", status="completed", scope_config={})
+    resource = WebResource(
+        resource_type="page",
+        normalized_url=scan.starting_url,
+        scheme="https",
+        host="example.com",
+        path="/",
+        query="",
+    )
+    db_session.add_all([scan, resource])
+    db_session.flush()
+    snapshot = ResourceSnapshot(
+        scan_id=scan.id,
+        resource_id=resource.id,
+        requested_url=scan.starting_url,
+        final_url=scan.starting_url,
+        http_status=200,
+        content_type="text/html",
+        representation_kind="html_page",
+        crawl_depth=0,
+        fetched_at=datetime.now(UTC),
+        fetch_state="fetched",
+        page_title="Rendered Page",
+    )
+    db_session.add(snapshot)
+    db_session.commit()
+    observation = create_observation(db_session, snapshot, ScopeConfig())
+    observation.capture_state = "completed_with_warnings"
+    observation.warning_count = 2
+    observation.page_error_count = 1
+    observation.duration_ms = 125
+    blob = store.put(db_session, b"png", "image/png")
+    db_session.add(
+        RenderedArtifact(
+            rendered_observation_id=observation.id,
+            artifact_blob_id=blob.id,
+            artifact_type="viewport_screenshot",
+            metadata_json={},
+        )
+    )
+    db_session.commit()
+
+    statements: list[str] = []
+
+    def before_cursor_execute(*args) -> None:
+        statements.append(str(args[2]))
+
+    event.listen(db_session.bind, "before_cursor_execute", before_cursor_execute)
+    try:
+        result = list_scan_rendered_observations(
+            db_session,
+            scan.id,
+            capture_state="completed_with_warnings",
+            has_warnings=True,
+            has_viewport_screenshot=True,
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", before_cursor_execute)
+    assert len(statements) == 2
+    assert result.total == 1
+    assert result.items[0].snapshot_id == snapshot.id
+    assert result.items[0].resource_id == resource.id
+    assert result.items[0].has_viewport_screenshot
+    assert not result.items[0].has_full_page_screenshot
