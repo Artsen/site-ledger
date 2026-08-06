@@ -1,29 +1,34 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { getScanResource, getSiteResource, listScanResourceOccurrences, listSiteResourceHistory, listSiteResourceOccurrences } from "../api/client";
 import { ResourceEvidenceBadge, ResourceKindBadge } from "../components/ResourceInventoryView";
-import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
 import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
+import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import type { ResourceOccurrence } from "../types/scans";
-import { formatBytes, formatDate, formatScopeDecision, plural } from "../utils/format";
+import { formatBytes, formatDate, formatScopeDecision } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
+import { useUrlPagination } from "../utils/useUrlPagination";
 
 export function ResourceDetailPage({ scope }: { scope: "scan" | "site" }) {
   const { scanId = "", siteId = "", resourceId = "" } = useParams();
   const id = scope === "scan" ? scanId : siteId;
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get("tab") ?? "overview";
-  const offset = Number(searchParams.get("offset") ?? 0);
+  const usedPagination = useUrlPagination({ prefix: "used", total: undefined });
+  const historyPagination = useUrlPagination({ prefix: "history", total: undefined });
   const detail = useQuery({ queryKey: [`${scope}-resource`, id, resourceId], queryFn: () => scope === "scan" ? getScanResource(id, resourceId) : getSiteResource(id, resourceId) });
-  const occurrences = useQuery({ queryKey: [`${scope}-resource-occurrences`, id, resourceId, offset], queryFn: () => scope === "scan" ? listScanResourceOccurrences(id, resourceId, `?offset=${offset}`) : listSiteResourceOccurrences(id, resourceId, `?offset=${offset}`), enabled: tab === "used-by-pages" });
-  const history = useQuery({ queryKey: ["site-resource-history", id, resourceId, offset], queryFn: () => listSiteResourceHistory(id, resourceId, `?offset=${offset}`), enabled: scope === "site" && tab === "scans" });
+  const occurrences = useQuery({ queryKey: [`${scope}-resource-occurrences`, id, resourceId, usedPagination.limit, usedPagination.offset], queryFn: () => scope === "scan" ? listScanResourceOccurrences(id, resourceId, `?limit=${usedPagination.limit}&offset=${usedPagination.offset}`) : listSiteResourceOccurrences(id, resourceId, `?limit=${usedPagination.limit}&offset=${usedPagination.offset}`), enabled: tab === "used-by-pages", placeholderData: (previous) => previous });
+  const history = useQuery({ queryKey: ["site-resource-history", id, resourceId, historyPagination.limit, historyPagination.offset], queryFn: () => listSiteResourceHistory(id, resourceId, `?limit=${historyPagination.limit}&offset=${historyPagination.offset}`), enabled: scope === "site" && tab === "scans", placeholderData: (previous) => previous });
+  useEffect(() => usedPagination.ensureValid(occurrences.data?.total), [occurrences.data?.total, usedPagination]);
+  useEffect(() => historyPagination.ensureValid(history.data?.total), [history.data?.total, historyPagination]);
   useDocumentTitle(detail.data?.resource.effective_kind_label ?? "Resource");
   if (detail.isLoading) return <PageFrame><LoadingBlock label="Loading Resource..." /></PageFrame>;
   if (detail.error) return <PageFrame><ErrorBanner error={detail.error} title="Could not load Resource" /></PageFrame>;
@@ -36,9 +41,9 @@ export function ResourceDetailPage({ scope }: { scope: "scan" | "site" }) {
     <Tabs tabs={tabs} active={tab} onChange={(next) => setSearchParams(next === "overview" ? {} : { tab: next })} />
     <div className="mt-5">
       {tab === "overview" ? <ResourceOverview item={item} detail={detail.data} /> : null}
-      {tab === "used-by-pages" ? occurrences.isLoading ? <LoadingBlock label="Loading Resource occurrences..." /> : occurrences.error ? <ErrorBanner error={occurrences.error} title="Could not load occurrences" /> : <OccurrenceView items={occurrences.data?.items ?? []} total={occurrences.data?.total ?? 0} offset={offset} setSearchParams={setSearchParams} scanId={scope === "scan" ? id : undefined} siteId={scope === "site" ? id : undefined} /> : null}
+      {tab === "used-by-pages" ? occurrences.isLoading ? <LoadingBlock label="Loading Resource occurrences..." /> : occurrences.error ? <ErrorBanner error={occurrences.error} title="Could not load occurrences" /> : <PaginatedSection controls={<PaginatedTableControls total={occurrences.data?.total ?? 0} limit={usedPagination.limit} offset={usedPagination.offset} onPageChange={usedPagination.setPage} onPageSizeChange={usedPagination.setPageSize} itemLabel="occurrence" isLoading={occurrences.isFetching} />}><OccurrenceView items={occurrences.data?.items ?? []} scanId={scope === "scan" ? id : undefined} siteId={scope === "site" ? id : undefined} /></PaginatedSection> : null}
       {tab === "observations" && scope === "scan" ? item.snapshot_id ? <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm"><h2 className="mb-3 text-base font-semibold">Static Resource observation</h2><DefinitionList items={[{ label: "Snapshot", value: item.snapshot_id }, { label: "HTTP status", value: item.http_status }, { label: "MIME type", value: item.normalized_mime_type }, { label: "Observed", value: formatDate(item.fetched_at) }, { label: "Transferred", value: formatBytes(item.network_bytes_transferred) }, { label: "Declared size", value: formatBytes(item.declared_content_length) }]} /></section> : <EmptyState title="Discovered-only Resource" message="This Scan retained a reference but made no separate Resource request." /> : null}
-      {tab === "scans" && scope === "site" ? history.isLoading ? <LoadingBlock label="Loading Resource history..." /> : history.error ? <ErrorBanner error={history.error} title="Could not load Resource history" /> : <HistoryView items={history.data?.items ?? []} siteId={id} /> : null}
+      {tab === "scans" && scope === "site" ? history.isLoading ? <LoadingBlock label="Loading Resource history..." /> : history.error ? <ErrorBanner error={history.error} title="Could not load Resource history" /> : <PaginatedSection controls={<PaginatedTableControls total={history.data?.total ?? 0} limit={historyPagination.limit} offset={historyPagination.offset} onPageChange={historyPagination.setPage} onPageSizeChange={historyPagination.setPageSize} itemLabel="Scan" isLoading={history.isFetching} />}><HistoryView items={history.data?.items ?? []} siteId={id} /></PaginatedSection> : null}
     </div>
   </PageFrame>;
 }
@@ -49,10 +54,12 @@ function ResourceOverview({ item, detail }: { item: Awaited<ReturnType<typeof ge
   ]} /></section>;
 }
 
-function OccurrenceView({ items, total, offset, setSearchParams, scanId, siteId }: { items: ResourceOccurrence[]; total: number; offset: number; setSearchParams: ReturnType<typeof useSearchParams>[1]; scanId?: string; siteId?: string }) {
+function OccurrenceView({ items, scanId, siteId }: { items: ResourceOccurrence[]; scanId?: string; siteId?: string }) {
   if (!items.length) return <EmptyState title="No retained occurrences" message="This Resource was observed directly without a retained source Page reference." />;
-  return <div className="space-y-4"><div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Source Page", "Reference", "Context", "Scope", "DOM path", "Discovered"].map((header) => <th key={header} className="px-3 py-2 font-medium">{header}</th>)}</tr></thead><tbody>{items.map((item) => { const pageUrl = scanId ? `/scans/${scanId}/pages/${item.source_snapshot_id}` : siteId ? `/sites/${siteId}/pages/${item.source_resource_id}` : null; return <tr key={`${item.occurrence_source}-${item.occurrence_id}`} className="border-t border-stone-100 align-top"><td className="max-w-md px-3 py-2">{pageUrl ? <Link to={pageUrl} className="block truncate underline">{item.source_title ?? "Untitled Page"}</Link> : <span>{item.source_title ?? "Untitled Page"}</span>}<span className="block truncate font-mono text-xs text-stone-500">{item.source_url}</span></td><td className="px-3 py-2">{item.occurrence_source === "anchor" ? "Anchor link" : `${item.element_tag} ${item.attribute_name}`}<span className="block text-xs text-stone-500">{item.relation_type}</span></td><td className="max-w-sm px-3 py-2">{item.anchor_text ?? item.alt_text ?? "No text"}<span className="block text-xs text-stone-500">{[item.srcset_descriptor, item.rel, item.media, item.as_hint].filter(Boolean).join(" | ")}</span></td><td className="px-3 py-2"><StatusBadge status={item.in_scope ? "completed" : "interrupted"} label={formatScopeDecision(item.scope_decision)} /></td><td className="max-w-sm break-all px-3 py-2 font-mono text-xs">{item.dom_path ?? "Not available"}</td><td className="whitespace-nowrap px-3 py-2">{formatDate(item.discovered_at)}</td></tr>; })}</tbody></table></div><div className="flex items-center justify-between text-sm text-stone-600"><span>{plural(total, "occurrence")}</span><div className="flex gap-2"><Button type="button" disabled={offset <= 0} onClick={() => setSearchParams({ tab: "used-by-pages", offset: String(Math.max(0, offset - 50)) })}>Previous</Button><Button type="button" disabled={offset + 50 >= total} onClick={() => setSearchParams({ tab: "used-by-pages", offset: String(offset + 50) })}>Next</Button></div></div></div>;
+  return <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Source Page", "Reference", "Context", "Scope", "DOM path", "Discovered"].map((header) => <th key={header} className="px-3 py-2 font-medium">{header}</th>)}</tr></thead><tbody>{items.map((item) => { const pageUrl = scanId ? `/scans/${scanId}/pages/${item.source_snapshot_id}` : siteId ? `/sites/${siteId}/pages/${item.source_resource_id}` : null; return <tr key={`${item.occurrence_source}-${item.occurrence_id}`} className="border-t border-stone-100 align-top"><td className="max-w-md px-3 py-2">{pageUrl ? <Link to={pageUrl} className="block truncate underline">{item.source_title ?? "Untitled Page"}</Link> : <span>{item.source_title ?? "Untitled Page"}</span>}<span className="block truncate font-mono text-xs text-stone-500">{item.source_url}</span></td><td className="px-3 py-2">{item.occurrence_source === "anchor" ? "Anchor link" : `${item.element_tag} ${item.attribute_name}`}<span className="block text-xs text-stone-500">{item.relation_type}</span></td><td className="max-w-sm px-3 py-2">{item.anchor_text ?? item.alt_text ?? "No text"}<span className="block text-xs text-stone-500">{[item.srcset_descriptor, item.rel, item.media, item.as_hint].filter(Boolean).join(" | ")}</span></td><td className="px-3 py-2"><StatusBadge status={item.in_scope ? "completed" : "interrupted"} label={formatScopeDecision(item.scope_decision)} /></td><td className="max-w-sm break-all px-3 py-2 font-mono text-xs">{item.dom_path ?? "Not available"}</td><td className="whitespace-nowrap px-3 py-2">{formatDate(item.discovered_at)}</td></tr>; })}</tbody></table></div>;
 }
+
+function PaginatedSection({ controls, children }: { controls: React.ReactNode; children: React.ReactNode }) { return <div className="space-y-4">{controls}{children}{controls}</div>; }
 
 function HistoryView({ items, siteId }: { items: Awaited<ReturnType<typeof listSiteResourceHistory>>["items"]; siteId: string }) {
   if (!items.length) return <EmptyState title="No retained Scan history" message="No Scan evidence remains for this Resource." />;

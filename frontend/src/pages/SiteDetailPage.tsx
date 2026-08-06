@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import {
   Link,
   useNavigate,
@@ -43,6 +43,7 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
+import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { classificationLabel } from "../types/siteClassifications";
 import type { Job, WorkerHealth } from "../types/jobs";
@@ -60,6 +61,7 @@ import {
   plural,
 } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
+import { useUrlPagination } from "../utils/useUrlPagination";
 
 export function SiteDetailPage() {
   const { siteId = "" } = useParams();
@@ -219,6 +221,7 @@ export function SiteDetailPage() {
 
 function PagesTab({ site }: { site: Site }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const pagination = useUrlPagination({ prefix: "site_pages" });
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<number[]>([]);
   const [bulkCategory, setBulkCategory] = useState("");
@@ -237,11 +240,12 @@ function PagesTab({ site }: { site: Site }) {
     "has_notes",
     "sort",
     "direction",
-    "offset",
   ]) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
+  query.set("limit", String(pagination.limit));
+  query.set("offset", String(pagination.offset));
   const pages = useQuery({
     queryKey: ["site-pages", String(site.id), query.toString()],
     queryFn: () => listSitePages(String(site.id), `?${query.toString()}`),
@@ -251,6 +255,8 @@ function PagesTab({ site }: { site: Site }) {
     queryFn: () =>
       listPageCategories(String(site.id), "?active_state=all&limit=200"),
   });
+  useEffect(() => pagination.ensureValid(pages.data?.total), [pages.data?.total, pagination]);
+  const controls = pages.data ? <PaginatedTableControls total={pages.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="Page" isLoading={pages.isFetching && !pages.isLoading} /> : null;
   const bulk = useMutation({
     mutationFn: async (action: "add" | "remove" | "owner" | "workflow") => {
       if (action === "add" || action === "remove")
@@ -436,6 +442,7 @@ function PagesTab({ site }: { site: Site }) {
         <ErrorBanner error={pages.error} title="Could not load pages" />
       ) : null}
       {pages.isLoading ? <LoadingBlock label="Loading pages..." /> : null}
+      {controls ? <div className="mb-4">{controls}</div> : null}
       {pages.data?.items.length ? (
         <SitePagesTable
           siteId={site.id}
@@ -449,15 +456,7 @@ function PagesTab({ site }: { site: Site }) {
           message="Run a scan for this Site to associate observed Pages."
         />
       ) : null}
-      {pages.data ? (
-        <Pagination
-          total={pages.data.total}
-          limit={pages.data.limit}
-          offset={pages.data.offset}
-          setSearchParams={setSearchParams}
-          searchParams={searchParams}
-        />
-      ) : null}
+      {controls ? <div className="mt-4">{controls}</div> : null}
     </section>
   );
 }
@@ -1229,21 +1228,25 @@ function activeSourceJob(jobs: Job[], sourceId: number) {
 
 function InventoryTab({ site }: { site: Site }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const pagination = useUrlPagination({ prefix: "inventory" });
   const query = new URLSearchParams();
   for (const key of [
     "search",
     "source_type",
     "scope_decision",
     "validation_state",
-    "offset",
   ]) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
+  query.set("limit", String(pagination.limit));
+  query.set("offset", String(pagination.offset));
   const inventory = useQuery({
     queryKey: ["inventory", String(site.id), query.toString()],
     queryFn: () => listInventory(String(site.id), `?${query.toString()}`),
   });
+  useEffect(() => pagination.ensureValid(inventory.data?.total), [inventory.data?.total, pagination]);
+  const controls = inventory.data ? <PaginatedTableControls total={inventory.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inventory URL" isLoading={inventory.isFetching && !inventory.isLoading} /> : null;
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
@@ -1295,6 +1298,7 @@ function InventoryTab({ site }: { site: Site }) {
       {inventory.isLoading ? (
         <LoadingBlock label="Loading inventory..." />
       ) : null}
+      {controls ? <div className="mb-4">{controls}</div> : null}
       {inventory.data?.items.length ? (
         <InventoryTable items={inventory.data.items} />
       ) : !inventory.isLoading ? (
@@ -1303,6 +1307,7 @@ function InventoryTab({ site }: { site: Site }) {
           message="Refresh a source or add manual URLs to build this inventory."
         />
       ) : null}
+      {controls ? <div className="mt-4">{controls}</div> : null}
     </section>
   );
 }
@@ -1402,62 +1407,6 @@ function setTab(
   });
 }
 
-function Pagination({
-  total,
-  limit,
-  offset,
-  setSearchParams,
-  searchParams,
-}: {
-  total: number;
-  limit: number;
-  offset: number;
-  setSearchParams: ReturnType<typeof useSearchParams>[1];
-  searchParams: URLSearchParams;
-}) {
-  return (
-    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
-      <span>{plural(total, "item")}</span>
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          disabled={offset <= 0}
-          onClick={() =>
-            setOffset(
-              setSearchParams,
-              searchParams,
-              Math.max(0, offset - limit),
-            )
-          }
-        >
-          Previous
-        </Button>
-        <Button
-          type="button"
-          disabled={offset + limit >= total}
-          onClick={() =>
-            setOffset(setSearchParams, searchParams, offset + limit)
-          }
-        >
-          Next
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function setOffset(
-  setSearchParams: ReturnType<typeof useSearchParams>[1],
-  searchParams: URLSearchParams,
-  offset: number,
-) {
-  setSearchParams(() => {
-    const next = new URLSearchParams(searchParams);
-    next.set("offset", String(offset));
-    return next;
-  });
-}
-
 function setSearchParam(
   setSearchParams: ReturnType<typeof useSearchParams>[1],
   key: string,
@@ -1467,6 +1416,8 @@ function setSearchParam(
     const next = new URLSearchParams(current);
     if (value) next.set(key, value);
     else next.delete(key);
+    if (next.get("tab") === "pages") next.delete("site_pages_offset");
+    if (next.get("tab") === "inventory") next.delete("inventory_offset");
     return next;
   });
 }

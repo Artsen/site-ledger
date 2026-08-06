@@ -175,6 +175,8 @@ Graph, Activity, and HTML evidence endpoints. Existing API paths remain unversio
 React routes cover new scans, scan history, scan details, scan observations, Sites, Site editing,
 Site Page catalogs, and persistent Page history. TanStack Query owns server state. URL parameters
 preserve tab, filter, pagination, graph, and presentation state where appropriate.
+Shared table pagination conventions and URL parameter isolation are documented in
+[Table pagination](table-pagination.md).
 
 Stored HTML is rendered only as escaped text. The raw HTML endpoint returns text/plain.
 

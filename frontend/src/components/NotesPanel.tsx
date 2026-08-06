@@ -1,14 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { deleteNote, updateNote } from "../api/client";
 import type { Note, NoteList } from "../types/scans";
 import { formatDate } from "../utils/format";
+import { useUrlPagination } from "../utils/useUrlPagination";
 import { Button } from "./ui/Button";
 import { EmptyState } from "./ui/EmptyState";
 import { ErrorBanner } from "./ui/ErrorBanner";
 import { LoadingBlock } from "./ui/Loading";
+import { PaginatedTableControls } from "./ui/PaginatedTableControls";
 
 type NotesPanelProps = {
   queryKey: readonly unknown[];
@@ -26,18 +28,19 @@ export function NotesPanel({
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.get("notes_search") ?? "";
-  const offset = Number(searchParams.get("notes_offset") ?? "0");
+  const pagination = useUrlPagination({ prefix: "notes", defaultLimit: 25 });
   const [body, setBody] = useState("");
   const [pinned, setPinned] = useState(false);
   const notes = useQuery({
-    queryKey: [...queryKey, search, offset],
+    queryKey: [...queryKey, search, pagination.limit, pagination.offset],
     queryFn: () =>
       list(
-        `?limit=25&offset=${offset}${
+        `?limit=${pagination.limit}&offset=${pagination.offset}${
           search ? `&search=${encodeURIComponent(search)}` : ""
         }`,
       ),
   });
+  useEffect(() => pagination.ensureValid(notes.data?.total), [notes.data?.total, pagination]);
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: [...queryKey] });
   const add = useMutation({
@@ -112,6 +115,7 @@ export function NotesPanel({
           />
         ) : null}
         {notes.isLoading ? <LoadingBlock label="Loading notes..." /> : null}
+        {notes.data ? <div className="mb-4"><PaginatedTableControls total={notes.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="note" isLoading={notes.isFetching && !notes.isLoading} /></div> : null}
         {notes.data?.items.length ? (
           <div className="space-y-3">
             {notes.data.items.map((note) => (
@@ -124,47 +128,7 @@ export function NotesPanel({
             message={`No notes have been added for ${context}.`}
           />
         ) : null}
-        {notes.data ? (
-          <div className="mt-4 flex items-center justify-between gap-3 text-sm">
-            <span>{notes.data.total} notes</span>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                disabled={notes.data.offset <= 0}
-                onClick={() =>
-                  setSearchParams((current) => {
-                    const next = new URLSearchParams(current);
-                    next.set(
-                      "notes_offset",
-                      String(Math.max(0, notes.data.offset - notes.data.limit)),
-                    );
-                    return next;
-                  })
-                }
-              >
-                Previous
-              </Button>
-              <Button
-                type="button"
-                disabled={
-                  notes.data.offset + notes.data.limit >= notes.data.total
-                }
-                onClick={() =>
-                  setSearchParams((current) => {
-                    const next = new URLSearchParams(current);
-                    next.set(
-                      "notes_offset",
-                      String(notes.data.offset + notes.data.limit),
-                    );
-                    return next;
-                  })
-                }
-              >
-                Next
-              </Button>
-            </div>
-          </div>
-        ) : null}
+        {notes.data ? <div className="mt-4"><PaginatedTableControls total={notes.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="note" isLoading={notes.isFetching && !notes.isLoading} /></div> : null}
       </div>
     </div>
   );

@@ -113,9 +113,11 @@ def list_scan_history(
         "starting_url": Scan.starting_url,
     }
     order_col = sort_map[sort]
+    order = order_col.desc() if direction == "desc" else order_col.asc()
+    id_order = Scan.id.desc() if direction == "desc" else Scan.id.asc()
     scans = list(
         db.scalars(
-            query.order_by(order_col.desc() if direction == "desc" else order_col.asc())
+            query.order_by(order, id_order)
             .limit(limit)
             .offset(offset)
         )
@@ -209,8 +211,10 @@ def list_scan_pages(
         "rendered_state": func.coalesce(RenderedObservation.capture_state, "not_requested"),
     }
     order_col = sort_map[sort]
+    order = order_col.desc() if direction == "desc" else order_col.asc()
+    id_order = ResourceSnapshot.id.desc() if direction == "desc" else ResourceSnapshot.id.asc()
     rows = db.execute(
-        base.order_by(order_col.desc() if direction == "desc" else order_col.asc())
+        base.order_by(order, id_order)
         .limit(limit)
         .offset(offset)
     ).all()
@@ -290,7 +294,10 @@ def list_snapshot_inbound_links(
         "source_status": source_snapshot.http_status,
     }
     rows = db.execute(
-        base.order_by(sort_map[sort].desc() if direction == "desc" else sort_map[sort].asc())
+        base.order_by(
+            sort_map[sort].desc() if direction == "desc" else sort_map[sort].asc(),
+            ResourceOccurrence.id.desc() if direction == "desc" else ResourceOccurrence.id.asc(),
+        )
         .limit(limit)
         .offset(offset)
     ).all()

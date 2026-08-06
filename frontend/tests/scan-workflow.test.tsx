@@ -391,6 +391,10 @@ describe("scan results workflow", () => {
     expect(screen.getAllByText("Observed").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Discovered only").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Document").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("navigation", { name: "Resources pagination" })).toHaveLength(2);
+    fireEvent.change(screen.getAllByLabelText("Resource rows per page")[0], { target: { value: "100" } });
+    await waitFor(() => expect(screen.getAllByLabelText("Resource rows per page").every((control) => (control as HTMLSelectElement).value === "100")).toBe(true));
+    await waitFor(() => expect(api.listScanResources).toHaveBeenLastCalledWith("1", expect.stringContaining("limit=100")));
     fireEvent.change(screen.getByLabelText("Resource kind"), { target: { value: "document" } });
     await waitFor(() => expect(api.listScanResources).toHaveBeenLastCalledWith("1", expect.stringContaining("resource_kind=document")));
   });
@@ -403,6 +407,7 @@ describe("scan results workflow", () => {
     renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=rendered");
 
     const link = await screen.findByRole("link", { name: "Open rendered evidence for https://example.com/page" });
+    expect(screen.getAllByRole("navigation", { name: "rendered captures pagination" })).toHaveLength(2);
     expect(link).toHaveAttribute("href", "/scans/1/pages/9?tab=rendered");
     fireEvent.change(screen.getByLabelText("Rendered capture state"), { target: { value: "completed_with_warnings" } });
     await waitFor(() => expect(api.listScanRenderedObservations).toHaveBeenLastCalledWith("1", expect.stringContaining("capture_state=completed_with_warnings")));
@@ -439,6 +444,7 @@ describe("scan results workflow", () => {
     renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=pages");
 
     await screen.findByText("No pages recorded");
+    expect(screen.getAllByRole("navigation", { name: "Pages pagination" })).toHaveLength(2);
     expect(screen.getByText("Completed")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Search pages"), { target: { value: "pricing" } });
@@ -591,6 +597,7 @@ describe("saved sites workflow", () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages");
 
     expect(await screen.findByText("https://example.com/page")).toBeInTheDocument();
+    expect(screen.getAllByRole("navigation", { name: "Pages pagination" })).toHaveLength(2);
     expect(screen.getByText("Observed Page")).toBeInTheDocument();
     expect(api.listSitePages).toHaveBeenCalledWith("3", expect.stringContaining(""));
 

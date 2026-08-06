@@ -158,7 +158,7 @@ def list_inventory(
     entries = list(
         db.scalars(
             query.options(selectinload(UrlSourceEntry.url_source)).order_by(
-                UrlSourceEntry.normalized_url, UrlSourceEntry.raw_url
+                UrlSourceEntry.normalized_url, UrlSourceEntry.raw_url, UrlSourceEntry.id
             )
         )
     )

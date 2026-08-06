@@ -227,6 +227,51 @@ test("persistent Page workspace supports organization, evidence, links, and note
   await expect(page).toHaveURL(/notes_search=pricing/);
 });
 
+test("numbered pagination stays URL-backed and isolated between Scan tabs", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/scans/1/pages**", async (route) => {
+    const url = new URL(route.request().url());
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [{ ...pageRow, id: offset + 1, requested_url: `https://example.com/page-${offset + 1}` }], total: 125, limit, offset }),
+    });
+  });
+  await page.route("**/api/scans/1/resources**", async (route) => {
+    if (new URL(route.request().url()).pathname !== "/api/scans/1/resources") return route.fallback();
+    const url = new URL(route.request().url());
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [resourceItem({ resource_id: offset + 21 })], total: 100, limit, offset }) });
+  });
+
+  await page.goto("/scans/1?tab=pages&resources_limit=25&resources_offset=25");
+  await expect(page.getByRole("navigation", { name: "Pages pagination" })).toHaveCount(2);
+  await page.getByRole("button", { name: "Go to Page 3" }).first().click();
+  await expect(page).toHaveURL(/pages_offset=100/);
+  await expect(page.getByText("Showing 101-125 of 125 Pages").first()).toBeVisible();
+
+  await page.getByLabel("Page rows per page").first().selectOption("100");
+  await expect(page).toHaveURL(/pages_limit=100/);
+  await expect(page).toHaveURL(/pages_offset=0/);
+  await page.getByRole("button", { name: "Last" }).first().click();
+  await expect(page).toHaveURL(/pages_offset=100/);
+  await page.getByRole("button", { name: "First" }).first().click();
+  await expect(page).toHaveURL(/pages_offset=0/);
+
+  await page.getByRole("tab", { name: /Resources/i }).click();
+  await expect(page).toHaveURL(/resources_limit=25/);
+  await expect(page).toHaveURL(/resources_offset=25/);
+  await expect(page.getByText("Showing 26-50 of 100 Resources").first()).toBeVisible();
+  await page.getByRole("tab", { name: /Rendered/i }).click();
+  await expect(page).not.toHaveURL(/rendered_offset=25/);
+  await page.goBack();
+  await expect(page).toHaveURL(/tab=resources/);
+  await page.goForward();
+  await expect(page).toHaveURL(/tab=rendered/);
+});
+
 async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
   let siteActive = true;

@@ -11,13 +11,15 @@ import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
+import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { UrlText } from "../components/ui/UrlText";
 import { inputClass } from "../components/ui/styles";
 import type { InboundLinkList, InboundLinkOccurrence, LinkOccurrence, Snapshot, StaticFetchAttempt } from "../types/scans";
-import { formatBytes, formatDate, formatScopeDecision, formatStatus, plural } from "../utils/format";
+import { formatBytes, formatDate, formatScopeDecision, formatStatus } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
+import { useUrlPagination } from "../utils/useUrlPagination";
 
 export function PageDetailPage() {
   const { scanId = "", snapshotId = "" } = useParams();
@@ -90,6 +92,7 @@ function InboundLinksView({
   setSearchParams: ReturnType<typeof useSearchParams>[1];
   scanId: string;
 }) {
+  const pagination = useUrlPagination({ prefix: "inbound", total: inbound?.total });
   if (error) return <ErrorBanner error={error} title="Could not load inbound links" />;
   if (loading) return <LoadingBlock label="Loading inbound links..." />;
   if (!inbound) return null;
@@ -117,8 +120,9 @@ function InboundLinksView({
           <Button type="button" variant="ghost" onClick={() => setSearchParams(tabOnly(searchParams, "inbound"))}>Clear filters</Button>
         </div>
       </section>
+      <PaginatedTableControls total={inbound.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inbound occurrence" />
       {!inbound.items.length ? <EmptyState title={hasInboundFilters(searchParams) ? "No inbound links match" : "No inbound links"} message={hasInboundFilters(searchParams) ? "Clear filters or broaden the search." : "No pages in this scan link to this page."} /> : <InboundTable items={inbound.items} scanId={scanId} />}
-      <InboundPagination inbound={inbound} searchParams={searchParams} setSearchParams={setSearchParams} />
+      <PaginatedTableControls total={inbound.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inbound occurrence" />
     </div>
   );
 }
@@ -178,20 +182,6 @@ function InboundTable({ items, scanId }: { items: InboundLinkOccurrence[]; scanI
           ))}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-function InboundPagination({ inbound, searchParams, setSearchParams }: { inbound: InboundLinkList; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {
-  const limit = inbound.limit;
-  const offset = inbound.offset;
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
-      <span>{plural(inbound.total, "inbound occurrence")}</span>
-      <div className="flex gap-2">
-        <Button type="button" disabled={offset <= 0} onClick={() => setInboundOffset(setSearchParams, searchParams, Math.max(0, offset - limit))}>Previous</Button>
-        <Button type="button" disabled={offset + limit >= inbound.total} onClick={() => setInboundOffset(setSearchParams, searchParams, offset + limit)}>Next</Button>
-      </div>
     </div>
   );
 }
@@ -537,15 +527,6 @@ function updateInboundParam(setSearchParams: ReturnType<typeof useSearchParams>[
     if (value) next.set(key, value);
     else next.delete(key);
     next.delete("inbound_offset");
-    return next;
-  });
-}
-
-function setInboundOffset(setSearchParams: ReturnType<typeof useSearchParams>[1], searchParams: URLSearchParams, offset: number) {
-  setSearchParams(() => {
-    const next = new URLSearchParams(searchParams);
-    next.set("tab", "inbound");
-    next.set("inbound_offset", String(offset));
     return next;
   });
 }

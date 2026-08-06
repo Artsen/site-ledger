@@ -299,7 +299,9 @@ def list_site_resource_history(
         Scan.status.label("scan_status"),
     ).join(Scan, Scan.id == aggregate.c.scan_id)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    rows = db.execute(query.order_by(Scan.created_at.desc()).limit(limit).offset(offset)).mappings()
+    rows = db.execute(
+        query.order_by(Scan.created_at.desc(), Scan.id.desc()).limit(limit).offset(offset)
+    ).mappings()
     return ResourceHistoryList(
         items=[
             ResourceHistoryItem(

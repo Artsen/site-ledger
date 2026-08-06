@@ -186,8 +186,8 @@ from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
 router = APIRouter(prefix="/api")
 DbSession = Annotated[Session, Depends(get_db)]
-ScanListLimit = Annotated[int, Query(ge=1, le=100)]
-PageLimit = Annotated[int, Query(ge=1, le=200)]
+ScanListLimit = Annotated[int, Query(ge=1, le=250)]
+PageLimit = Annotated[int, Query(ge=1, le=250)]
 PageOffset = Annotated[int, Query(ge=0)]
 ResourceSortParam = Literal[
     "url",

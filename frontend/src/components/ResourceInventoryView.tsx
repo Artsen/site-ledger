@@ -1,13 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { getScanResourceSummary, getSiteResourceSummary, listScanResources, listSiteResources } from "../api/client";
 import type { ResourceInventoryItem } from "../types/scans";
 import { formatBytes, formatDate, plural } from "../utils/format";
+import { useUrlPagination } from "../utils/useUrlPagination";
 import { Button } from "./ui/Button";
 import { EmptyState } from "./ui/EmptyState";
 import { ErrorBanner } from "./ui/ErrorBanner";
 import { LoadingBlock } from "./ui/Loading";
+import { PaginatedTableControls } from "./ui/PaginatedTableControls";
 import { StatusBadge } from "./ui/StatusBadge";
 import { inputClass } from "./ui/styles";
 
@@ -15,7 +18,8 @@ const resourceKinds = ["image", "document", "stylesheet", "script", "font", "vid
 
 export function ResourceInventoryView({ scope, id }: { scope: "scan" | "site"; id: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const query = buildResourceQuery(searchParams);
+  const pagination = useUrlPagination({ prefix: "resources" });
+  const query = buildResourceQuery(searchParams, pagination.limit, pagination.offset);
   const resources = useQuery({
     queryKey: [`${scope}-resources`, id, query],
     queryFn: () => scope === "scan" ? listScanResources(id, query) : listSiteResources(id, query),
@@ -25,8 +29,8 @@ export function ResourceInventoryView({ scope, id }: { scope: "scan" | "site"; i
     queryKey: [`${scope}-resource-summary`, id],
     queryFn: () => scope === "scan" ? getScanResourceSummary(id) : getSiteResourceSummary(id)
   });
-  const limit = Number(searchParams.get("limit") ?? 50);
-  const offset = Number(searchParams.get("offset") ?? 0);
+  useEffect(() => pagination.ensureValid(resources.data?.total), [pagination, resources.data?.total]);
+  const controls = <PaginatedTableControls total={resources.data?.total ?? 0} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="Resource" isLoading={resources.isFetching && !resources.isLoading} />;
   const detailBase = scope === "scan" ? `/scans/${id}/resources` : `/sites/${id}/resources`;
 
   if (resources.error || summary.error) return <ErrorBanner error={resources.error ?? summary.error} title="Could not load Resources" />;
@@ -56,11 +60,11 @@ export function ResourceInventoryView({ scope, id }: { scope: "scan" | "site"; i
         <Button type="button" variant="ghost" onClick={() => clearResourceParams(setSearchParams, searchParams)}>Clear filters</Button>
       </div>
     </section>
-    <ResourcePagination total={resources.data?.total ?? 0} limit={limit} offset={offset} setSearchParams={setSearchParams} />
+    {controls}
     {resources.isLoading ? <LoadingBlock label="Loading Resources..." /> : null}
     {!resources.isLoading && !resources.data?.items.length ? <EmptyState title="No Resources found" message="Resources appear when non-HTML responses or embedded file references are retained in this scope." /> : null}
     {resources.data?.items.length ? <ResourceTable items={resources.data.items} detailBase={detailBase} /> : null}
-    <ResourcePagination total={resources.data?.total ?? 0} limit={limit} offset={offset} setSearchParams={setSearchParams} />
+    {controls}
   </div>;
 }
 
@@ -96,20 +100,15 @@ export function ResourceEvidenceBadge({ observed }: { observed: boolean }) {
   return <StatusBadge status={observed ? "completed" : "queued"} label={observed ? "Observed" : "Discovered only"} />;
 }
 
-function ResourcePagination({ total, limit, offset, setSearchParams }: { total: number; limit: number; offset: number; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {
-  if (!total) return null;
-  return <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600"><span>{plural(total, "Resource")}</span><div className="flex items-center gap-2"><select aria-label="Resource page size" value={limit} onChange={(event) => setResourceParam(setSearchParams, "limit", event.target.value)} className="rounded-md border border-stone-300 bg-white px-2 py-1"><option value="25">25 rows</option><option value="50">50 rows</option><option value="100">100 rows</option></select><Button type="button" disabled={offset <= 0} onClick={() => setResourceOffset(setSearchParams, Math.max(0, offset - limit))}>Previous</Button><Button type="button" disabled={offset + limit >= total} onClick={() => setResourceOffset(setSearchParams, offset + limit)}>Next</Button></div></div>;
-}
-
-function buildResourceQuery(searchParams: URLSearchParams) {
+function buildResourceQuery(searchParams: URLSearchParams, limit: number, offset: number) {
   const query = new URLSearchParams();
-  for (const key of ["search", "resource_kind", "mime_type", "extension", "host", "status", "evidence_state", "scope_state", "location_state", "min_size", "max_size", "has_multiple_source_pages", "sort", "direction", "limit", "offset"]) {
+  for (const key of ["search", "resource_kind", "mime_type", "extension", "host", "status", "evidence_state", "scope_state", "location_state", "min_size", "max_size", "has_multiple_source_pages", "sort", "direction"]) {
     const value = searchParams.get(key); if (value) query.set(key, value);
   }
+  query.set("limit", String(limit)); query.set("offset", String(offset));
   return `?${query.toString()}`;
 }
 
-function setResourceParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string) { setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); next.delete("offset"); return next; }); }
-function setResourceOffset(setSearchParams: ReturnType<typeof useSearchParams>[1], offset: number) { setSearchParams((current) => { const next = new URLSearchParams(current); next.set("offset", String(offset)); return next; }); }
+function setResourceParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string) { setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); next.delete("resources_offset"); return next; }); }
 function clearResourceParams(setSearchParams: ReturnType<typeof useSearchParams>[1], current: URLSearchParams) { const next = new URLSearchParams(); const tab = current.get("tab"); if (tab) next.set("tab", tab); setSearchParams(next); }
 function kindLabel(kind: string) { return kind === "html_page" ? "HTML Page" : kind === "structured_data" ? "Structured data" : kind.split("_").map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" "); }

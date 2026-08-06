@@ -8,10 +8,12 @@ import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
 import { LoadingBlock } from "../../components/ui/Loading";
+import { PaginatedTableControls } from "../../components/ui/PaginatedTableControls";
 import { inputClass } from "../../components/ui/styles";
 import type { GraphCapabilities, GraphDisplaySettings, GraphEdge } from "../../types/graph";
 import type { Scan } from "../../types/scans";
 import { formatDate, formatStatus, isTerminalStatus, plural } from "../../utils/format";
+import { finalValidOffset } from "../../utils/pagination";
 import type { GraphRendererHandle } from "./GraphRendererTypes";
 import { adaptGraphData, type RendererEdge, type RendererNode } from "./graphDataAdapter";
 
@@ -359,7 +361,13 @@ function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams
   const limit = occurrences?.limit ?? capabilities.occurrence_page_default;
   const offset = occurrences?.offset ?? Number(searchParams.get("edge_offset") ?? 0);
   const total = occurrences?.total ?? 0;
-  const end = Math.min(total, offset + (occurrences?.items.length ?? 0));
+  useEffect(() => {
+    if (occurrences && offset > finalValidOffset(total, limit)) {
+      updateGraphParam(setSearchParams, "edge_offset", String(finalValidOffset(total, limit)));
+    }
+  }, [limit, occurrences, offset, setSearchParams, total]);
+  const allowedPageSizes = [25, 50, 100, 250].filter((size) => size <= capabilities.occurrence_page_maximum);
+  const controls = occurrences ? <PaginatedTableControls total={total} limit={limit} offset={offset} onPageChange={(page) => updateGraphParam(setSearchParams, "edge_offset", String((page - 1) * limit))} onPageSizeChange={(size) => updateGraphParam(setSearchParams, "edge_limit", String(size), { edge_offset: null })} allowedPageSizes={allowedPageSizes} itemLabel="edge occurrence" isLoading={loading} compact /> : null;
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 text-sm shadow-sm">
       <h3 className="mb-2 font-semibold">Selected edge</h3>
@@ -370,9 +378,10 @@ function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams
         {edge.target_snapshot_id ? <Link className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium" to={`/scans/${scanId}/pages/${edge.target_snapshot_id}`}>Target page</Link> : null}
       </div>
       <input aria-label="Search edge occurrences" value={search} onChange={(event) => updateGraphParam(setSearchParams, "edge_search", event.target.value || null, { edge_offset: null })} placeholder="Search occurrences" className={`${inputClass()} mt-3`} />
-      {occurrences ? <div className="mt-2 text-xs text-stone-500">Showing {total ? offset + 1 : 0}-{end} of {total} matching occurrences. Edge summary remains based on all {edge.occurrence_count} stored occurrences.</div> : null}
+      {occurrences ? <p className="mt-2 text-xs text-stone-500">The edge summary remains based on all {edge.occurrence_count} stored occurrences.</p> : null}
       {error ? <ErrorBanner error={error} title="Could not load edge occurrences" /> : null}
       {loading ? <LoadingBlock label="Loading edge occurrences..." /> : null}
+      {controls ? <div className="mt-3">{controls}</div> : null}
       <div className="mt-3 max-h-72 overflow-auto divide-y divide-stone-100">
         {(occurrences?.items ?? []).map((item) => (
           <div key={item.id} className="py-2 text-xs">
@@ -383,12 +392,7 @@ function EdgeInspector({ scanId, edge, occurrences, loading, error, searchParams
           </div>
         ))}
       </div>
-      {occurrences ? (
-        <div className="mt-3 flex gap-2">
-          <Button type="button" disabled={offset <= 0} onClick={() => updateGraphParam(setSearchParams, "edge_offset", String(Math.max(0, offset - limit)))}>Previous</Button>
-          <Button type="button" disabled={offset + limit >= total} onClick={() => updateGraphParam(setSearchParams, "edge_offset", String(offset + limit))}>Next</Button>
-        </div>
-      ) : null}
+      {controls ? <div className="mt-3">{controls}</div> : null}
     </section>
   );
 }

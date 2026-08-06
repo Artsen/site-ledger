@@ -12,6 +12,7 @@ import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
+import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { Tabs } from "../components/ui/Tabs";
 import { inputClass } from "../components/ui/styles";
@@ -20,8 +21,7 @@ import type { Job, WorkerHealth } from "../types/jobs";
 import type { Page, RenderedObservationIndexItem, Scan, ScanSeed, Snapshot } from "../types/scans";
 import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
-
-const pageSizes = [25, 50, 100];
+import { useUrlPagination } from "../utils/useUrlPagination";
 
 export function ScanDetailPage() {
   const { scanId = "" } = useParams();
@@ -59,7 +59,7 @@ export function ScanDetailPage() {
 
   useEffect(() => {
     if (searchDraft === (searchParams.get("search") ?? "")) return;
-    const timer = window.setTimeout(() => updateParam(setSearchParams, "search", searchDraft || null, { offset: null }), 350);
+    const timer = window.setTimeout(() => updateParam(setSearchParams, "search", searchDraft || null, { pages_offset: null }), 350);
     return () => window.clearTimeout(timer);
   }, [searchDraft, searchParams, setSearchParams]);
 
@@ -436,28 +436,28 @@ function PagesView({
   setSearchParams: ReturnType<typeof useSearchParams>[1];
   activeScan: boolean;
 }) {
-  const limit = Number(searchParams.get("limit") ?? 50);
-  const offset = Number(searchParams.get("offset") ?? 0);
+  const pagination = useUrlPagination({ prefix: "pages", total });
+  const controls = <PaginatedTableControls total={total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="Page" isLoading={loading && pages.length > 0} />;
   if (error) return <ErrorBanner error={error} title="Could not load pages" />;
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-6">
           <input aria-label="Search pages" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Search URLs or titles" className={`${inputClass()} lg:col-span-2`} />
-          <input aria-label="HTTP status" value={searchParams.get("status") ?? ""} onChange={(event) => updateParam(setSearchParams, "status", event.target.value || null, { offset: null })} placeholder="Status" className={inputClass()} />
-          <input aria-label="Host filter" value={searchParams.get("host") ?? ""} onChange={(event) => updateParam(setSearchParams, "host", event.target.value || null, { offset: null })} placeholder="Host" className={inputClass()} />
-          <input aria-label="Minimum depth" type="number" min={0} value={searchParams.get("min_depth") ?? ""} onChange={(event) => updateParam(setSearchParams, "min_depth", event.target.value || null, { offset: null })} placeholder="Min depth" className={inputClass()} />
-          <input aria-label="Maximum depth" type="number" min={0} value={searchParams.get("max_depth") ?? ""} onChange={(event) => updateParam(setSearchParams, "max_depth", event.target.value || null, { offset: null })} placeholder="Max depth" className={inputClass()} />
-          <input aria-label="Path prefix" value={searchParams.get("path_prefix") ?? ""} onChange={(event) => updateParam(setSearchParams, "path_prefix", event.target.value || null, { offset: null })} placeholder="/path/" className={inputClass()} />
-          <select aria-label="Error state" value={searchParams.get("error_state") ?? "any"} onChange={(event) => updateParam(setSearchParams, "error_state", event.target.value === "any" ? null : event.target.value, { offset: null })} className={inputClass()}>
+          <input aria-label="HTTP status" value={searchParams.get("status") ?? ""} onChange={(event) => updateParam(setSearchParams, "status", event.target.value || null, { pages_offset: null })} placeholder="Status" className={inputClass()} />
+          <input aria-label="Host filter" value={searchParams.get("host") ?? ""} onChange={(event) => updateParam(setSearchParams, "host", event.target.value || null, { pages_offset: null })} placeholder="Host" className={inputClass()} />
+          <input aria-label="Minimum depth" type="number" min={0} value={searchParams.get("min_depth") ?? ""} onChange={(event) => updateParam(setSearchParams, "min_depth", event.target.value || null, { pages_offset: null })} placeholder="Min depth" className={inputClass()} />
+          <input aria-label="Maximum depth" type="number" min={0} value={searchParams.get("max_depth") ?? ""} onChange={(event) => updateParam(setSearchParams, "max_depth", event.target.value || null, { pages_offset: null })} placeholder="Max depth" className={inputClass()} />
+          <input aria-label="Path prefix" value={searchParams.get("path_prefix") ?? ""} onChange={(event) => updateParam(setSearchParams, "path_prefix", event.target.value || null, { pages_offset: null })} placeholder="/path/" className={inputClass()} />
+          <select aria-label="Error state" value={searchParams.get("error_state") ?? "any"} onChange={(event) => updateParam(setSearchParams, "error_state", event.target.value === "any" ? null : event.target.value, { pages_offset: null })} className={inputClass()}>
             <option value="any">All states</option>
             <option value="with_errors">Errors only</option>
             <option value="without_errors">No crawler errors</option>
           </select>
-          <select aria-label="Rendered state" value={searchParams.get("rendered_state") ?? "any"} onChange={(event) => updateParam(setSearchParams, "rendered_state", event.target.value === "any" ? null : event.target.value, { offset: null })} className={inputClass()}>
+          <select aria-label="Rendered state" value={searchParams.get("rendered_state") ?? "any"} onChange={(event) => updateParam(setSearchParams, "rendered_state", event.target.value === "any" ? null : event.target.value, { pages_offset: null })} className={inputClass()}>
             <option value="any">Any rendered state</option><option value="not_requested">Not requested</option><option value="captured">Captured</option><option value="captured_with_warnings">Captured with warnings</option><option value="failed">Failed</option><option value="skipped">Skipped</option><option value="interrupted">Interrupted</option>
           </select>
-          <select aria-label="Sort pages" value={searchParams.get("sort") ?? "requested_url"} onChange={(event) => updateParam(setSearchParams, "sort", event.target.value, { offset: null })} className={inputClass()}>
+          <select aria-label="Sort pages" value={searchParams.get("sort") ?? "requested_url"} onChange={(event) => updateParam(setSearchParams, "sort", event.target.value, { pages_offset: null })} className={inputClass()}>
             <option value="requested_url">URL</option>
             <option value="status">HTTP status</option>
             <option value="title">Title</option>
@@ -465,18 +465,18 @@ function PagesView({
             <option value="duration">Duration</option>
             <option value="rendered_state">Rendered state</option>
           </select>
-          <select aria-label="Sort direction" value={searchParams.get("direction") ?? "asc"} onChange={(event) => updateParam(setSearchParams, "direction", event.target.value, { offset: null })} className={inputClass()}>
+          <select aria-label="Sort direction" value={searchParams.get("direction") ?? "asc"} onChange={(event) => updateParam(setSearchParams, "direction", event.target.value, { pages_offset: null })} className={inputClass()}>
             <option value="asc">Ascending</option>
             <option value="desc">Descending</option>
           </select>
           <label className="flex items-center gap-2 rounded-md border border-stone-200 bg-white px-3 py-2 text-sm">
-            <input type="checkbox" checked={searchParams.get("error_state") === "with_errors"} onChange={(event) => updateParam(setSearchParams, "error_state", event.target.checked ? "with_errors" : null, { offset: null })} className="size-4 rounded border-stone-300 focus:ring-neutral-900" />
+            <input type="checkbox" checked={searchParams.get("error_state") === "with_errors"} onChange={(event) => updateParam(setSearchParams, "error_state", event.target.checked ? "with_errors" : null, { pages_offset: null })} className="size-4 rounded border-stone-300 focus:ring-neutral-900" />
             Error-only
           </label>
           <Button type="button" variant="ghost" onClick={() => setSearchParams(tabOnly(searchParams))}>Clear filters</Button>
         </div>
       </div>
-      <Pagination total={total} limit={limit} offset={offset} setSearchParams={setSearchParams} />
+      {controls}
       {loading ? <LoadingBlock label="Loading pages..." /> : null}
       {!loading && pages.length === 0 ? (
         <EmptyState
@@ -486,7 +486,7 @@ function PagesView({
       ) : (
         <PageTable scanId={scanId} pages={pages} />
       )}
-      <Pagination total={total} limit={limit} offset={offset} setSearchParams={setSearchParams} />
+      {controls}
     </div>
   );
 }
@@ -531,25 +531,6 @@ function PageTable({ pages, scanId }: { pages: Page[]; scanId: string }) {
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-function Pagination({ total, limit, offset, setSearchParams }: { total: number; limit: number; offset: number; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {
-  const page = Math.floor(offset / limit) + 1;
-  const pages = Math.max(1, Math.ceil(total / limit));
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
-      <div>
-        Page {page} of {pages}, {plural(total, "result")}
-      </div>
-      <div className="flex items-center gap-2">
-        <select aria-label="Page size" value={limit} onChange={(event) => updateParam(setSearchParams, "limit", event.target.value, { offset: null })} className="rounded-md border border-stone-300 bg-white px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900">
-          {pageSizes.map((size) => <option key={size} value={size}>{size} rows</option>)}
-        </select>
-        <Button type="button" disabled={offset <= 0} onClick={() => updateParam(setSearchParams, "offset", String(Math.max(0, offset - limit)))}>Previous</Button>
-        <Button type="button" disabled={offset + limit >= total} onClick={() => updateParam(setSearchParams, "offset", String(offset + limit))}>Next</Button>
-      </div>
     </div>
   );
 }
@@ -630,10 +611,12 @@ function groupErrors(errors: Snapshot[]) {
 
 function buildPageQuery(searchParams: URLSearchParams) {
   const params = new URLSearchParams();
-  for (const key of ["search", "status", "host", "path_prefix", "min_depth", "max_depth", "error_state", "rendered_state", "sort", "direction", "limit", "offset"]) {
+  for (const key of ["search", "status", "host", "path_prefix", "min_depth", "max_depth", "error_state", "rendered_state", "sort", "direction"]) {
     const value = searchParams.get(key);
     if (value) params.set(key, value);
   }
+  params.set("limit", searchParams.get("pages_limit") ?? "50");
+  params.set("offset", searchParams.get("pages_offset") ?? "0");
   return `?${params.toString()}`;
 }
 

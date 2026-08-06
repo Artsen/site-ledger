@@ -1,21 +1,25 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { listScanRenderedObservations } from "../api/client";
-import { formatDate, plural } from "../utils/format";
+import { formatDate } from "../utils/format";
+import { useUrlPagination } from "../utils/useUrlPagination";
 import { Button } from "./ui/Button";
 import { EmptyState } from "./ui/EmptyState";
 import { ErrorBanner } from "./ui/ErrorBanner";
 import { LoadingBlock } from "./ui/Loading";
+import { PaginatedTableControls } from "./ui/PaginatedTableControls";
 import { StatusBadge } from "./ui/StatusBadge";
 import { inputClass } from "./ui/styles";
 
 export function RenderedObservationTable({ scanId, renderMode }: { scanId: string; renderMode: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const query = buildQuery(searchParams);
+  const pagination = useUrlPagination({ prefix: "rendered" });
+  const query = buildQuery(searchParams, pagination.limit, pagination.offset);
   const rendered = useQuery({ queryKey: ["scan-rendered-observations", scanId, query], queryFn: () => listScanRenderedObservations(scanId, query), placeholderData: (previous) => previous });
-  const limit = Number(searchParams.get("limit") ?? 50);
-  const offset = Number(searchParams.get("offset") ?? 0);
+  useEffect(() => pagination.ensureValid(rendered.data?.total), [pagination, rendered.data?.total]);
+  const controls = <PaginatedTableControls total={rendered.data?.total ?? 0} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="rendered capture" isLoading={rendered.isFetching && !rendered.isLoading} />;
   if (rendered.error) return <ErrorBanner error={rendered.error} title="Could not load rendered captures" />;
   return <div className="space-y-4">
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm"><div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
@@ -29,6 +33,7 @@ export function RenderedObservationTable({ scanId, renderMode }: { scanId: strin
       <select aria-label="Rendered sort direction" value={searchParams.get("direction") ?? "desc"} onChange={(event) => setParam(setSearchParams, "direction", event.target.value)} className={inputClass()}><option value="desc">Descending</option><option value="asc">Ascending</option></select>
       <Button type="button" variant="ghost" onClick={() => clearParams(setSearchParams)}>Clear filters</Button>
     </div></section>
+    {controls}
     {rendered.isLoading ? <LoadingBlock label="Loading rendered captures..." /> : null}
     {!rendered.isLoading && !rendered.data?.items.length ? <RenderedEmptyState renderMode={renderMode} filtered={hasFilters(searchParams)} /> : null}
     {rendered.data?.items.length ? <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Page", "Capture", "Navigation", "Duration", "Warnings", "Browser evidence", "Captured"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr></thead><tbody>{rendered.data.items.map((item) => <tr key={item.id} className="border-t border-stone-100 align-top hover:bg-stone-50">
@@ -38,7 +43,7 @@ export function RenderedObservationTable({ scanId, renderMode }: { scanId: strin
       <td className="px-3 py-2 text-xs">{[item.has_viewport_screenshot ? "Viewport" : "", item.has_full_page_screenshot ? "Full page" : "", item.has_rendered_dom ? "DOM" : ""].filter(Boolean).join(", ") || "No artifacts"}<span className="block text-stone-500">{item.blocked_request_count} blocked, {item.console_message_count} console</span></td>
       <td className="whitespace-nowrap px-3 py-2">{formatDate(item.finished_at)}</td>
     </tr>)}</tbody></table></div> : null}
-    {rendered.data?.total ? <div className="flex items-center justify-between text-sm text-stone-600"><span>{plural(rendered.data.total, "capture")}</span><div className="flex gap-2"><Button type="button" disabled={offset <= 0} onClick={() => setOffset(setSearchParams, Math.max(0, offset - limit))}>Previous</Button><Button type="button" disabled={offset + limit >= rendered.data.total} onClick={() => setOffset(setSearchParams, offset + limit)}>Next</Button></div></div> : null}
+    {controls}
   </div>;
 }
 
@@ -47,8 +52,7 @@ function RenderedEmptyState({ renderMode, filtered }: { renderMode: string; filt
   if (renderMode === "none") return <EmptyState title="Rendering was disabled" message="Browser rendering was not requested for this Scan." />;
   return <EmptyState title="No rendered captures" message="No eligible HTML Pages completed browser capture. Failed, skipped, or interrupted attempts will appear here when recorded." />;
 }
-function buildQuery(params: URLSearchParams) { const query = new URLSearchParams(); const mapping: Array<[string, string]> = [["render_state", "capture_state"], ["has_errors", "has_page_errors"], ["has_screenshot", "has_viewport_screenshot"]]; for (const key of ["search", "navigation_status", "has_warnings", "sort", "direction", "limit", "offset"]) { const value = params.get(key); if (value) query.set(key, value); } for (const [from, to] of mapping) { const value = params.get(from); if (value) query.set(to, value); } return `?${query.toString()}`; }
-function setParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string) { setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); next.delete("offset"); return next; }); }
-function setOffset(setSearchParams: ReturnType<typeof useSearchParams>[1], offset: number) { setSearchParams((current) => { const next = new URLSearchParams(current); next.set("offset", String(offset)); return next; }); }
+function buildQuery(params: URLSearchParams, limit: number, offset: number) { const query = new URLSearchParams(); const mapping: Array<[string, string]> = [["render_state", "capture_state"], ["has_errors", "has_page_errors"], ["has_screenshot", "has_viewport_screenshot"]]; for (const key of ["search", "navigation_status", "has_warnings", "sort", "direction"]) { const value = params.get(key); if (value) query.set(key, value); } for (const [from, to] of mapping) { const value = params.get(from); if (value) query.set(to, value); } query.set("limit", String(limit)); query.set("offset", String(offset)); return `?${query.toString()}`; }
+function setParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string) { setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); next.delete("rendered_offset"); return next; }); }
 function clearParams(setSearchParams: ReturnType<typeof useSearchParams>[1]) { setSearchParams({ tab: "rendered" }); }
 function hasFilters(params: URLSearchParams) { return ["search", "render_state", "navigation_status", "has_warnings", "has_errors", "has_screenshot"].some((key) => params.has(key)); }
