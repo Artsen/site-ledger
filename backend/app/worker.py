@@ -11,6 +11,7 @@ from contextlib import suppress
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.browser.capability import worker_browser_capability
 from app.config import get_settings
 from app.database import SessionLocal, is_transient_database_lock
 from app.product import PRODUCT_NAME
@@ -88,7 +89,7 @@ class WorkerService:
                 db,
                 worker_id=self.worker_id,
                 concurrency=self.concurrency,
-                metadata={"kind": "local"},
+                metadata={"kind": "local", "browser": worker_browser_capability()},
             )
         logger.info("worker registered", extra={"worker_id": self.worker_id})
 

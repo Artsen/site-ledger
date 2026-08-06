@@ -39,6 +39,14 @@ class CrawlItem:
     depth: int
 
 
+@dataclass(frozen=True)
+class StaticCrawlResult:
+    had_errors: bool
+    cancelled: bool
+    stop_reason: str
+    fatal_error: str | None = None
+
+
 class StaticPageCrawler:
     def __init__(
         self,
@@ -55,18 +63,27 @@ class StaticPageCrawler:
         self.progress_callback = progress_callback
 
     async def run(self, scan: Scan) -> None:
+        await self._execute(scan, finalize=True)
+
+    async def collect(self, scan: Scan) -> StaticCrawlResult:
+        return await self._execute(scan, finalize=False)
+
+    async def _execute(self, scan: Scan, *, finalize: bool) -> StaticCrawlResult:
         config = ScopeConfig.from_dict(scan.scope_config)
         scope = ScopeEngine(config, scan.starting_url)
         initial = scope.evaluate(scan.starting_url)
         if initial.normalized is None or not initial.in_scope:
-            scan.status = "failed"
-            scan.fatal_error_message = initial.exclusion_reason or "Starting URL is out of scope"
-            scan.finished_at = datetime.now(UTC)
+            message = initial.exclusion_reason or "Starting URL is out of scope"
+            if finalize:
+                scan.status = "failed"
+                scan.fatal_error_message = message
+                scan.finished_at = datetime.now(UTC)
             self.db.commit()
-            return
+            return StaticCrawlResult(False, False, "invalid_starting_url", message)
 
-        scan.status = "running"
-        scan.started_at = datetime.now(UTC)
+        if finalize:
+            scan.status = "running"
+            scan.started_at = datetime.now(UTC)
         queue = self._initial_queue(scan, initial.normalized)
         seen = {item.normalized.normalized_url for item in queue}
         fetched: set[str] = set()
@@ -150,15 +167,21 @@ class StaticPageCrawler:
             if config.delay_between_requests_ms:
                 await self._sleep_with_cancellation(config.delay_between_requests_ms / 1000, scan)
 
-        if scan.status == "cancelled":
-            scan.stop_reason = "cancelled_by_user"
-        else:
-            scan.status = "completed_with_errors" if had_errors else "completed"
-            scan.stop_reason = "page_limit_reached" if queue else "queue_exhausted"
-        scan.finished_at = datetime.now(UTC)
+        cancelled = scan.status == "cancelled"
+        stop_reason = (
+            "cancelled_by_user"
+            if cancelled
+            else ("page_limit_reached" if queue else "queue_exhausted")
+        )
+        if finalize:
+            scan.stop_reason = stop_reason
+            if not cancelled:
+                scan.status = "completed_with_errors" if had_errors else "completed"
+            scan.finished_at = datetime.now(UTC)
         scan.queued_count = len(queue)
         self.db.commit()
         self._progress(scan)
+        return StaticCrawlResult(had_errors, cancelled, stop_reason)
 
     async def _fetch_one(
         self,

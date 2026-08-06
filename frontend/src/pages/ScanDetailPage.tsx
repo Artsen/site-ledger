@@ -151,6 +151,7 @@ export function ScanDetailPage() {
         <Metric label="Failed" value={scan.data.failed_count} />
         <Metric label="Skipped" value={scan.data.skipped_count} />
       </div>
+      {scan.data.scope_config.render_mode !== "none" ? <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5"><Metric label="Render selected" value={scan.data.rendered_selected_count} /><Metric label="Rendered" value={scan.data.rendered_completed_count} /><Metric label="Render failed" value={scan.data.rendered_failed_count} /><Metric label="Blocked requests" value={scan.data.rendered_blocked_request_count} /><Metric label="Artifacts" value={scan.data.rendered_artifact_count} /></div> : null}
 
       {latestJob && !isTerminalStatus(latestJob.status) ? <JobNotice job={latestJob} workerHealth={workerHealth.data} /> : null}
       {cancel.error ? <div className="mb-4"><ErrorBanner error={cancel.error} title="Could not cancel scan" /></div> : null}
@@ -239,6 +240,12 @@ function Overview({
     shared_html_blobs: number;
     html_blobs_deleted: number;
     stored_html_bytes_reclaimable: number;
+    rendered_observations?: number;
+    rendered_artifacts?: number;
+    artifact_blobs_referenced?: number;
+    exclusive_artifact_blobs?: number;
+    shared_artifact_blobs?: number;
+    stored_artifact_bytes_reclaimable?: number;
     reason: string | null;
     warnings: string[];
   };
@@ -298,6 +305,7 @@ function Overview({
                   Deleting this scan removes {deletePreview.snapshots} page snapshots and {deletePreview.link_occurrences} link occurrences.
                   {deletePreview.exclusive_html_blobs} of {deletePreview.html_blobs_referenced} referenced HTML captures will be deleted because no other scan uses them.
                   {deletePreview.shared_html_blobs} shared captures will be retained. Estimated storage reclaimed: {formatBytes(deletePreview.stored_html_bytes_reclaimable)}.
+                  {deletePreview.rendered_observations ? ` ${deletePreview.rendered_observations} rendered observations and ${deletePreview.rendered_artifacts ?? 0} artifact associations are included; ${deletePreview.shared_artifact_blobs ?? 0} shared rendered blobs remain. Additional rendered storage reclaimed: ${formatBytes(deletePreview.stored_artifact_bytes_reclaimable ?? 0)}.` : ""}
                 </p>
                 {deletePreview.reason ? <p className="text-amber-700">{deletePreview.reason}</p> : null}
                 <Button type="button" variant="danger" disabled={!deletePreview.can_delete} loading={deleting} onClick={onDelete}>
@@ -453,7 +461,7 @@ function PageTable({ pages, scanId }: { pages: Page[]; scanId: string }) {
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
-            {["Status", "URL", "Title", "Depth", "Content type", "Duration", "Inbound", "Error"].map((header) => (
+            {["Status", "URL", "Title", "Depth", "Content type", "Duration", "Inbound", "Rendered", "Error"].map((header) => (
               <th key={header} scope="col" className="whitespace-nowrap px-3 py-2 font-medium">{header}</th>
             ))}
           </tr>
@@ -480,6 +488,7 @@ function PageTable({ pages, scanId }: { pages: Page[]; scanId: string }) {
                   <span className="block">{page.inbound_occurrence_count}</span>
                   <span className="block text-xs text-stone-500">{page.inbound_source_page_count} sources</span>
                 </td>
+                <td className="whitespace-nowrap px-3 py-2">{page.rendered_capture_state ? <StatusBadge status={page.rendered_capture_state} /> : "Not attempted"}</td>
                 <td className="max-w-xs truncate px-3 py-2">{page.error_type ? formatStatus(page.error_type) : "None"}</td>
               </tr>
             );

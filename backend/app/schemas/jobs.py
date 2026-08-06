@@ -73,6 +73,7 @@ class WorkerHealth(BaseModel):
     last_worker_heartbeat: datetime | None
     queued_work_has_worker: bool
     offline_threshold_seconds: float
+    worker_capabilities: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class JobSummary(BaseModel):

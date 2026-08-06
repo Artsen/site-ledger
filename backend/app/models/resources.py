@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
@@ -16,6 +16,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.rendered import RenderedObservation
 
 
 class Scan(Base):
@@ -42,6 +45,13 @@ class Scan(Base):
     full_parse_count: Mapped[int] = mapped_column(Integer, default=0)
     network_bytes_transferred: Mapped[int] = mapped_column(Integer, default=0)
     reused_content_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_selected_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_attempted_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_completed_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_blocked_request_count: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_artifact_count: Mapped[int] = mapped_column(Integer, default=0)
     stop_reason: Mapped[str | None] = mapped_column(String(128))
     fatal_error_message: Mapped[str | None] = mapped_column(Text)
 
@@ -264,6 +274,9 @@ class ResourceSnapshot(Base):
         remote_side=[id], foreign_keys=[reused_from_snapshot_id]
     )
     occurrences: Mapped[list["ResourceOccurrence"]] = relationship(back_populates="source_snapshot")
+    rendered_observation: Mapped["RenderedObservation | None"] = relationship(
+        back_populates="snapshot", uselist=False, cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_snapshot_scan_resource", "scan_id", "resource_id"),

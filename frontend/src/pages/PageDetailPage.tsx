@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { getHtml, getInboundLinks, getLinks, getScan, getSnapshot } from "../api/client";
+import { getHtml, getInboundLinks, getLinks, getRenderedObservation, getScan, getSnapshot } from "../api/client";
+import { RenderedObservationView } from "../components/RenderedObservationView";
 import { LinkRoleBadge } from "../components/PageOrganization";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
@@ -29,6 +30,7 @@ export function PageDetailPage() {
   const inboundQuery = useMemo(() => buildInboundQuery(searchParams), [searchParams]);
   const inboundLinks = useQuery({ queryKey: ["inbound-links", snapshotId, inboundQuery], queryFn: () => getInboundLinks(snapshotId, inboundQuery), enabled: tab === "inbound" });
   const html = useQuery({ queryKey: ["html", snapshotId], queryFn: () => getHtml(snapshotId), enabled: tab === "html" });
+  const rendered = useQuery({ queryKey: ["rendered", snapshotId], queryFn: () => getRenderedObservation(snapshotId), retry: false });
 
   if (snapshot.isLoading) return <PageFrame><LoadingBlock label="Loading page..." /></PageFrame>;
   if (snapshot.error) return <PageFrame><ErrorBanner error={snapshot.error} title="Could not load page snapshot" /></PageFrame>;
@@ -39,7 +41,8 @@ export function PageDetailPage() {
     { id: "head", label: "Head" },
     { id: "links", label: "Outgoing links", count: links.data?.length },
     { id: "inbound", label: "Inbound links", count: inboundLinks.data?.summary.total_occurrences },
-    { id: "html", label: "HTML" }
+    { id: "html", label: "HTML" },
+    ...(rendered.data ? [{ id: "rendered", label: "Rendered" }] : [])
   ];
 
   return (
@@ -65,6 +68,7 @@ export function PageDetailPage() {
         {tab === "links" ? <LinksView links={links.data ?? []} loading={links.isLoading} error={links.error} /> : null}
         {tab === "inbound" ? <InboundLinksView inbound={inboundLinks.data} loading={inboundLinks.isLoading} error={inboundLinks.error} searchParams={searchParams} setSearchParams={setSearchParams} scanId={scanId} /> : null}
         {tab === "html" ? <HtmlView html={html.data ?? ""} loading={html.isLoading} error={html.error} /> : null}
+        {tab === "rendered" && rendered.data ? <RenderedObservationView observation={rendered.data} /> : null}
       </div>
     </PageFrame>
   );

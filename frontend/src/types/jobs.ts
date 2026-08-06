@@ -46,4 +46,5 @@ export type WorkerHealth = {
   last_worker_heartbeat: string | null;
   queued_work_has_worker: boolean;
   offline_threshold_seconds: number;
+  worker_capabilities?: Array<Record<string, unknown>>;
 };

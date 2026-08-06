@@ -3,7 +3,7 @@ from typing import Any, Literal
 from sqlalchemy import Select, distinct, func, or_, select
 from sqlalchemy.orm import Session, aliased, joinedload
 
-from app.models import ResourceOccurrence, ResourceSnapshot, Scan, WebResource
+from app.models import RenderedObservation, ResourceOccurrence, ResourceSnapshot, Scan, WebResource
 from app.schemas.scans import (
     InboundLinkList,
     InboundLinkRead,
@@ -160,6 +160,7 @@ def list_scan_pages(
         select(
             ResourceSnapshot,
             WebResource,
+            RenderedObservation.capture_state,
             inbound.c.inbound_occurrence_count,
             inbound.c.inbound_source_page_count,
             inbound.c.discovery_source,
@@ -167,6 +168,7 @@ def list_scan_pages(
         .select_from(ResourceSnapshot)
         .join(WebResource)
         .outerjoin(inbound, inbound.c.resource_id == WebResource.id)
+        .outerjoin(RenderedObservation, RenderedObservation.snapshot_id == ResourceSnapshot.id)
         .where(ResourceSnapshot.scan_id == scan_id)
     )
     base = _apply_page_filters(
@@ -203,10 +205,12 @@ def list_scan_pages(
                 response_time_ms=snapshot.response_time_ms,
                 fetch_state=snapshot.fetch_state,
                 error_type=snapshot.error_type,
+                rendered_capture_state=rendered_capture_state,
             )
             for (
                 snapshot,
                 resource,
+                rendered_capture_state,
                 inbound_occurrence_count,
                 inbound_source_page_count,
                 discovery_source,

@@ -20,6 +20,13 @@ export type Scan = {
   full_parse_count: number;
   network_bytes_transferred: number;
   reused_content_bytes: number;
+  rendered_selected_count: number;
+  rendered_attempted_count: number;
+  rendered_completed_count: number;
+  rendered_failed_count: number;
+  rendered_skipped_count: number;
+  rendered_blocked_request_count: number;
+  rendered_artifact_count: number;
   stop_reason: string | null;
   fatal_error_message: string | null;
 };
@@ -238,6 +245,27 @@ export type ScopeConfig = {
   max_redirects: number;
   enable_http_revalidation: boolean;
   enable_parse_reuse: boolean;
+  render_mode: "none" | "starting_page" | "all_eligible";
+  render_max_pages: number;
+  render_viewport_width: number;
+  render_viewport_height: number;
+  render_device_scale_factor: number;
+  render_locale: string;
+  render_timezone: string;
+  render_color_scheme: "light" | "dark" | "no-preference";
+  render_reduced_motion: "reduce" | "no-preference";
+  render_navigation_timeout_seconds: number;
+  render_load_timeout_seconds: number;
+  render_capture_full_page: boolean;
+  render_max_full_page_height: number;
+  render_max_dom_bytes: number;
+  render_max_screenshot_bytes: number;
+  render_max_network_entries: number;
+  render_max_console_entries: number;
+  render_max_page_errors: number;
+  render_max_page_duration_seconds: number;
+  render_max_total_network_bytes: number;
+  render_max_resource_bytes: number;
 };
 
 export type Page = {
@@ -260,7 +288,36 @@ export type Page = {
   retrieval_http_status: number | null;
   reused_from_snapshot_id: number | null;
   network_bytes_transferred: number | null;
+  rendered_capture_state: string | null;
 };
+
+export type RenderCapabilities = {
+  defaults: Pick<ScopeConfig, Extract<keyof ScopeConfig, `render_${string}`>>;
+  limits: Record<string, { minimum: number; maximum: number }>;
+  supported_modes: string[];
+  browser_engine: string;
+  artifact_types: string[];
+  allowed_request_methods: string[];
+  service_workers: string;
+};
+
+export type RenderedArtifact = { id: number; artifact_type: string; width: number | null; height: number | null; media_type: string; raw_byte_size: number; stored_byte_size: number; sha256: string; metadata_json: Record<string, unknown> };
+export type RenderedObservation = {
+  id: number; snapshot_id: number; capture_state: string; started_at: string | null; finished_at: string | null;
+  requested_url: string; final_url: string | null; navigation_http_status: number | null; document_title: string | null;
+  browser_engine: string; browser_version: string | null; playwright_version: string | null; renderer_version: string;
+  browser_policy_version: string; capture_schema_version: string; user_agent: string | null; viewport_width: number;
+  viewport_height: number; device_scale_factor: number; locale: string; timezone_id: string; color_scheme: string;
+  reduced_motion: string; readiness_state: string | null; load_event_reached: boolean; fonts_ready_reached: boolean;
+  duration_ms: number | null; configuration_fingerprint: string; network_entry_count: number; blocked_request_count: number;
+  console_message_count: number; page_error_count: number; warning_count: number; network_truncated: boolean;
+  console_truncated: boolean; page_errors_truncated: boolean; total_encoded_network_bytes: number; error_type: string | null;
+  error_message: string | null; warnings_json: Array<Record<string, string>>; artifacts: RenderedArtifact[];
+};
+export type RenderedEventList<T> = { items: T[]; total: number; limit: number; offset: number };
+export type RenderedNetworkEntry = { id: number; sequence: number; redacted_url: string; method: string; resource_type: string | null; response_status: number | null; response_mime_type: string | null; encoded_data_length: number | null; blocked_by_policy: boolean; policy_reason: string | null };
+export type RenderedConsoleMessage = { id: number; sequence: number; message_type: string; text: string; source_url: string | null; timestamp_offset_ms: number | null };
+export type RenderedPageError = { id: number; sequence: number; error_name: string | null; message: string; stack: string | null; source_url: string | null; timestamp_offset_ms: number | null };
 
 export type PageList = {
   items: Page[];
@@ -381,6 +438,7 @@ export type PageObservation = {
   reused_from_snapshot_id: number | null;
   network_bytes_transferred: number | null;
   parser_version: string | null;
+  rendered_capture_state: string | null;
 };
 
 export type PageObservationList = {
@@ -518,6 +576,13 @@ export type ScanDeletePreview = {
   html_blobs_deleted: number;
   raw_html_bytes_reclaimable: number;
   stored_html_bytes_reclaimable: number;
+  rendered_observations?: number;
+  rendered_artifacts?: number;
+  artifact_blobs_referenced?: number;
+  exclusive_artifact_blobs?: number;
+  shared_artifact_blobs?: number;
+  raw_artifact_bytes_reclaimable?: number;
+  stored_artifact_bytes_reclaimable?: number;
   reason: string | null;
   warnings: string[];
 };
@@ -532,6 +597,12 @@ export type ScanDeleteResult = {
   html_blobs_deleted: number;
   raw_html_bytes_reclaimed: number;
   stored_html_bytes_reclaimed: number;
+  rendered_observations_deleted?: number;
+  rendered_artifacts_deleted?: number;
+  artifact_blob_records_deleted?: number;
+  artifact_blob_files_deleted?: number;
+  raw_artifact_bytes_reclaimed?: number;
+  stored_artifact_bytes_reclaimed?: number;
   warnings: string[];
 };
 

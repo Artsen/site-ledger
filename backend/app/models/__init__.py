@@ -1,3 +1,11 @@
+from app.models.rendered import (
+    ArtifactBlob,
+    RenderedArtifact,
+    RenderedConsoleMessage,
+    RenderedNetworkEntry,
+    RenderedObservation,
+    RenderedPageError,
+)
 from app.models.resources import (
     BackgroundJob,
     ContentBlob,
@@ -42,4 +50,10 @@ __all__ = [
     "WebResource",
     "WebsiteProperty",
     "WorkerInstance",
+    "ArtifactBlob",
+    "RenderedArtifact",
+    "RenderedConsoleMessage",
+    "RenderedNetworkEntry",
+    "RenderedObservation",
+    "RenderedPageError",
 ]

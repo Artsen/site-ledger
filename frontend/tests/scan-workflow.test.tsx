@@ -73,7 +73,13 @@ const api = vi.hoisted(() => ({
   getWorkerHealth: vi.fn(),
   getGraphCapabilities: vi.fn(),
   getScanGraph: vi.fn(),
-  getGraphEdgeOccurrences: vi.fn()
+  getGraphEdgeOccurrences: vi.fn(),
+  getRenderCapabilities: vi.fn(),
+  getRenderedObservation: vi.fn(),
+  getRenderedNetwork: vi.fn(),
+  getRenderedConsole: vi.fn(),
+  getRenderedErrors: vi.fn(),
+  renderedArtifactUrl: vi.fn((id: number) => `/api/rendered-artifacts/${id}/content`)
 }));
 
 vi.mock("../src/api/client", () => ({
@@ -96,7 +102,14 @@ vi.mock("../src/api/client", () => ({
     allow_private_networks: false,
     max_redirects: 10,
     enable_http_revalidation: true,
-    enable_parse_reuse: true
+    enable_parse_reuse: true,
+    render_mode: "none", render_max_pages: 10, render_viewport_width: 1440, render_viewport_height: 900,
+    render_device_scale_factor: 1, render_locale: "en-US", render_timezone: "UTC", render_color_scheme: "light",
+    render_reduced_motion: "reduce", render_navigation_timeout_seconds: 30, render_load_timeout_seconds: 10,
+    render_capture_full_page: true, render_max_full_page_height: 20000, render_max_dom_bytes: 5000000,
+    render_max_screenshot_bytes: 15000000, render_max_network_entries: 1000, render_max_console_entries: 200,
+    render_max_page_errors: 50, render_max_page_duration_seconds: 60, render_max_total_network_bytes: 50000000,
+    render_max_resource_bytes: 10000000
   })
 }));
 
@@ -134,6 +147,16 @@ beforeEach(() => {
   api.getLinks.mockResolvedValue(linkFixtures);
   api.getInboundLinks.mockResolvedValue(inboundFixture);
   api.getHtml.mockResolvedValue("<html><body><script>window.executed = true</script><h1>Source</h1></body></html>");
+  api.getRenderCapabilities.mockResolvedValue({
+    defaults: {},
+    limits: { render_max_pages: { minimum: 1, maximum: 1000 } },
+    supported_modes: ["none", "starting_page", "all_eligible"],
+    browser_engine: "chromium",
+    artifact_types: ["rendered_dom", "viewport_screenshot", "full_page_screenshot"],
+    allowed_request_methods: ["GET", "HEAD", "OPTIONS"],
+    service_workers: "blocked"
+  });
+  api.getRenderedObservation.mockRejectedValue(new Error("Snapshot has no rendered observation"));
   api.cancelScan.mockResolvedValue({ ...scanFixture, status: "cancelled" });
   api.getScanDeletePreview.mockResolvedValue({
     scan_id: 1,
@@ -284,6 +307,16 @@ describe("new scan workflow", () => {
 
     await waitFor(() => expect(api.createScan).toHaveBeenCalledTimes(1));
     resolveScan({ id: 44 });
+  });
+
+  it("submits optional server-bounded browser rendering settings", async () => {
+    renderRoute(<NewScanPage />, "/scans/new");
+    fireEvent.change(screen.getByLabelText("Starting URL"), { target: { value: "https://example.com/" } });
+    fireEvent.change(screen.getByLabelText("Render mode"), { target: { value: "starting_page" } });
+    fireEvent.change(screen.getByLabelText("Maximum rendered pages"), { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start scan" }));
+    await waitFor(() => expect(api.createScan).toHaveBeenCalled());
+    expect(api.createScan.mock.calls[0][1]).toMatchObject({ render_mode: "starting_page", render_max_pages: 1 });
   });
 });
 
@@ -538,6 +571,22 @@ describe("page detail workflow", () => {
     expect(screen.getByLabelText("Escaped HTML source").textContent).toContain("window.executed = true");
     expect((window as unknown as { executed?: boolean }).executed).toBeUndefined();
   });
+
+  it("inspects a browser-rendered observation without executing its DOM", async () => {
+    api.getRenderedObservation.mockResolvedValue({
+      id: 7, snapshot_id: 9, capture_state: "completed", started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z",
+      requested_url: "https://example.com/", final_url: "https://example.com/", navigation_http_status: 200, document_title: "Rendered",
+      browser_engine: "chromium", browser_version: "151", playwright_version: "1.62", renderer_version: "1", browser_policy_version: "1", capture_schema_version: "1",
+      user_agent: "Chromium", viewport_width: 1440, viewport_height: 900, device_scale_factor: 1, locale: "en-US", timezone_id: "UTC", color_scheme: "light", reduced_motion: "reduce",
+      readiness_state: "load", load_event_reached: true, fonts_ready_reached: true, duration_ms: 500, configuration_fingerprint: "a".repeat(64), network_entry_count: 1,
+      blocked_request_count: 0, console_message_count: 0, page_error_count: 0, warning_count: 0, network_truncated: false, console_truncated: false,
+      page_errors_truncated: false, total_encoded_network_bytes: 1200, error_type: null, error_message: null, warnings_json: [], artifacts: []
+    });
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+    fireEvent.click(await screen.findByRole("tab", { name: "Rendered" }));
+    expect(await screen.findByText(/chromium 151/i)).toBeInTheDocument();
+    expect(screen.getByText("1440 x 900 @ 1")).toBeInTheDocument();
+  });
 });
 
 describe("shared UX utilities", () => {
@@ -609,7 +658,14 @@ const scanFixture: Scan = {
     allow_private_networks: false,
     max_redirects: 10,
     enable_http_revalidation: true,
-    enable_parse_reuse: true
+    enable_parse_reuse: true,
+    render_mode: "none", render_max_pages: 10, render_viewport_width: 1440, render_viewport_height: 900,
+    render_device_scale_factor: 1, render_locale: "en-US", render_timezone: "UTC", render_color_scheme: "light",
+    render_reduced_motion: "reduce", render_navigation_timeout_seconds: 30, render_load_timeout_seconds: 10,
+    render_capture_full_page: true, render_max_full_page_height: 20000, render_max_dom_bytes: 5000000,
+    render_max_screenshot_bytes: 15000000, render_max_network_entries: 1000, render_max_console_entries: 200,
+    render_max_page_errors: 50, render_max_page_duration_seconds: 60, render_max_total_network_bytes: 50000000,
+    render_max_resource_bytes: 10000000
   },
   created_at: "2026-07-30T01:00:00Z",
   started_at: "2026-07-30T01:00:01Z",
@@ -625,6 +681,13 @@ const scanFixture: Scan = {
   full_parse_count: 1,
   network_bytes_transferred: 1200,
   reused_content_bytes: 0,
+  rendered_selected_count: 0,
+  rendered_attempted_count: 0,
+  rendered_completed_count: 0,
+  rendered_failed_count: 0,
+  rendered_skipped_count: 0,
+  rendered_blocked_request_count: 0,
+  rendered_artifact_count: 0,
   stop_reason: "max_pages",
   fatal_error_message: null
 };

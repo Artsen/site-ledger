@@ -123,6 +123,7 @@ export function PersistentPageDetailPage() {
           { id: "overview", label: "Overview" },
           { id: "scans", label: "Scans", count: value.observation_count },
           { id: "links", label: "Links" },
+          { id: "browser", label: "Browser evidence" },
           { id: "notes", label: "Notes", count: value.note_count },
         ]}
         active={tab}
@@ -134,6 +135,7 @@ export function PersistentPageDetailPage() {
           <ScansTab siteId={siteId} resourceId={resourceId} />
         ) : null}
         {tab === "links" ? <LinksTab detail={page.data} /> : null}
+        {tab === "browser" ? <BrowserEvidenceTab siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "notes" ? (
           <NotesPanel
             queryKey={["page-notes", siteId, resourceId]}
@@ -458,6 +460,7 @@ function ObservationTable({
               "Status",
               "Retrieval",
               "Depth / response",
+              "Rendered",
               "Actions",
             ].map((header) => (
               <th key={header} scope="col" className="px-3 py-2">
@@ -523,6 +526,7 @@ function ObservationTable({
                     : "No response time"}
                 </span>
               </td>
+              <td className="px-3 py-2">{item.rendered_capture_state ? <StatusBadge status={item.rendered_capture_state} /> : "Not attempted"}</td>
               <td className="px-3 py-2 text-xs">
                 <Link className="block underline" to={`/scans/${item.scan_id}`}>
                   Open Scan
@@ -540,6 +544,18 @@ function ObservationTable({
       </table>
     </div>
   );
+}
+
+function BrowserEvidenceTab({ siteId, resourceId }: { siteId: string; resourceId: string }) {
+  const observations = useQuery({
+    queryKey: ["site-page-browser-observations", siteId, resourceId],
+    queryFn: () => listPageObservations(siteId, resourceId, "?scope=site&limit=200"),
+  });
+  if (observations.isLoading) return <LoadingBlock label="Loading browser evidence..." />;
+  if (observations.error) return <ErrorBanner error={observations.error} title="Could not load browser evidence" />;
+  const rendered = observations.data?.items.filter((item) => item.rendered_capture_state) ?? [];
+  if (!rendered.length) return <EmptyState title="No browser evidence" message="No retained Scan attempted a browser-rendered observation for this Page." />;
+  return <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm"><h2 className="mb-4 text-base font-semibold">Browser evidence history</h2><ObservationTable observations={rendered} /></section>;
 }
 
 function LinksTab({ detail }: { detail: PersistentPageDetail }) {

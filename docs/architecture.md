@@ -14,7 +14,9 @@ Domain services ---- SQLAlchemy models ---- SQLite
       |                                      |
 Durable jobs ---- standalone worker     Alembic migrations
       |
-Crawler and source refresh ---- local content store
+Scan coordinator ---- static crawler ---- local content store
+      |
+Optional Chromium capture ---- local artifact store
 ~~~
 
 The frontend, API, and worker are separate processes. The API creates durable records and queues
@@ -29,6 +31,8 @@ current implementations.
 - ResourceSnapshot is one scan-specific Page observation.
 - ResourceOccurrence is one duplicate-preserving reference found in an observation.
 - ContentBlob stores exact compressed response evidence by SHA-256.
+- RenderedObservation optionally attaches browser evidence to one ResourceSnapshot; ArtifactBlob,
+  RenderedArtifact, and bounded event rows preserve that evidence without changing static facts.
 - HtmlParseArtifact and HtmlParseAnchor store reusable deterministic parse output.
 - Scan stores one bounded collection run and its copied effective scope.
 - UrlSource, SourceRefresh, and UrlSourceEntry store URL-source configuration and Inventory.
@@ -47,6 +51,10 @@ Observation where the implementation names would be unnecessarily technical.
 - crawler.html_parser extracts head metadata and anchor provenance from best-effort HTML.
 - crawler.static_crawler performs breadth-first traversal and persists partial results.
 - storage.content_store stores exact response bytes as gzip-compressed, content-addressed blobs.
+
+services.scan_execution owns queued Scan terminal state across static and optional rendered phases.
+Browser capture never discovers additional Pages and never replaces static HTML, parse artifacts,
+occurrences, or graph data. See [Browser-rendered observations](browser-rendered-observations.md).
 
 The crawler does not execute JavaScript, submit forms, forward cookies, or send user credentials.
 Only HTTP and HTTPS are supported. Redirects are followed manually so every destination is checked

@@ -12,6 +12,7 @@ from app.models import (
     Note,
     PageCategory,
     PageCategoryAssignment,
+    RenderedObservation,
     ResourceSnapshot,
     Scan,
     SitePage,
@@ -117,10 +118,11 @@ def list_page_observations(
         return None
     artifact = aliased(HtmlParseArtifact)
     query = (
-        select(ResourceSnapshot, Scan, WebsiteProperty, artifact)
+        select(ResourceSnapshot, Scan, WebsiteProperty, artifact, RenderedObservation.capture_state)
         .join(Scan, ResourceSnapshot.scan_id == Scan.id)
         .outerjoin(WebsiteProperty, Scan.website_property_id == WebsiteProperty.id)
         .outerjoin(artifact, ResourceSnapshot.parse_artifact_id == artifact.id)
+        .outerjoin(RenderedObservation, RenderedObservation.snapshot_id == ResourceSnapshot.id)
         .where(ResourceSnapshot.resource_id == resource_id)
     )
     if scope == "site":
@@ -180,8 +182,9 @@ def list_page_observations(
                 reused_from_snapshot_id=snapshot.reused_from_snapshot_id,
                 network_bytes_transferred=snapshot.network_bytes_transferred,
                 parser_version=artifact_row.parser_version if artifact_row else None,
+                rendered_capture_state=rendered_state,
             )
-            for snapshot, scan, site, artifact_row in rows
+            for snapshot, scan, site, artifact_row, rendered_state in rows
         ],
         total=total,
         limit=limit,

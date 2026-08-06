@@ -4,9 +4,15 @@ from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    ArtifactBlob,
     BackgroundJob,
     ContentBlob,
     HtmlParseArtifact,
+    RenderedArtifact,
+    RenderedConsoleMessage,
+    RenderedNetworkEntry,
+    RenderedObservation,
+    RenderedPageError,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -17,6 +23,7 @@ from app.models import (
     WebResource,
 )
 from app.schemas.scans import ScanDeletePreview, ScanDeleteResult
+from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
 
 TERMINAL_STATUSES = {"completed", "completed_with_errors", "failed", "cancelled", "interrupted"}
@@ -32,6 +39,11 @@ class DeletionImpact:
     referenced_blobs: list[ContentBlob]
     deletable_blobs: list[ContentBlob]
     shared_blob_count: int
+    rendered_observations: int
+    rendered_artifacts: int
+    referenced_artifact_blobs: list[ArtifactBlob]
+    deletable_artifact_blobs: list[ArtifactBlob]
+    shared_artifact_blob_count: int
 
     @property
     def raw_bytes(self) -> int:
@@ -40,6 +52,14 @@ class DeletionImpact:
     @property
     def stored_bytes(self) -> int:
         return sum(blob.stored_byte_size for blob in self.deletable_blobs)
+
+    @property
+    def raw_artifact_bytes(self) -> int:
+        return sum(blob.raw_byte_size for blob in self.deletable_artifact_blobs)
+
+    @property
+    def stored_artifact_bytes(self) -> int:
+        return sum(blob.stored_byte_size for blob in self.deletable_artifact_blobs)
 
 
 def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None:
@@ -95,10 +115,22 @@ def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None
         html_blobs_deleted=len(impact.deletable_blobs),
         raw_html_bytes_reclaimable=impact.raw_bytes,
         stored_html_bytes_reclaimable=impact.stored_bytes,
+        rendered_observations=impact.rendered_observations,
+        rendered_artifacts=impact.rendered_artifacts,
+        artifact_blobs_referenced=len(impact.referenced_artifact_blobs),
+        exclusive_artifact_blobs=len(impact.deletable_artifact_blobs),
+        shared_artifact_blobs=impact.shared_artifact_blob_count,
+        raw_artifact_bytes_reclaimable=impact.raw_artifact_bytes,
+        stored_artifact_bytes_reclaimable=impact.stored_artifact_bytes,
     )
 
 
-def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDeleteResult | None:
+def delete_scan(
+    db: Session,
+    scan_id: int,
+    store: LocalContentStore,
+    artifact_store: LocalArtifactStore | None = None,
+) -> ScanDeleteResult | None:
     scan = db.get(Scan, scan_id)
     if scan is None:
         return None
@@ -110,10 +142,51 @@ def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDele
     deleted_blob_ids = [blob.id for blob in impact.deletable_blobs]
     candidate_resource_ids = impact.resource_ids
     snapshot_ids = select(ResourceSnapshot.id).where(ResourceSnapshot.scan_id == scan.id)
+    rendered_blob_ids = [blob.id for blob in impact.referenced_artifact_blobs]
+    rendered_ids = select(RenderedObservation.id).where(
+        RenderedObservation.snapshot_id.in_(snapshot_ids)
+    )
     db.execute(
         delete(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id.in_(snapshot_ids))
     )
+    db.execute(
+        delete(RenderedNetworkEntry).where(
+            RenderedNetworkEntry.rendered_observation_id.in_(rendered_ids)
+        )
+    )
+    db.execute(
+        delete(RenderedConsoleMessage).where(
+            RenderedConsoleMessage.rendered_observation_id.in_(rendered_ids)
+        )
+    )
+    db.execute(
+        delete(RenderedPageError).where(RenderedPageError.rendered_observation_id.in_(rendered_ids))
+    )
+    db.execute(
+        delete(RenderedArtifact).where(RenderedArtifact.rendered_observation_id.in_(rendered_ids))
+    )
+    db.execute(delete(RenderedObservation).where(RenderedObservation.snapshot_id.in_(snapshot_ids)))
     db.execute(delete(ResourceSnapshot).where(ResourceSnapshot.scan_id == scan.id))
+    unreferenced_rendered_blobs = (
+        list(
+            db.scalars(
+                select(ArtifactBlob).where(
+                    ArtifactBlob.id.in_(rendered_blob_ids),
+                    ~select(RenderedArtifact.id)
+                    .where(RenderedArtifact.artifact_blob_id == ArtifactBlob.id)
+                    .exists(),
+                )
+            )
+        )
+        if rendered_blob_ids
+        else []
+    )
+    if unreferenced_rendered_blobs:
+        db.execute(
+            delete(ArtifactBlob).where(
+                ArtifactBlob.id.in_([item.id for item in unreferenced_rendered_blobs])
+            )
+        )
     _delete_unreferenced_artifacts(db)
     seed_ids = select(ScanSeed.id).where(ScanSeed.scan_id == scan.id)
     db.execute(delete(ScanSeedOrigin).where(ScanSeedOrigin.scan_seed_id.in_(seed_ids)))
@@ -125,6 +198,7 @@ def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDele
     db.commit()
     warnings: list[str] = []
     files_deleted = 0
+    artifact_files_deleted = 0
     for blob in impact.deletable_blobs:
         try:
             if store.delete(blob):
@@ -133,6 +207,19 @@ def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDele
                 warnings.append(f"HTML blob file was already missing: {blob.storage_key}")
         except OSError as exc:
             warnings.append(f"Could not delete HTML blob file {blob.storage_key}: {exc}")
+    if artifact_store:
+        for artifact_blob in unreferenced_rendered_blobs:
+            try:
+                if not artifact_store.delete(artifact_blob):
+                    warnings.append(
+                        f"Rendered artifact file was already missing: {artifact_blob.storage_key}"
+                    )
+                else:
+                    artifact_files_deleted += 1
+            except OSError as exc:
+                warnings.append(
+                    f"Could not delete rendered artifact file {artifact_blob.storage_key}: {exc}"
+                )
     return ScanDeleteResult(
         deleted_scan_id=scan_id,
         snapshots_deleted=impact.snapshots,
@@ -143,6 +230,16 @@ def delete_scan(db: Session, scan_id: int, store: LocalContentStore) -> ScanDele
         html_blobs_deleted=len(impact.deletable_blobs),
         raw_html_bytes_reclaimed=impact.raw_bytes,
         stored_html_bytes_reclaimed=impact.stored_bytes,
+        rendered_observations_deleted=impact.rendered_observations,
+        rendered_artifacts_deleted=impact.rendered_artifacts,
+        artifact_blob_records_deleted=len(unreferenced_rendered_blobs),
+        artifact_blob_files_deleted=artifact_files_deleted,
+        raw_artifact_bytes_reclaimed=sum(
+            blob.raw_byte_size for blob in unreferenced_rendered_blobs
+        ),
+        stored_artifact_bytes_reclaimed=sum(
+            blob.stored_byte_size for blob in unreferenced_rendered_blobs
+        ),
         warnings=warnings,
     )
 
@@ -215,6 +312,54 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
     deletable_blobs = [
         blob for blob in referenced_blobs if outside_blob_references.get(blob.id, 0) == 0
     ]
+    rendered_observation_ids = select(RenderedObservation.id).where(
+        RenderedObservation.snapshot_id.in_(snapshot_ids)
+    )
+    rendered_observations = (
+        db.scalar(
+            select(func.count(RenderedObservation.id)).where(
+                RenderedObservation.snapshot_id.in_(snapshot_ids)
+            )
+        )
+        or 0
+    )
+    rendered_artifacts = (
+        db.scalar(
+            select(func.count(RenderedArtifact.id)).where(
+                RenderedArtifact.rendered_observation_id.in_(rendered_observation_ids)
+            )
+        )
+        or 0
+    )
+    artifact_blob_ids = list(
+        db.scalars(
+            select(distinct(RenderedArtifact.artifact_blob_id)).where(
+                RenderedArtifact.rendered_observation_id.in_(rendered_observation_ids)
+            )
+        )
+    )
+    referenced_artifact_blobs = (
+        list(db.scalars(select(ArtifactBlob).where(ArtifactBlob.id.in_(artifact_blob_ids))))
+        if artifact_blob_ids
+        else []
+    )
+    externally_referenced_artifact_ids = (
+        set(
+            db.scalars(
+                select(distinct(RenderedArtifact.artifact_blob_id)).where(
+                    RenderedArtifact.artifact_blob_id.in_(artifact_blob_ids),
+                    RenderedArtifact.rendered_observation_id.not_in(rendered_observation_ids),
+                )
+            )
+        )
+        if artifact_blob_ids
+        else set()
+    )
+    deletable_artifact_blobs = [
+        blob
+        for blob in referenced_artifact_blobs
+        if blob.id not in externally_referenced_artifact_ids
+    ]
     return DeletionImpact(
         scan=scan,
         snapshots=snapshots,
@@ -223,6 +368,11 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         referenced_blobs=referenced_blobs,
         deletable_blobs=deletable_blobs,
         shared_blob_count=len(referenced_blobs) - len(deletable_blobs),
+        rendered_observations=rendered_observations,
+        rendered_artifacts=rendered_artifacts,
+        referenced_artifact_blobs=referenced_artifact_blobs,
+        deletable_artifact_blobs=deletable_artifact_blobs,
+        shared_artifact_blob_count=len(referenced_artifact_blobs) - len(deletable_artifact_blobs),
     )
 
 
