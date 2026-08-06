@@ -74,6 +74,31 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   await expect(page.getByText("Completed").first()).toBeVisible();
   await expect(page.getByRole("tab", { name: /Pages/i })).toBeVisible();
 
+  await page.getByRole("tab", { name: /Errors/i }).click();
+  await expect(page.getByText("guide.pdf")).toHaveCount(0);
+  await expect(page.getByText("hero.webp")).toHaveCount(0);
+
+  await page.getByRole("tab", { name: /Resources/i }).click();
+  await expect(page.getByText("Documents", { exact: true })).toBeVisible();
+  await expect(page.getByText("Images", { exact: true })).toBeVisible();
+  await expect(page.getByText("Scripts", { exact: true })).toBeVisible();
+  await expect(page.getByText("Stylesheets", { exact: true })).toBeVisible();
+  await expect(page.getByText("Fonts", { exact: true })).toBeVisible();
+  await page.getByLabel("Resource kind").selectOption("document");
+  await expect(page).toHaveURL(/resource_kind=document/);
+  await page.getByText("https://example.com/guide.pdf").click();
+  await expect(page.getByText("application/pdf")).toBeVisible();
+  await page.getByRole("tab", { name: /Used by Pages/i }).click();
+  await expect(page.getByRole("link", { name: "Pricing" })).toBeVisible();
+
+  await page.goto("/scans/1?tab=rendered");
+  await page.getByLabel("Rendered capture state").selectOption("completed_with_warnings");
+  await expect(page).toHaveURL(/render_state=completed_with_warnings/);
+  await page.getByRole("link", { name: /Open rendered evidence/ }).click();
+  await expect(page).toHaveURL(/\/scans\/1\/pages\/9\?tab=rendered/);
+
+  await page.goto("/scans/1");
+
   await page.getByRole("tab", { name: /Graph/i }).click();
   await expect(page.getByText("Website topology graph")).toBeVisible();
   await expect(page.getByText(/2 of 2 nodes/)).toBeVisible();
@@ -206,6 +231,26 @@ async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
   let siteActive = true;
   let pageNote: Record<string, unknown> | null = null;
+
+  await page.route("**/api/scans/1/resources/summary", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ unique_resources: 2, observed_resources: 1, discovered_only_resources: 1, total_occurrences: 3, kind_counts: { image: 1, document: 1, script: 1, stylesheet: 1, font: 1 } }) });
+  });
+  await page.route("**/api/scans/1/resources/21/occurrences**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ occurrence_id: 1, occurrence_source: "anchor", source_snapshot_id: 9, source_resource_id: 2, source_url: "https://example.com/pricing", source_title: "Pricing", relation_type: "page_link", element_tag: "a", attribute_name: "href", raw_url: "/guide.pdf", resolved_url: "https://example.com/guide.pdf", anchor_text: "Guide", alt_text: null, srcset_descriptor: null, rel: null, media: null, type_hint: null, as_hint: null, scope_decision: "crawlable", in_scope: true, dom_path: "/html/body/a", discovered_at: "2026-08-06T01:00:00Z" }], total: 1, limit: 50, offset: 0 }) });
+  });
+  await page.route("**/api/scans/1/resources/21", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ resource: resourceItem({ resource_id: 21, normalized_url: "https://example.com/guide.pdf", path: "/guide.pdf", file_extension: "pdf", effective_kind: "document", effective_kind_label: "Document", observed: true, discovered_only: false, snapshot_id: 10, final_url: "https://example.com/guide.pdf", http_status: 200, normalized_mime_type: "application/pdf", declared_content_length: 5000 }), requested_url: "https://example.com/guide.pdf", response_body_state: "metadata_only", inspected_prefix_byte_count: 0 }) });
+  });
+  await page.route("**/api/scans/1/resources**", async (route) => {
+    if (new URL(route.request().url()).pathname !== "/api/scans/1/resources") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [resourceItem({ resource_id: 21, normalized_url: "https://example.com/guide.pdf", path: "/guide.pdf", file_extension: "pdf", effective_kind: "document", effective_kind_label: "Document", observed: true, discovered_only: false, snapshot_id: 10, final_url: "https://example.com/guide.pdf", http_status: 200, normalized_mime_type: "application/pdf" }), resourceItem({ resource_id: 22, normalized_url: "https://example.com/hero.webp", path: "/hero.webp", file_extension: "webp", effective_kind: "image", effective_kind_label: "Image" })], total: 2, limit: 50, offset: 0 }) });
+  });
+  await page.route("**/api/scans/1/rendered-observations**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ id: 31, snapshot_id: 9, capture_state: "completed_with_warnings", static_final_url: "https://example.com/pricing", page_title: "Pricing", navigation_http_status: 200, duration_ms: 450, warning_count: 1, page_error_count: 0, blocked_request_count: 0, console_message_count: 0, has_viewport_screenshot: true, has_full_page_screenshot: false, has_rendered_dom: true, started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z" }], total: 1, limit: 50, offset: 0 }) });
+  });
 
   await page.route("**/api/notes/41", async (route) => {
     if (route.request().method() === "PATCH" && pageNote) {
@@ -998,6 +1043,18 @@ const snapshot = {
   error_type: null,
   error_message: null,
 };
+
+function resourceItem(overrides: Record<string, unknown>) {
+  return {
+    resource_id: 1, normalized_url: "https://example.com/resource", host: "example.com", path: "/resource", file_extension: null,
+    effective_kind: "other", effective_kind_label: "Other", classification_source: "extension", observed: false, discovered_only: true,
+    snapshot_id: null, final_url: null, http_status: null, normalized_mime_type: null, content_disposition_filename: null,
+    declared_content_length: null, network_bytes_transferred: null, fetched_at: null, response_time_ms: null,
+    occurrence_count: 1, source_page_count: 1, anchor_occurrence_count: 0, embedded_occurrence_count: 1,
+    in_scope_occurrence_count: 1, out_of_scope_occurrence_count: 0, first_discovered_at: "2026-08-06T01:00:00Z",
+    latest_discovered_at: "2026-08-06T01:00:00Z", observation_count: 0, scan_count: 1, ...overrides
+  };
+}
 
 const links = [
   {

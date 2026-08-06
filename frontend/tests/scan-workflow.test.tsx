@@ -17,7 +17,7 @@ import { ScansPage } from "../src/pages/ScansPage";
 import { SiteDetailPage } from "../src/pages/SiteDetailPage";
 import { SiteFormPage } from "../src/pages/SiteFormPage";
 import { SitesPage } from "../src/pages/SitesPage";
-import type { PageList, Scan, Snapshot } from "../src/types/scans";
+import type { PageList, ResourceInventoryItem, Scan, Snapshot } from "../src/types/scans";
 
 const api = vi.hoisted(() => ({
   createScan: vi.fn(),
@@ -80,6 +80,11 @@ const api = vi.hoisted(() => ({
   getRenderedNetwork: vi.fn(),
   getRenderedConsole: vi.fn(),
   getRenderedErrors: vi.fn(),
+  listScanResources: vi.fn(),
+  getScanResourceSummary: vi.fn(),
+  listSiteResources: vi.fn(),
+  getSiteResourceSummary: vi.fn(),
+  listScanRenderedObservations: vi.fn(),
   renderedArtifactUrl: vi.fn((id: number) => `/api/rendered-artifacts/${id}/content`)
 }));
 
@@ -201,6 +206,11 @@ beforeEach(() => {
     service_workers: "blocked"
   });
   api.getRenderedObservation.mockRejectedValue(new Error("Snapshot has no rendered observation"));
+  api.listScanResources.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  api.listSiteResources.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  api.getScanResourceSummary.mockResolvedValue({ unique_resources: 0, observed_resources: 0, discovered_only_resources: 0, total_occurrences: 0, kind_counts: {} });
+  api.getSiteResourceSummary.mockResolvedValue({ unique_resources: 0, observed_resources: 0, discovered_only_resources: 0, total_occurrences: 0, kind_counts: {} });
+  api.listScanRenderedObservations.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
   api.cancelScan.mockResolvedValue({ ...scanFixture, status: "cancelled" });
   api.getScanDeletePreview.mockResolvedValue({
     scan_id: 1,
@@ -365,6 +375,39 @@ describe("new scan workflow", () => {
 });
 
 describe("scan results workflow", () => {
+  it("lists and filters observed and discovered Resources", async () => {
+    api.getScan.mockResolvedValue({ ...scanFixture, resource_discovered_count: 2 });
+    api.getScanResourceSummary.mockResolvedValue({ unique_resources: 2, observed_resources: 1, discovered_only_resources: 1, total_occurrences: 4, kind_counts: { document: 1, image: 1, script: 0, stylesheet: 0, font: 0 } });
+    api.listScanResources.mockResolvedValue({
+      total: 2, limit: 50, offset: 0, items: [
+        resourceFixture({ resource_id: 21, normalized_url: "https://example.com/guide.pdf", effective_kind: "document", effective_kind_label: "Document", observed: true, discovered_only: false, normalized_mime_type: "application/pdf", http_status: 200 }),
+        resourceFixture({ resource_id: 22, normalized_url: "https://example.com/hero.webp", effective_kind: "image", effective_kind_label: "Image", observed: false, discovered_only: true, normalized_mime_type: null, http_status: null })
+      ]
+    });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=resources");
+
+    expect(await screen.findByText("https://example.com/guide.pdf")).toBeInTheDocument();
+    expect(screen.getByText("https://example.com/hero.webp")).toBeInTheDocument();
+    expect(screen.getAllByText("Observed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Discovered only").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Document").length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText("Resource kind"), { target: { value: "document" } });
+    await waitFor(() => expect(api.listScanResources).toHaveBeenLastCalledWith("1", expect.stringContaining("resource_kind=document")));
+  });
+
+  it("lists rendered observations and links to exact evidence", async () => {
+    api.getScan.mockResolvedValue({ ...scanFixture, rendered_attempted_count: 1, scope_config: { ...scanFixture.scope_config, render_mode: "starting_page" } });
+    api.listScanRenderedObservations.mockResolvedValue({ items: [{
+      id: 31, snapshot_id: 9, capture_state: "completed_with_warnings", static_final_url: "https://example.com/page", page_title: "Rendered Page", navigation_http_status: 200, duration_ms: 450, warning_count: 1, page_error_count: 0, blocked_request_count: 2, console_message_count: 1, has_viewport_screenshot: true, has_full_page_screenshot: false, has_rendered_dom: true, started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z"
+    }], total: 1, limit: 50, offset: 0 });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=rendered");
+
+    const link = await screen.findByRole("link", { name: "Open rendered evidence for https://example.com/page" });
+    expect(link).toHaveAttribute("href", "/scans/1/pages/9?tab=rendered");
+    fireEvent.change(screen.getByLabelText("Rendered capture state"), { target: { value: "completed_with_warnings" } });
+    await waitFor(() => expect(api.listScanRenderedObservations).toHaveBeenLastCalledWith("1", expect.stringContaining("capture_state=completed_with_warnings")));
+  });
+
   it("distinguishes retry attempts from final failed pages", async () => {
     api.getScan.mockResolvedValue({
       ...scanFixture,
@@ -702,6 +745,41 @@ function renderShell(initialEntry: string) {
       </MemoryRouter>
     </QueryClientProvider>
   );
+}
+
+function resourceFixture(overrides: Partial<ResourceInventoryItem>): ResourceInventoryItem {
+  return {
+    resource_id: 1,
+    normalized_url: "https://example.com/resource",
+    host: "example.com",
+    path: "/resource",
+    file_extension: null,
+    effective_kind: "other",
+    effective_kind_label: "Other",
+    classification_source: "extension",
+    observed: false,
+    discovered_only: true,
+    snapshot_id: null,
+    final_url: null,
+    http_status: null,
+    normalized_mime_type: null,
+    content_disposition_filename: null,
+    declared_content_length: null,
+    network_bytes_transferred: null,
+    fetched_at: null,
+    response_time_ms: null,
+    occurrence_count: 1,
+    source_page_count: 1,
+    anchor_occurrence_count: 0,
+    embedded_occurrence_count: 1,
+    in_scope_occurrence_count: 1,
+    out_of_scope_occurrence_count: 0,
+    first_discovered_at: "2026-08-06T01:00:00Z",
+    latest_discovered_at: "2026-08-06T01:00:00Z",
+    observation_count: 0,
+    scan_count: 1,
+    ...overrides
+  };
 }
 
 const scanFixture: Scan = {
