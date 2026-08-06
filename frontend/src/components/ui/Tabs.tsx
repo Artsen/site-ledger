@@ -6,7 +6,7 @@ export type TabItem = {
 
 export function Tabs({ tabs, active, onChange }: { tabs: TabItem[]; active: string; onChange: (tab: string) => void }) {
   return (
-    <div role="tablist" aria-label="Page sections" className="flex gap-1 border-b border-stone-200">
+    <div role="tablist" aria-label="Page sections" className="flex gap-1 overflow-x-auto border-b border-stone-200">
       {tabs.map((tab) => (
         <button
           key={tab.id}

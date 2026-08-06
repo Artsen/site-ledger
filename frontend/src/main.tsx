@@ -13,6 +13,8 @@ import { SiteDetailPage } from "./pages/SiteDetailPage";
 import { SiteFormPage } from "./pages/SiteFormPage";
 import { SitesPage } from "./pages/SitesPage";
 import { NewScanPage } from "./pages/NewScanPage";
+import { AiDocumentEvidencePage } from "./pages/AiDocumentEvidencePage";
+import { AiDocumentSourcePage } from "./pages/AiDocumentSourcePage";
 import "./styles/index.css";
 
 const router = createBrowserRouter([
@@ -27,6 +29,8 @@ const router = createBrowserRouter([
       { path: "sites/:siteId/pages/:resourceId", element: <PersistentPageDetailPage /> },
       { path: "sites/:siteId/resources/:resourceId", element: <ResourceDetailPage scope="site" /> },
       { path: "sites/:siteId/edit", element: <SiteFormPage mode="edit" /> },
+      { path: "ai-document-sources/:sourceId", element: <AiDocumentSourcePage /> },
+      { path: "ai-document-snapshots/:snapshotId", element: <AiDocumentEvidencePage /> },
       { path: "scans", element: <ScansPage /> },
       { path: "scans/new", element: <NewScanPage /> },
       { path: "scans/:scanId", element: <ScanDetailPage /> },

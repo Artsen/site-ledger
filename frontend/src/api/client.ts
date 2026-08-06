@@ -2,6 +2,7 @@ import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence
 import type { RenderedObservationIndexList, ResourceDetail, ResourceHistoryList, ResourceInventoryList, ResourceOccurrenceList, ResourceSummary } from "../types/scans";
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
+import type { AiDeletePreview, AiDiscoveryCandidate, AiDocumentReference, AiDocumentRefresh, AiDocumentSnapshot, AiDocumentSource, AiDocumentSettings, AiValidation, Paginated } from "../types/aiDocuments";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -91,6 +92,20 @@ export const cancelSourceRefresh = (refreshId: string) => request<SourceRefresh>
 export const listSourceEntries = (siteId: string, sourceId: string, query = "") => request<UrlSourceEntryList>(`/api/sites/${siteId}/sources/${sourceId}/entries${query}`);
 export const addManualUrls = (siteId: string, urlsText: string) => request<ManualUrlBatchResult>(`/api/sites/${siteId}/manual-urls`, { method: "POST", body: JSON.stringify({ urls_text: urlsText }) });
 export const listInventory = (siteId: string, query = "") => request<InventoryList>(`/api/sites/${siteId}/inventory${query}`);
+export const discoverAiDocumentSources = (siteId: string) => request<{ candidates: AiDiscoveryCandidate[] }>(`/api/sites/${siteId}/ai-document-sources/discover`, { method: "POST" });
+export const createAiDocumentSource = (siteId: string, payload: { entry_url: string; name: string; discovery_mode?: string; is_active?: boolean; settings?: AiDocumentSettings }) => request<AiDocumentSource>(`/api/sites/${siteId}/ai-document-sources`, { method: "POST", body: JSON.stringify(payload) });
+export const getAiDocumentSource = (sourceId: string) => request<AiDocumentSource>(`/api/ai-document-sources/${sourceId}`);
+export const updateAiDocumentSource = (sourceId: string, payload: { entry_url: string; name: string; discovery_mode: string; is_active: boolean; settings: AiDocumentSettings }) => request<AiDocumentSource>(`/api/ai-document-sources/${sourceId}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const listAiDocumentRefreshes = (sourceId: string, query = "") => request<Paginated<AiDocumentRefresh>>(`/api/ai-document-sources/${sourceId}/refreshes${query}`);
+export const listAiDocuments = (sourceId: string, refreshId: number, query = "") => request<Paginated<AiDocumentSnapshot>>(`/api/ai-document-sources/${sourceId}/refreshes/${refreshId}/documents${query}`);
+export const listAiReferences = (sourceId: string, refreshId: number, query = "") => request<Paginated<AiDocumentReference>>(`/api/ai-document-sources/${sourceId}/refreshes/${refreshId}/references${query}`);
+export const getAiDocumentTree = (sourceId: string, refreshId: number) => request<{ items: Array<{ snapshot: AiDocumentSnapshot; parent_count: number; cycle: boolean }> }>(`/api/ai-document-sources/${sourceId}/refreshes/${refreshId}/tree`);
+export const listAiValidations = (sourceId: string, refreshId: number) => request<AiValidation[]>(`/api/ai-document-sources/${sourceId}/refreshes/${refreshId}/validation`);
+export const getAiDocumentSnapshot = (snapshotId: string) => request<AiDocumentSnapshot>(`/api/ai-document-snapshots/${snapshotId}`);
+export const getAiDocumentContent = async (snapshotId: string) => { const response = await fetch(`${API_BASE}/api/ai-document-snapshots/${snapshotId}/content`); if (!response.ok) throw errorFromResponse(response.status, await response.text()); return response.text(); };
+export const aiDocumentDownloadUrl = (snapshotId: string) => `${API_BASE}/api/ai-document-snapshots/${snapshotId}/download`;
+export const getAiSourceDeletePreview = (sourceId: string) => request<AiDeletePreview>(`/api/ai-document-sources/${sourceId}/deletion-preview`);
+export const deleteAiDocumentSource = (sourceId: string) => request<{ deleted_source_id: number }>(`/api/ai-document-sources/${sourceId}`, { method: "DELETE" });
 export const listSitePages = (siteId: string, query = "") => request<PersistentPageList>(`/api/sites/${siteId}/pages${query}`);
 export const getSitePage = (siteId: string, resourceId: string) => request<PersistentPageDetail>(`/api/sites/${siteId}/pages/${resourceId}`);
 export const listPageObservations = (siteId: string, resourceId: string, query = "") => request<PageObservationList>(`/api/sites/${siteId}/pages/${resourceId}/observations${query}`);
