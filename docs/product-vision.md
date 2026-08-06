@@ -38,11 +38,17 @@ internal model name.
 
 ### Page
 
-A persistent normalized URL identity represented by WebResource. A Page is not tied to one scan.
+A successful HTML representation of a persistent normalized URL identity represented by
+WebResource. A Page is not tied to one scan.
+
+### Resource
+
+A non-HTML representation observed directly or inferred from retained HTML reference evidence.
+Resources do not receive a separate WebResource identity for the same normalized URL.
 
 ### Observation
 
-One scan-specific ResourceSnapshot of a Page. An observation contains the requested and final URL,
+One Scan-specific ResourceSnapshot of a Page or Resource. An observation contains the requested and final URL,
 HTTP result, retrieval details, metadata, stored evidence references, and errors recorded in that
 scan.
 
@@ -109,8 +115,8 @@ intended to allow PostgreSQL and object storage later without changing the produ
 
 ### Observation
 
-What was actually recorded: Pages, observations, links, Sources, Inventory, stored responses,
-topology, Activity, and reuse provenance.
+What was actually recorded: Pages, Resources, observations, links, Sources, Inventory, stored HTML
+responses, rendered captures, topology, Activity, and reuse provenance.
 
 This layer is substantially implemented.
 
@@ -136,8 +142,8 @@ permissions, and resolution workflow remain future direction.
 
 ## Roadmap
 
-Planned areas include browser-rendered observations, screenshots, asset inventories, deterministic
-scan and environment comparisons, findings, accessibility and performance observations, analytics
+Planned areas include Resource-body analysis, deterministic scan and environment comparisons,
+findings, accessibility and performance observations, analytics
 integrations, semantic analysis, and investigation workflow.
 
 New work should preserve the separation between evidence, deterministic comparison, interpretation,
@@ -145,10 +151,10 @@ and workflow. Interpretation must remain traceable to the observations that supp
 
 ## Current Limitations
 
-- Collection is static HTTP crawling; JavaScript-rendered state is not observed.
+- Browser rendering is bounded optional Page evidence, not browser-only crawling or Resource discovery.
 - Complete website and environment comparison is not implemented.
-- Screenshots, asset inventories, findings, audits, analytics, semantic embeddings, and AI summaries
-  are not implemented.
+- Resource-body storage and analysis, findings, audits, analytics, semantic embeddings, and AI
+  summaries are not implemented.
 - Authenticated and private-network crawling are not supported.
 - Robots.txt enforcement and within-crawl concurrency remain deferred.
 - Graph views are bounded and scan-specific, not persistent site-wide knowledge graphs.

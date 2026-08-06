@@ -255,6 +255,9 @@ Do not disable checks or weaken tests to force passing results.
 - Avoid unrelated refactors and dependency upgrades.
 - Do not create fake data, placeholder APIs, or controls that do nothing.
 - Preserve database and local-data compatibility.
+- Keep `WebResource` as normalized URL identity; representation kind belongs to Scan evidence.
+- Do not treat successful non-HTML responses as crawl failures or store their response bodies.
+- Keep Graph topology Page-link based and rendered capture evidence separate from static parsing.
 - Update README and focused documentation when behavior or architecture changes.
 - Never commit secrets, credentials, local databases, captured HTML, build output, or dependency
   caches.
