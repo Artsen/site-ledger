@@ -2,8 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { cancelScan, createScanNote, deleteScan, getScan, getScanDeletePreview, getWorkerHealth, listErrors, listJobs, listPages, listScanNotes, listScanSeeds } from "../api/client";
+import { cancelScan, createScanNote, deleteScan, getScan, getScanDeletePreview, getWorkerHealth, listErrors, listJobs, listPages, listScanNotes, listScanRenderedObservations, listScanSeeds } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
+import { RenderedObservationTable } from "../components/RenderedObservationTable";
+import { ResourceInventoryView } from "../components/ResourceInventoryView";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
 import { DefinitionList } from "../components/ui/DefinitionList";
@@ -15,7 +17,7 @@ import { Tabs } from "../components/ui/Tabs";
 import { inputClass } from "../components/ui/styles";
 import { ScanGraphView } from "../features/graph/ScanGraphView";
 import type { Job, WorkerHealth } from "../types/jobs";
-import type { Page, Scan, ScanSeed, Snapshot } from "../types/scans";
+import type { Page, RenderedObservationIndexItem, Scan, ScanSeed, Snapshot } from "../types/scans";
 import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 
@@ -65,6 +67,7 @@ export function ScanDetailPage() {
   const pages = useQuery({
     queryKey: ["pages", scanId, pageQuery],
     queryFn: () => listPages(scanId, pageQuery),
+    enabled: tab === "overview" || tab === "pages",
     refetchInterval: isActiveScan ? 2000 : false,
     placeholderData: (previous) => previous
   });
@@ -78,6 +81,11 @@ export function ScanDetailPage() {
     queryKey: ["scan-seeds", scanId],
     queryFn: () => listScanSeeds(scanId),
     enabled: tab === "inputs"
+  });
+  const recentRendered = useQuery({
+    queryKey: ["scan-rendered-observations", scanId, "overview"],
+    queryFn: () => listScanRenderedObservations(scanId, "?sort=capture_time&direction=desc&limit=5"),
+    enabled: tab === "overview" && Boolean(scan.data?.rendered_attempted_count)
   });
   const cancel = useMutation({
     mutationFn: () => cancelScan(scanId),
@@ -104,11 +112,13 @@ export function ScanDetailPage() {
   if (scan.error) return <PageFrame><ErrorBanner error={scan.error} title="Could not load scan" /></PageFrame>;
   if (!scan.data) return <PageFrame><EmptyState title="Scan not found" message="The scan may have been deleted or is unavailable." /></PageFrame>;
 
-  const pageTotal = pages.data?.total ?? scan.data.fetched_count;
+  const pageTotal = scan.data.html_page_observed_count || pages.data?.total || 0;
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "inputs", label: "Inputs", count: seeds.data?.total },
     { id: "pages", label: "Pages", count: pageTotal },
+    { id: "resources", label: "Resources", count: scan.data.resource_discovered_count },
+    { id: "rendered", label: "Rendered", count: scan.data.rendered_attempted_count },
     { id: "errors", label: "Errors", count: errors.data?.length ?? scan.data.failed_count },
     { id: "graph", label: "Graph" },
     { id: "notes", label: "Notes" }
@@ -151,7 +161,7 @@ export function ScanDetailPage() {
         <Metric label="Final failed" value={scan.data.failed_count} />
         <Metric label="Skipped" value={scan.data.skipped_count} />
       </div>
-      {scan.data.scope_config.render_mode !== "none" ? <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5"><Metric label="Render selected" value={scan.data.rendered_selected_count} /><Metric label="Rendered" value={scan.data.rendered_completed_count} /><Metric label="Render failed" value={scan.data.rendered_failed_count} /><Metric label="Blocked requests" value={scan.data.rendered_blocked_request_count} /><Metric label="Artifacts" value={scan.data.rendered_artifact_count} /></div> : null}
+      {scan.data.scope_config.render_mode !== "none" ? <Link to={`/scans/${scanId}?tab=rendered`} className="mb-6 grid grid-cols-2 gap-3 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 md:grid-cols-5" aria-label="View rendered captures"><Metric label="Render selected" value={scan.data.rendered_selected_count} /><Metric label="Rendered" value={scan.data.rendered_completed_count} /><Metric label="Render failed" value={scan.data.rendered_failed_count} /><Metric label="Blocked requests" value={scan.data.rendered_blocked_request_count} /><Metric label="Artifacts" value={scan.data.rendered_artifact_count} /></Link> : null}
 
       {latestJob && !isTerminalStatus(latestJob.status) ? <JobNotice job={latestJob} workerHealth={workerHealth.data} /> : null}
       {cancel.error ? <div className="mb-4"><ErrorBanner error={cancel.error} title="Could not cancel scan" /></div> : null}
@@ -168,6 +178,7 @@ export function ScanDetailPage() {
             pages={pages.data?.items ?? []}
             errors={errors.data ?? []}
             scanId={scanId}
+            recentRendered={recentRendered.data?.items ?? []}
             deletePreview={deletePreview.data}
             deleteLoading={deletePreview.isLoading}
             deleting={remove.isPending}
@@ -190,6 +201,8 @@ export function ScanDetailPage() {
             activeScan={isActiveScan}
           />
         ) : null}
+        {tab === "resources" ? <ResourceInventoryView scope="scan" id={scanId} /> : null}
+        {tab === "rendered" ? <RenderedObservationTable scanId={scanId} renderMode={scan.data.scope_config.render_mode} /> : null}
         {tab === "inputs" ? <InputsView seeds={seeds.data?.items ?? []} loading={seeds.isLoading} error={seeds.error} /> : null}
         {tab === "errors" ? <ErrorsView scanId={scanId} errors={errors.data ?? []} loading={errors.isLoading} error={errors.error} /> : null}
         {tab === "graph" ? <ScanGraphView scan={scan.data} /> : null}
@@ -219,6 +232,7 @@ function Overview({
   pages,
   errors,
   scanId,
+  recentRendered,
   deletePreview,
   deleteLoading,
   deleting,
@@ -230,6 +244,7 @@ function Overview({
   pages: Page[];
   errors: Snapshot[];
   scanId: string;
+  recentRendered: RenderedObservationIndexItem[];
   deletePreview?: {
     can_delete: boolean;
     snapshots: number;
@@ -299,6 +314,10 @@ function Overview({
               { label: "Fatal error", value: scan.fatal_error_message ?? "None" }
             ]}
           />
+        </section>
+        <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-base font-semibold">Rendered captures</h2><Link to={`/scans/${scanId}?tab=rendered`} className="text-sm font-medium underline">View rendered captures</Link></div>
+          {recentRendered.length ? <div className="divide-y divide-stone-100">{recentRendered.map((item) => <Link key={item.id} to={`/scans/${scanId}/pages/${item.snapshot_id}?tab=rendered`} className="flex items-center justify-between gap-3 py-2 text-sm hover:bg-stone-50"><span className="min-w-0"><span className="block truncate">{item.page_title ?? "Untitled Page"}</span><span className="block truncate font-mono text-xs text-stone-500">{item.static_final_url}</span></span><span className="flex shrink-0 items-center gap-2"><StatusBadge status={item.capture_state} /><span className="text-xs text-stone-500">{item.duration_ms == null ? "" : `${item.duration_ms} ms`}</span></span></Link>)}</div> : <p className="text-sm text-stone-600">{scan.scope_config.render_mode === "none" ? "Browser rendering was not requested for this Scan." : "No rendered observations were recorded."}</p>}
         </section>
         <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
           <h2 className="mb-4 text-base font-semibold">Scope configuration</h2>
@@ -435,12 +454,16 @@ function PagesView({
             <option value="with_errors">Errors only</option>
             <option value="without_errors">No crawler errors</option>
           </select>
+          <select aria-label="Rendered state" value={searchParams.get("rendered_state") ?? "any"} onChange={(event) => updateParam(setSearchParams, "rendered_state", event.target.value === "any" ? null : event.target.value, { offset: null })} className={inputClass()}>
+            <option value="any">Any rendered state</option><option value="not_requested">Not requested</option><option value="captured">Captured</option><option value="captured_with_warnings">Captured with warnings</option><option value="failed">Failed</option><option value="skipped">Skipped</option><option value="interrupted">Interrupted</option>
+          </select>
           <select aria-label="Sort pages" value={searchParams.get("sort") ?? "requested_url"} onChange={(event) => updateParam(setSearchParams, "sort", event.target.value, { offset: null })} className={inputClass()}>
             <option value="requested_url">URL</option>
             <option value="status">HTTP status</option>
             <option value="title">Title</option>
             <option value="depth">Depth</option>
             <option value="duration">Duration</option>
+            <option value="rendered_state">Rendered state</option>
           </select>
           <select aria-label="Sort direction" value={searchParams.get("direction") ?? "asc"} onChange={(event) => updateParam(setSearchParams, "direction", event.target.value, { offset: null })} className={inputClass()}>
             <option value="asc">Ascending</option>
@@ -501,7 +524,7 @@ function PageTable({ pages, scanId }: { pages: Page[]; scanId: string }) {
                   <span className="block">{page.inbound_occurrence_count}</span>
                   <span className="block text-xs text-stone-500">{page.inbound_source_page_count} sources</span>
                 </td>
-                <td className="whitespace-nowrap px-3 py-2">{page.rendered_capture_state ? <StatusBadge status={page.rendered_capture_state} /> : "Not attempted"}</td>
+                <td className="whitespace-nowrap px-3 py-2">{page.rendered_capture_state ? <Link to={`/scans/${scanId}/pages/${page.id}?tab=rendered`} aria-label={`Open rendered evidence for ${page.requested_url}`} className="inline-block rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900"><StatusBadge status={page.rendered_capture_state} /></Link> : "Not attempted"}</td>
                 <td className="max-w-xs truncate px-3 py-2">{page.error_type ? formatStatus(page.error_type) : "None"}</td>
               </tr>
             );
@@ -607,7 +630,7 @@ function groupErrors(errors: Snapshot[]) {
 
 function buildPageQuery(searchParams: URLSearchParams) {
   const params = new URLSearchParams();
-  for (const key of ["search", "status", "host", "path_prefix", "min_depth", "max_depth", "error_state", "sort", "direction", "limit", "offset"]) {
+  for (const key of ["search", "status", "host", "path_prefix", "min_depth", "max_depth", "error_state", "rendered_state", "sort", "direction", "limit", "offset"]) {
     const value = searchParams.get(key);
     if (value) params.set(key, value);
   }
@@ -635,7 +658,7 @@ function tabOnly(searchParams: URLSearchParams) {
 }
 
 function hasFilters(searchParams: URLSearchParams) {
-  return ["search", "status", "host", "path_prefix", "min_depth", "max_depth", "error_state"].some((key) => searchParams.has(key));
+  return ["search", "status", "host", "path_prefix", "min_depth", "max_depth", "error_state", "rendered_state"].some((key) => searchParams.has(key));
 }
 
 function asStringArray(value: unknown) {

@@ -32,6 +32,7 @@ import {
   updateSite,
 } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
+import { ResourceInventoryView } from "../components/ResourceInventoryView";
 import {
   PageCategoryBadges,
   WorkflowStatusBadge,
@@ -181,6 +182,7 @@ export function SiteDetailPage() {
           "overview",
           "scans",
           "pages",
+          "resources",
           "categories",
           "sources",
           "inventory",
@@ -199,6 +201,7 @@ export function SiteDetailPage() {
       {tab === "overview" ? <OverviewTab site={site.data} /> : null}
       {tab === "scans" ? <ScansTab site={site.data} /> : null}
       {tab === "pages" ? <PagesTab site={site.data} /> : null}
+      {tab === "resources" ? <div className="space-y-4"><p className="text-sm text-stone-600">Resources are non-HTML files and embedded references retained from Scans. URL Inventory remains the separate set of candidate Page URLs declared by Sources.</p><ResourceInventoryView scope="site" id={siteId} /></div> : null}
       {tab === "categories" ? <CategoriesTab site={site.data} /> : null}
       {tab === "sources" ? <SourcesTab site={site.data} /> : null}
       {tab === "inventory" ? <InventoryTab site={site.data} /> : null}

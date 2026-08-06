@@ -1,4 +1,5 @@
 import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, StaticFetchAttempt, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
+import type { RenderedObservationIndexList, ResourceDetail, ResourceHistoryList, ResourceInventoryList, ResourceOccurrenceList, ResourceSummary } from "../types/scans";
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import { errorFromResponse } from "../utils/errors";
@@ -117,6 +118,16 @@ export const cancelScan = (id: string) => request<Scan>(`/api/scans/${id}/cancel
 export const getScanDeletePreview = (id: string) => request<ScanDeletePreview>(`/api/scans/${id}/delete-preview`);
 export const deleteScan = (id: string) => request<ScanDeleteResult>(`/api/scans/${id}`, { method: "DELETE" });
 export const listPages = (scanId: string, query = "") => request<PageList>(`/api/scans/${scanId}/pages${query}`);
+export const listScanResources = (scanId: string, query = "") => request<ResourceInventoryList>(`/api/scans/${scanId}/resources${query}`);
+export const getScanResourceSummary = (scanId: string) => request<ResourceSummary>(`/api/scans/${scanId}/resources/summary`);
+export const getScanResource = (scanId: string, resourceId: string) => request<ResourceDetail>(`/api/scans/${scanId}/resources/${resourceId}`);
+export const listScanResourceOccurrences = (scanId: string, resourceId: string, query = "") => request<ResourceOccurrenceList>(`/api/scans/${scanId}/resources/${resourceId}/occurrences${query}`);
+export const listSiteResources = (siteId: string, query = "") => request<ResourceInventoryList>(`/api/sites/${siteId}/resources${query}`);
+export const getSiteResourceSummary = (siteId: string) => request<ResourceSummary>(`/api/sites/${siteId}/resources/summary`);
+export const getSiteResource = (siteId: string, resourceId: string) => request<ResourceDetail>(`/api/sites/${siteId}/resources/${resourceId}`);
+export const listSiteResourceOccurrences = (siteId: string, resourceId: string, query = "") => request<ResourceOccurrenceList>(`/api/sites/${siteId}/resources/${resourceId}/occurrences${query}`);
+export const listSiteResourceHistory = (siteId: string, resourceId: string, query = "") => request<ResourceHistoryList>(`/api/sites/${siteId}/resources/${resourceId}/history${query}`);
+export const listScanRenderedObservations = (scanId: string, query = "") => request<RenderedObservationIndexList>(`/api/scans/${scanId}/rendered-observations${query}`);
 export const listErrors = (scanId: string) => request<Snapshot[]>(`/api/scans/${scanId}/errors`);
 export const getSnapshot = (snapshotId: string) => request<Snapshot>(`/api/snapshots/${snapshotId}`);
 export const getStaticFetchAttempts = (snapshotId: string) => request<StaticFetchAttempt[]>(`/api/snapshots/${snapshotId}/static-fetch-attempts`);
