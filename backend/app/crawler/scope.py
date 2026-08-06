@@ -19,6 +19,9 @@ class ScopeConfig:
     max_depth: int = 3
     respect_robots_txt: bool = False
     request_timeout_seconds: float = 10
+    static_max_attempts: int = 2
+    static_retry_initial_delay_ms: int = 500
+    static_retry_max_delay_ms: int = 5000
     max_html_response_bytes: int = 2_000_000
     concurrent_requests_per_host: int = 2
     delay_between_requests_ms: int = 0
@@ -69,6 +72,9 @@ class ScopeConfig:
             "max_depth": self.max_depth,
             "respect_robots_txt": self.respect_robots_txt,
             "request_timeout_seconds": self.request_timeout_seconds,
+            "static_max_attempts": self.static_max_attempts,
+            "static_retry_initial_delay_ms": self.static_retry_initial_delay_ms,
+            "static_retry_max_delay_ms": self.static_retry_max_delay_ms,
             "max_html_response_bytes": self.max_html_response_bytes,
             "concurrent_requests_per_host": self.concurrent_requests_per_host,
             "delay_between_requests_ms": self.delay_between_requests_ms,

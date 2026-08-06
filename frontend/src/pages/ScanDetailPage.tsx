@@ -148,7 +148,7 @@ export function ScanDetailPage() {
         <Metric label="Discovered" value={scan.data.discovered_count} />
         <Metric label="Fetched" value={scan.data.fetched_count} />
         <Metric label="Queued" value={scan.data.queued_count} />
-        <Metric label="Failed" value={scan.data.failed_count} />
+        <Metric label="Final failed" value={scan.data.failed_count} />
         <Metric label="Skipped" value={scan.data.skipped_count} />
       </div>
       {scan.data.scope_config.render_mode !== "none" ? <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5"><Metric label="Render selected" value={scan.data.rendered_selected_count} /><Metric label="Rendered" value={scan.data.rendered_completed_count} /><Metric label="Render failed" value={scan.data.rendered_failed_count} /><Metric label="Blocked requests" value={scan.data.rendered_blocked_request_count} /><Metric label="Artifacts" value={scan.data.rendered_artifact_count} /></div> : null}
@@ -265,6 +265,19 @@ function Overview({
             <div className="mt-1">{scan.queued_count} pages currently queued. More pages may still be discovered.</div>
           </div>
         ) : null}
+        <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+          <h2 className="mb-4 text-base font-semibold">Static request attempts</h2>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+            <Metric label="Attempts" value={scan.static_request_attempt_count} />
+            <Metric label="Retry requests" value={scan.static_retry_request_count} />
+            <Metric label="Recovered" value={scan.static_recovered_after_retry_count} />
+            <Metric label="Exhausted" value={scan.static_retry_exhausted_count} />
+            <Metric label="Connect timeouts" value={scan.static_connection_timeout_count} />
+            <Metric label="Read timeouts" value={scan.static_read_timeout_count} />
+            <Metric label="Connection errors" value={scan.static_connection_error_count} />
+          </div>
+          <p className="mt-3 text-xs text-stone-600">Attempt errors are retained as evidence. Final failed Pages are counted separately above.</p>
+        </section>
         <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
           <h2 className="mb-4 text-base font-semibold">Scan summary</h2>
           <DefinitionList

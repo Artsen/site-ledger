@@ -103,7 +103,7 @@ export function NewScanPage() {
     setListFields((current) => ({ ...current, [key]: value }));
   }
 
-  function updateNumber(key: keyof Pick<ScopeConfig, "max_pages" | "max_depth" | "request_timeout_seconds" | "max_html_response_bytes" | "delay_between_requests_ms" | "max_redirects">, value: string) {
+  function updateNumber(key: keyof Pick<ScopeConfig, "max_pages" | "max_depth" | "request_timeout_seconds" | "static_max_attempts" | "static_retry_initial_delay_ms" | "static_retry_max_delay_ms" | "max_html_response_bytes" | "delay_between_requests_ms" | "max_redirects">, value: string) {
     setScope((current) => ({ ...current, [key]: value === "" ? Number.NaN : Number(value) }));
   }
 
@@ -363,6 +363,15 @@ export function NewScanPage() {
               <Field id="request-timeout" label="Request timeout" error={validation.requestTimeout} helper="Seconds before a request is recorded as timed out.">
                 <input id="request-timeout" type="number" min={1} value={numberInputValue(scope.request_timeout_seconds)} onChange={(event) => updateNumber("request_timeout_seconds", event.target.value)} className={inputClass(Boolean(validation.requestTimeout))} />
               </Field>
+              <Field id="static-max-attempts" label="Maximum static attempts" error={validation.staticMaxAttempts} helper="Total requests allowed per page, including the first attempt.">
+                <input id="static-max-attempts" type="number" min={1} max={5} value={numberInputValue(scope.static_max_attempts)} onChange={(event) => updateNumber("static_max_attempts", event.target.value)} className={inputClass(Boolean(validation.staticMaxAttempts))} />
+              </Field>
+              <Field id="static-retry-initial-delay" label="Initial retry delay" error={validation.staticRetryInitialDelay} helper="Milliseconds before the first eligible retry.">
+                <input id="static-retry-initial-delay" type="number" min={0} max={60000} value={numberInputValue(scope.static_retry_initial_delay_ms)} onChange={(event) => updateNumber("static_retry_initial_delay_ms", event.target.value)} className={inputClass(Boolean(validation.staticRetryInitialDelay))} />
+              </Field>
+              <Field id="static-retry-max-delay" label="Maximum retry delay" error={validation.staticRetryMaxDelay} helper="Caps backoff, jitter, and Retry-After delays in milliseconds.">
+                <input id="static-retry-max-delay" type="number" min={0} max={60000} value={numberInputValue(scope.static_retry_max_delay_ms)} onChange={(event) => updateNumber("static_retry_max_delay_ms", event.target.value)} className={inputClass(Boolean(validation.staticRetryMaxDelay))} />
+              </Field>
               <Field id="max-html-bytes" label="Maximum HTML response size" error={validation.maxHtmlBytes} helper="Bytes read before a page is stopped as too large.">
                 <input id="max-html-bytes" type="number" min={1} value={numberInputValue(scope.max_html_response_bytes)} onChange={(event) => updateNumber("max_html_response_bytes", event.target.value)} className={inputClass(Boolean(validation.maxHtmlBytes))} />
               </Field>
@@ -463,6 +472,9 @@ function validateForm(_startingUrl: string, urlValidation: ReturnType<typeof nor
     maxPages: validateInteger(scope.max_pages, 1, 10000, "Maximum pages must be between 1 and 10,000."),
     maxDepth: validateInteger(scope.max_depth, 0, 50, "Maximum depth must be between 0 and 50."),
     requestTimeout: validateNumber(scope.request_timeout_seconds, 1, 300, "Request timeout must be between 1 and 300 seconds."),
+    staticMaxAttempts: validateInteger(scope.static_max_attempts, 1, 5, "Maximum static attempts must be between 1 and 5."),
+    staticRetryInitialDelay: validateInteger(scope.static_retry_initial_delay_ms, 0, 60000, "Initial retry delay must be between 0 and 60,000 milliseconds."),
+    staticRetryMaxDelay: scope.static_retry_initial_delay_ms > scope.static_retry_max_delay_ms ? "Maximum retry delay must be at least the initial delay." : validateInteger(scope.static_retry_max_delay_ms, 0, 60000, "Maximum retry delay must be between 0 and 60,000 milliseconds."),
     maxHtmlBytes: validateInteger(scope.max_html_response_bytes, 1, 100000000, "Maximum HTML response size must be at least 1 byte."),
     requestDelay: validateInteger(scope.delay_between_requests_ms, 0, 60000, "Delay must be between 0 and 60,000 milliseconds."),
     maxRedirects: validateInteger(scope.max_redirects, 0, 50, "Maximum redirects must be between 0 and 50."),

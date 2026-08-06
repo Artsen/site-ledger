@@ -17,6 +17,9 @@ class ScopeConfigPayload(BaseModel):
     max_depth: int = 3
     respect_robots_txt: bool = False
     request_timeout_seconds: float = 10
+    static_max_attempts: int = Field(default=2, ge=1, le=5)
+    static_retry_initial_delay_ms: int = Field(default=500, ge=0, le=60_000)
+    static_retry_max_delay_ms: int = Field(default=5000, ge=0, le=60_000)
     max_html_response_bytes: int = 2_000_000
     concurrent_requests_per_host: int = 2
     delay_between_requests_ms: int = 0
@@ -50,6 +53,8 @@ class ScopeConfigPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_rendering(self) -> "ScopeConfigPayload":
+        if self.static_retry_initial_delay_ms > self.static_retry_max_delay_ms:
+            raise ValueError("static_retry_initial_delay_ms cannot exceed the maximum delay")
         validate_render_config(self.model_dump())
         return self
 
@@ -89,6 +94,13 @@ class ScanRead(BaseModel):
     rendered_skipped_count: int = 0
     rendered_blocked_request_count: int = 0
     rendered_artifact_count: int = 0
+    static_request_attempt_count: int = 0
+    static_retry_request_count: int = 0
+    static_recovered_after_retry_count: int = 0
+    static_retry_exhausted_count: int = 0
+    static_connection_timeout_count: int = 0
+    static_read_timeout_count: int = 0
+    static_connection_error_count: int = 0
     stop_reason: str | None
     fatal_error_message: str | None
     note_count: int = 0
@@ -245,6 +257,28 @@ class SnapshotRead(BaseModel):
     last_modified: str | None = None
     cache_control: str | None = None
     vary_header: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class StaticFetchAttemptRead(BaseModel):
+    id: int
+    snapshot_id: int
+    attempt_number: int
+    started_at: datetime
+    finished_at: datetime
+    requested_url: str
+    final_url: str | None
+    retrieval_http_status: int | None
+    response_time_ms: int | None
+    outcome: str
+    error_type: str | None
+    error_message: str | None
+    redirect_chain: list[dict[str, Any]]
+    network_bytes_transferred: int
+    retryable: bool
+    retry_reason: str | None
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 

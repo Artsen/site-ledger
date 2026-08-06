@@ -10,6 +10,9 @@ RenderedObservation attempt. Rendered DOM is not parsed into static metadata or 
 enter the graph. HTTP 404 and 500 documents can be successful browser observations when usable
 HTML was captured.
 
+Browser-rendered Pages are never retried. Bounded retry behavior applies only to eligible static
+requests while their Scan is still active; it never causes a second browser capture.
+
 ## Runtime
 
 Install and verify Chromium explicitly:

@@ -20,6 +20,7 @@ from app.models import (
     ResourceSnapshot,
     Scan,
     SourceRefresh,
+    StaticFetchAttempt,
     WebsiteProperty,
 )
 from app.schemas.graph import GraphCapabilitiesRead, GraphEdgeOccurrenceList, GraphResponse
@@ -63,6 +64,7 @@ from app.schemas.scans import (
     ScanHistory,
     ScanRead,
     SnapshotRead,
+    StaticFetchAttemptRead,
 )
 from app.schemas.sites import (
     SiteDeleteResult,
@@ -1175,6 +1177,22 @@ def get_snapshot(snapshot_id: int, db: DbSession) -> SnapshotRead:
     result.html_raw_byte_size = snapshot.blob.raw_byte_size if snapshot.blob else None
     result.html_stored_byte_size = snapshot.blob.stored_byte_size if snapshot.blob else None
     return result
+
+
+@router.get(
+    "/snapshots/{snapshot_id}/static-fetch-attempts",
+    response_model=list[StaticFetchAttemptRead],
+)
+def list_static_fetch_attempts(snapshot_id: int, db: DbSession) -> list[StaticFetchAttempt]:
+    if db.get(ResourceSnapshot, snapshot_id) is None:
+        raise HTTPException(404, "Snapshot not found")
+    return list(
+        db.scalars(
+            select(StaticFetchAttempt)
+            .where(StaticFetchAttempt.snapshot_id == snapshot_id)
+            .order_by(StaticFetchAttempt.attempt_number)
+        )
+    )
 
 
 def _rendered_read(observation: RenderedObservation) -> RenderedObservationRead:

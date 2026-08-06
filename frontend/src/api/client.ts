@@ -1,4 +1,4 @@
-import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
+import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, StaticFetchAttempt, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import { errorFromResponse } from "../utils/errors";
@@ -26,6 +26,9 @@ export const defaultScope = (): ScopeConfig => ({
   max_depth: 3,
   respect_robots_txt: false,
   request_timeout_seconds: 10,
+  static_max_attempts: 2,
+  static_retry_initial_delay_ms: 500,
+  static_retry_max_delay_ms: 5000,
   max_html_response_bytes: 2000000,
   concurrent_requests_per_host: 2,
   delay_between_requests_ms: 0,
@@ -116,6 +119,7 @@ export const deleteScan = (id: string) => request<ScanDeleteResult>(`/api/scans/
 export const listPages = (scanId: string, query = "") => request<PageList>(`/api/scans/${scanId}/pages${query}`);
 export const listErrors = (scanId: string) => request<Snapshot[]>(`/api/scans/${scanId}/errors`);
 export const getSnapshot = (snapshotId: string) => request<Snapshot>(`/api/snapshots/${snapshotId}`);
+export const getStaticFetchAttempts = (snapshotId: string) => request<StaticFetchAttempt[]>(`/api/snapshots/${snapshotId}/static-fetch-attempts`);
 export const getLinks = (snapshotId: string) => request<LinkOccurrence[]>(`/api/snapshots/${snapshotId}/links`);
 export const getOutgoingLinks = (snapshotId: string, query = "") => request<OutgoingLinkList>(`/api/snapshots/${snapshotId}/outgoing-links${query}`);
 export const getInboundLinks = (snapshotId: string, query = "") => request<InboundLinkList>(`/api/snapshots/${snapshotId}/inbound-links${query}`);

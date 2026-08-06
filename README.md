@@ -136,6 +136,10 @@ The crawler is an SSRF boundary:
 - Redirect destinations are revalidated before each request.
 - Cookies and user credentials are not forwarded.
 - Request timeout, redirect, response-size, Page, and depth limits are enforced.
+- Active static scans may retry transient network failures and selected temporary HTTP statuses up
+  to `static_max_attempts`; every request remains durable attempt evidence under one final Page
+  observation. Retry-After and exponential delays are capped by `static_retry_max_delay_ms`.
+- Completed scans cannot retry an individual Page, and browser-rendered Pages are never retried.
 - Scanned HTML is parsed as data and never executed in the application.
 - Browser requests are intercepted before navigation and every HTTP redirect or subresource
   destination is checked against the network policy.
@@ -157,6 +161,8 @@ ruff format --check .
 mypy app
 alembic upgrade head
 alembic check
+python -m app.static_benchmark
+python -m app.render_benchmark
 ~~~
 
 Frontend:

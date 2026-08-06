@@ -27,6 +27,13 @@ export type Scan = {
   rendered_skipped_count: number;
   rendered_blocked_request_count: number;
   rendered_artifact_count: number;
+  static_request_attempt_count: number;
+  static_retry_request_count: number;
+  static_recovered_after_retry_count: number;
+  static_retry_exhausted_count: number;
+  static_connection_timeout_count: number;
+  static_read_timeout_count: number;
+  static_connection_error_count: number;
   stop_reason: string | null;
   fatal_error_message: string | null;
 };
@@ -236,6 +243,9 @@ export type ScopeConfig = {
   max_depth: number;
   respect_robots_txt: boolean;
   request_timeout_seconds: number;
+  static_max_attempts: number;
+  static_retry_initial_delay_ms: number;
+  static_retry_max_delay_ms: number;
   max_html_response_bytes: number;
   concurrent_requests_per_host: number;
   delay_between_requests_ms: number;
@@ -289,6 +299,26 @@ export type Page = {
   reused_from_snapshot_id: number | null;
   network_bytes_transferred: number | null;
   rendered_capture_state: string | null;
+};
+
+export type StaticFetchAttempt = {
+  id: number;
+  snapshot_id: number;
+  attempt_number: number;
+  started_at: string;
+  finished_at: string;
+  requested_url: string;
+  final_url: string | null;
+  retrieval_http_status: number | null;
+  response_time_ms: number | null;
+  outcome: string;
+  error_type: string | null;
+  error_message: string | null;
+  redirect_chain: Array<Record<string, unknown>>;
+  network_bytes_transferred: number;
+  retryable: boolean;
+  retry_reason: string | null;
+  created_at: string;
 };
 
 export type RenderCapabilities = {

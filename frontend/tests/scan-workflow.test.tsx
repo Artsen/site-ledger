@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({
   listPages: vi.fn(),
   listErrors: vi.fn(),
   getSnapshot: vi.fn(),
+  getStaticFetchAttempts: vi.fn(),
   getLinks: vi.fn(),
   getInboundLinks: vi.fn(),
   getHtml: vi.fn(),
@@ -93,7 +94,10 @@ vi.mock("../src/api/client", () => ({
     max_pages: 100,
     max_depth: 3,
     respect_robots_txt: false,
-    request_timeout_seconds: 10,
+  request_timeout_seconds: 10,
+  static_max_attempts: 2,
+  static_retry_initial_delay_ms: 500,
+  static_retry_max_delay_ms: 5000,
     max_html_response_bytes: 2000000,
     concurrent_requests_per_host: 2,
     delay_between_requests_ms: 0,
@@ -144,6 +148,46 @@ beforeEach(() => {
   api.listPages.mockResolvedValue(emptyPageList);
   api.listErrors.mockResolvedValue([]);
   api.getSnapshot.mockResolvedValue(snapshotFixture);
+  api.getStaticFetchAttempts.mockResolvedValue([
+    {
+      id: 1,
+      snapshot_id: 9,
+      attempt_number: 1,
+      started_at: "2026-07-30T01:00:01Z",
+      finished_at: "2026-07-30T01:00:11Z",
+      requested_url: "https://example.com/page",
+      final_url: null,
+      retrieval_http_status: null,
+      response_time_ms: 10000,
+      outcome: "failed",
+      error_type: "connection_timeout",
+      error_message: "Connection timed out",
+      redirect_chain: [],
+      network_bytes_transferred: 0,
+      retryable: true,
+      retry_reason: "connection_timeout",
+      created_at: "2026-07-30T01:00:11Z"
+    },
+    {
+      id: 2,
+      snapshot_id: 9,
+      attempt_number: 2,
+      started_at: "2026-07-30T01:00:12Z",
+      finished_at: "2026-07-30T01:00:12Z",
+      requested_url: "https://example.com/page",
+      final_url: "https://example.com/page",
+      retrieval_http_status: 200,
+      response_time_ms: 50,
+      outcome: "succeeded",
+      error_type: null,
+      error_message: null,
+      redirect_chain: [],
+      network_bytes_transferred: 1200,
+      retryable: false,
+      retry_reason: null,
+      created_at: "2026-07-30T01:00:12Z"
+    }
+  ]);
   api.getLinks.mockResolvedValue(linkFixtures);
   api.getInboundLinks.mockResolvedValue(inboundFixture);
   api.getHtml.mockResolvedValue("<html><body><script>window.executed = true</script><h1>Source</h1></body></html>");
@@ -321,6 +365,33 @@ describe("new scan workflow", () => {
 });
 
 describe("scan results workflow", () => {
+  it("distinguishes retry attempts from final failed pages", async () => {
+    api.getScan.mockResolvedValue({
+      ...scanFixture,
+      failed_count: 0,
+      static_request_attempt_count: 2,
+      static_retry_request_count: 1,
+      static_recovered_after_retry_count: 1,
+      static_connection_timeout_count: 1
+    });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1");
+
+    await screen.findByRole("heading", { name: "Static request attempts" });
+    expect(screen.getByText("Final failed").parentElement).toHaveTextContent("0");
+    expect(screen.getByText("Retry requests").parentElement).toHaveTextContent("1");
+    expect(screen.getByText("Recovered").parentElement).toHaveTextContent("1");
+    expect(screen.getByText("Connect timeouts").parentElement).toHaveTextContent("1");
+  });
+
+  it("shows retained static attempt evidence on the page observation", async () => {
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+
+    await screen.findByRole("heading", { name: "Static fetch attempts" });
+    expect(await screen.findByText("Connection timed out")).toBeInTheDocument();
+    expect(screen.getAllByText(/Connection Timeout/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Succeeded")).toBeInTheDocument();
+  });
+
   it("renders status badges, empty states, and URL-backed page filters", async () => {
     renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=pages");
 
@@ -650,6 +721,9 @@ const scanFixture: Scan = {
     max_depth: 3,
     respect_robots_txt: false,
     request_timeout_seconds: 10,
+    static_max_attempts: 2,
+    static_retry_initial_delay_ms: 500,
+    static_retry_max_delay_ms: 5000,
     max_html_response_bytes: 2000000,
     concurrent_requests_per_host: 2,
     delay_between_requests_ms: 0,
@@ -688,6 +762,13 @@ const scanFixture: Scan = {
   rendered_skipped_count: 0,
   rendered_blocked_request_count: 0,
   rendered_artifact_count: 0,
+  static_request_attempt_count: 1,
+  static_retry_request_count: 0,
+  static_recovered_after_retry_count: 0,
+  static_retry_exhausted_count: 0,
+  static_connection_timeout_count: 0,
+  static_read_timeout_count: 0,
+  static_connection_error_count: 0,
   stop_reason: "max_pages",
   fatal_error_message: null
 };
@@ -977,6 +1058,9 @@ const siteFixture = {
     max_depth: 3,
     respect_robots_txt: false,
     request_timeout_seconds: 10,
+    static_max_attempts: 2,
+    static_retry_initial_delay_ms: 500,
+    static_retry_max_delay_ms: 5000,
     max_html_response_bytes: 2000000,
     concurrent_requests_per_host: 2,
     delay_between_requests_ms: 0,
