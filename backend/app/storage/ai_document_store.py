@@ -28,6 +28,7 @@ class LocalAiDocumentStore:
         storage_key = f"{sha[:2]}/{sha[2:4]}/{sha}.txt.gz"
         path = self.root / storage_key
         path.parent.mkdir(parents=True, exist_ok=True)
+        created_file = not path.exists()
         path.write_bytes(compressed)
         blob = AiDocumentBlob(
             sha256=sha,
@@ -39,7 +40,12 @@ class LocalAiDocumentStore:
             stored_byte_size=len(compressed),
         )
         db.add(blob)
-        db.flush()
+        try:
+            db.flush()
+        except Exception:
+            if created_file:
+                path.unlink(missing_ok=True)
+            raise
         return blob
 
     def get(self, blob: AiDocumentBlob) -> bytes:

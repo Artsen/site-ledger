@@ -5,10 +5,11 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from time import perf_counter
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
@@ -40,11 +41,17 @@ from app.schemas.ai_documents import (
     AiDocumentSourceRead,
     AiSourceDeletePreview,
 )
-from app.services.repositories import get_or_create_resource
+from app.services.ai_document_persistence import (
+    AiDocumentBlobResolver,
+    AiDocumentInventoryAccumulator,
+    AiDocumentInventoryOrigin,
+    AiDocumentPreviousSnapshotResolver,
+    AiDocumentResourceResolver,
+    link_refresh_children,
+)
 from app.services.source_management import (
     DuplicateSourceError,
     _delete_unreferenced_source_resources,
-    upsert_source_entry,
 )
 from app.storage.ai_document_store import LocalAiDocumentStore
 
@@ -56,6 +63,34 @@ class _QueuedDocument:
     role: str
     explicit_relation: str | None
     ancestors: frozenset[str]
+
+
+@dataclass
+class _RefreshStats:
+    document_discovered_count: int = 0
+    document_fetched_count: int = 0
+    document_saved_count: int = 0
+    document_unchanged_count: int = 0
+    document_changed_count: int = 0
+    document_failed_count: int = 0
+    document_skipped_count: int = 0
+    reference_count: int = 0
+    cycle_count: int = 0
+    total_network_bytes: int = 0
+    total_retained_bytes: int = 0
+
+    def apply(self, evidence: AiDocumentRefresh) -> None:
+        evidence.document_discovered_count = self.document_discovered_count
+        evidence.document_fetched_count = self.document_fetched_count
+        evidence.document_saved_count = self.document_saved_count
+        evidence.document_unchanged_count = self.document_unchanged_count
+        evidence.document_changed_count = self.document_changed_count
+        evidence.document_failed_count = self.document_failed_count
+        evidence.document_skipped_count = self.document_skipped_count
+        evidence.reference_count = self.reference_count
+        evidence.cycle_count = self.cycle_count
+        evidence.total_network_bytes = self.total_network_bytes
+        evidence.total_retained_bytes = self.total_retained_bytes
 
 
 class AiDocumentCancellationRequested(RuntimeError):
@@ -271,12 +306,23 @@ async def execute_ai_document_refresh(
     should_cancel: Callable[[], bool] | None = None,
     progress_callback: Callable[[SourceRefresh], None] | None = None,
     store: LocalAiDocumentStore | None = None,
+    performance_metrics: dict[str, float | int] | None = None,
 ) -> AiDocumentRefresh:
+    refresh_started = perf_counter()
     source = source_refresh.url_source
     if source.source_type != "ai_document" or not source.normalized_source_url:
         raise ValueError("AI Document Source entry URL is missing.")
     settings = AiDocumentSettings.model_validate(source.settings_json or {})
     store = store or LocalAiDocumentStore(get_settings().ai_document_storage_root)
+    scope_engine = ScopeEngine(
+        ScopeConfig.from_dict(source.website_property.scope_config),
+        source.website_property.base_url,
+    )
+    resource_resolver = AiDocumentResourceResolver(db)
+    previous_resolver = AiDocumentPreviousSnapshotResolver(db, source.id)
+    blob_resolver = AiDocumentBlobResolver(store)
+    inventory = AiDocumentInventoryAccumulator()
+    stats = _RefreshStats()
     evidence = AiDocumentRefresh(
         source_refresh_id=source_refresh.id,
         status="running",
@@ -289,9 +335,7 @@ async def execute_ai_document_refresh(
         [_QueuedDocument(source.normalized_source_url, 0, "root_index", "llms-txt", frozenset())]
     )
     fetched: dict[str, AiDocumentSnapshot] = {}
-    pending_references: list[AiDocumentReference] = []
     index_count = 0
-    seen_inventory: set[str] = set()
     while queue and len(fetched) < settings.max_total_documents:
         if should_cancel and should_cancel():
             evidence.status = source_refresh.status = "cancelled"
@@ -301,8 +345,8 @@ async def execute_ai_document_refresh(
         normalized = normalize_url(item.url, source.website_property.base_url).normalized_url
         if normalized in fetched:
             continue
-        resource = get_or_create_resource(db, normalize_url(normalized))
-        previous = _previous_snapshot(db, source.id, resource.id)
+        resource = resource_resolver.resolve(normalize_url(normalized))
+        previous = previous_resolver.get(resource)
         headers = _conditional_headers(previous)
         try:
             result = await _fetch_document(
@@ -314,8 +358,8 @@ async def execute_ai_document_refresh(
                 allow_external=settings.follow_external_documents,
                 should_cancel=should_cancel,
             )
-            evidence.total_network_bytes += result.network_bytes_transferred
-            if evidence.total_network_bytes > settings.max_total_network_bytes:
+            stats.total_network_bytes += result.network_bytes_transferred
+            if stats.total_network_bytes > settings.max_total_network_bytes:
                 evidence.stop_reason = "max_total_network_bytes"
                 _validation(
                     db, evidence, "warning", "budget_exhaustion", "Network byte budget was reached."
@@ -359,13 +403,12 @@ async def execute_ai_document_refresh(
             if (
                 accepted
                 and content is not None
-                and evidence.total_retained_bytes + len(content)
-                <= settings.max_total_retained_bytes
+                and stats.total_retained_bytes + len(content) <= settings.max_total_retained_bytes
             ):
-                blob = reused_blob or store.put(
+                blob = reused_blob or blob_resolver.put(
                     db, content, _mime(result.content_type), result.encoding or "utf-8"
                 )
-                evidence.total_retained_bytes += len(content)
+                stats.total_retained_bytes += len(content)
             elif accepted and content is not None:
                 _validation(
                     db,
@@ -410,13 +453,13 @@ async def execute_ai_document_refresh(
             db.add(snapshot)
             db.flush()
             fetched[normalized] = snapshot
-            evidence.document_discovered_count += 1
-            evidence.document_fetched_count += 1
-            evidence.document_saved_count += int(blob is not None)
-            evidence.document_unchanged_count += int(change_state == "unchanged")
-            evidence.document_changed_count += int(change_state in {"new", "changed"})
+            stats.document_discovered_count += 1
+            stats.document_fetched_count += 1
+            stats.document_saved_count += int(blob is not None)
+            stats.document_unchanged_count += int(change_state == "unchanged")
+            stats.document_changed_count += int(change_state in {"new", "changed"})
             if not successful_response:
-                evidence.document_skipped_count += 1
+                stats.document_skipped_count += 1
                 if result.http_status == 404 and item.depth == 0:
                     _validation(
                         db,
@@ -427,7 +470,7 @@ async def execute_ai_document_refresh(
                         snapshot=snapshot,
                     )
                 else:
-                    evidence.document_failed_count += 1
+                    stats.document_failed_count += 1
                     _validation(
                         db,
                         evidence,
@@ -458,11 +501,35 @@ async def execute_ai_document_refresh(
                         warning["message"],
                         snapshot=snapshot,
                     )
-                for parsed_ref in parsed.references[: settings.max_references_per_document]:
+                parsed_references = parsed.references[: settings.max_references_per_document]
+                normalized_references = []
+                for parsed_ref in parsed_references:
+                    try:
+                        normalized_references.append(
+                            normalize_url(
+                                parsed_ref.resolved_url,
+                                snapshot.final_url or snapshot.requested_url,
+                            )
+                        )
+                    except (UrlNormalizationError, ValueError):
+                        continue
+                resource_resolver.resolve_many(normalized_references)
+                previous_resolver.prime(
+                    resource_resolver.cache[item.normalized_url] for item in normalized_references
+                )
+                for parsed_ref in parsed_references:
                     reference, should_fetch = _reference(
-                        db, source, evidence, snapshot, parsed_ref, item, fetched, seen_inventory
+                        db,
+                        snapshot,
+                        parsed_ref,
+                        item,
+                        settings,
+                        scope_engine,
+                        resource_resolver,
+                        inventory,
                     )
-                    pending_references.append(reference)
+                    stats.reference_count += 1
+                    stats.cycle_count += int(reference.forms_cycle)
                     if (
                         should_fetch
                         and item.depth < settings.max_nesting_depth
@@ -480,11 +547,12 @@ async def execute_ai_document_refresh(
                             )
                         )
             elif kind in {"html_page_reference", "unsupported_binary", "unknown"}:
-                evidence.document_skipped_count += 1
-            if progress_callback:
-                source_refresh.discovered_entry_count = evidence.document_discovered_count
-                source_refresh.accepted_entry_count = evidence.document_saved_count
-                source_refresh.rejected_entry_count = evidence.document_failed_count
+                stats.document_skipped_count += 1
+            if progress_callback and stats.document_discovered_count % 50 == 0:
+                stats.apply(evidence)
+                source_refresh.discovered_entry_count = stats.document_discovered_count
+                source_refresh.accepted_entry_count = stats.document_saved_count
+                source_refresh.rejected_entry_count = stats.document_failed_count
                 progress_callback(source_refresh)
         except AiDocumentCancellationRequested:
             evidence.status = source_refresh.status = "cancelled"
@@ -512,8 +580,8 @@ async def execute_ai_document_refresh(
             db.add(snapshot)
             db.flush()
             fetched[normalized] = snapshot
-            evidence.document_discovered_count += 1
-            evidence.document_failed_count += 1
+            stats.document_discovered_count += 1
+            stats.document_failed_count += 1
             _validation(
                 db,
                 evidence,
@@ -527,13 +595,13 @@ async def execute_ai_document_refresh(
         _validation(
             db, evidence, "warning", "budget_exhaustion", "Document count limit was reached."
         )
-    for reference in pending_references:
-        child = fetched.get(reference.normalized_target_url or "")
-        if child:
-            reference.child_snapshot_id = child.id
-    _mark_inventory_current(db, source.id, seen_inventory)
-    evidence.reference_count = len(pending_references)
-    evidence.cycle_count = sum(int(reference.forms_cycle) for reference in pending_references)
+    db.flush()
+    link_refresh_children(db, evidence.id)
+    inventory_started = perf_counter()
+    inventory.persist(db, source, evidence)
+    inventory_seconds = perf_counter() - inventory_started
+    resource_resolver.touch_resolved()
+    stats.apply(evidence)
     warning_count = (
         db.scalar(
             select(func.count(AiDocumentValidation.id)).where(
@@ -551,7 +619,21 @@ async def execute_ai_document_refresh(
     source_refresh.accepted_entry_count = evidence.document_saved_count
     source_refresh.rejected_entry_count = evidence.document_failed_count
     source_refresh.warnings_json = [{"warning_count": warning_count}]
+    if progress_callback:
+        progress_callback(source_refresh)
     db.flush()
+    if performance_metrics is not None:
+        performance_metrics.update(
+            {
+                "inventory_seconds": inventory_seconds,
+                "total_seconds": perf_counter() - refresh_started,
+                "peak_batch_size": max(
+                    resource_resolver.peak_batch_size,
+                    previous_resolver.peak_batch_size,
+                    inventory.peak_batch_size,
+                ),
+            }
+        )
     return evidence
 
 
@@ -701,13 +783,13 @@ def delete_ai_source(db: Session, source_id: int, store: LocalAiDocumentStore) -
 
 def _reference(
     db: Session,
-    source: UrlSource,
-    evidence: AiDocumentRefresh,
     snapshot: AiDocumentSnapshot,
     parsed_ref: ParsedAiReference,
     item: _QueuedDocument,
-    fetched: dict[str, AiDocumentSnapshot],
-    seen_inventory: set[str],
+    settings: AiDocumentSettings,
+    scope_engine: ScopeEngine,
+    resource_resolver: AiDocumentResourceResolver,
+    inventory: AiDocumentInventoryAccumulator,
 ) -> tuple[AiDocumentReference, bool]:
     raw_url = parsed_ref.raw_url
     resolved = parsed_ref.resolved_url
@@ -715,11 +797,8 @@ def _reference(
         normalized = normalize_url(
             resolved, snapshot.final_url or snapshot.requested_url
         ).normalized_url
-        scope = ScopeEngine(
-            ScopeConfig.from_dict(source.website_property.scope_config),
-            source.website_property.base_url,
-        ).evaluate(normalized)
-        resource = get_or_create_resource(db, normalize_url(normalized))
+        scope = scope_engine.evaluate(normalized)
+        resource = resource_resolver.resolve(normalize_url(normalized))
         kind, rule = classify_ai_document(normalized, None, parent_kind="llms_index")
         forms_cycle = normalized in item.ancestors or normalized == snapshot.requested_url
         role = (
@@ -750,7 +829,6 @@ def _reference(
             forms_cycle=forms_cycle,
         )
         db.add(reference)
-        db.flush()
         eligible_inventory = scope.in_scope and kind not in {
             "llms_index",
             "llms_full",
@@ -758,52 +836,33 @@ def _reference(
             "external_reference",
         }
         if eligible_inventory:
-            prior_entry = db.scalar(
-                select(UrlSourceEntry).where(
-                    UrlSourceEntry.url_source_id == source.id,
-                    UrlSourceEntry.normalized_url == normalized,
-                )
-            )
-            origins = []
-            if prior_entry and prior_entry.last_refresh_id == evidence.source_refresh_id:
-                origins = list(prior_entry.source_metadata_json.get("ai_origins", []))
-            origins.append(
-                {
-                    "parent_snapshot_id": snapshot.id,
-                    "parent_url": snapshot.final_url or snapshot.requested_url,
-                    "section": reference.section_title,
-                    "label": reference.label,
-                    "description": reference.description,
-                    "position": reference.position,
-                    "optional": reference.optional,
-                    "discovery_depth": reference.discovery_depth,
-                    "raw_url": raw_url,
-                    "resolved_url": resolved,
-                }
-            )
-            entry, _ = upsert_source_entry(
-                db,
-                source,
+            inventory.add(
                 normalized,
-                site=source.website_property,
-                source_type="ai_document",
-                refresh_id=evidence.source_refresh_id,
-                metadata={
-                    "ai_refresh_id": evidence.id,
-                    "ai_origins": origins,
-                },
+                AiDocumentInventoryOrigin(
+                    resource_id=resource.id,
+                    raw_url=raw_url,
+                    scope_decision=scope.decision,
+                    values={
+                        "parent_snapshot_id": snapshot.id,
+                        "parent_url": snapshot.final_url or snapshot.requested_url,
+                        "section": reference.section_title,
+                        "label": reference.label,
+                        "description": reference.description,
+                        "position": reference.position,
+                        "optional": reference.optional,
+                        "discovery_depth": reference.discovery_depth,
+                        "raw_url": raw_url,
+                        "resolved_url": resolved,
+                    },
+                ),
             )
-            reference.inventory_entry_id = entry.id
-            if entry.normalized_url:
-                seen_inventory.add(entry.normalized_url)
-        source_settings = AiDocumentSettings.model_validate(source.settings_json or {})
         should_fetch = (
-            (scope.in_scope or source_settings.follow_external_documents)
+            (scope.in_scope or settings.follow_external_documents)
             and not forms_cycle
             and (
                 kind == "llms_index"
                 or (
-                    source_settings.save_declared_documents
+                    settings.save_declared_documents
                     and kind
                     in {
                         "llms_full",
@@ -837,7 +896,6 @@ def _reference(
             discovery_depth=item.depth + 1,
         )
         db.add(reference)
-        db.flush()
         return reference, False
 
 
@@ -984,22 +1042,6 @@ def _int_header(headers: dict[str, str], name: str) -> int | None:
         return None
 
 
-def _previous_snapshot(db: Session, source_id: int, resource_id: int) -> AiDocumentSnapshot | None:
-    return db.scalar(
-        select(AiDocumentSnapshot)
-        .join(AiDocumentRefresh)
-        .join(SourceRefresh)
-        .options(joinedload(AiDocumentSnapshot.blob))
-        .where(
-            SourceRefresh.url_source_id == source_id,
-            AiDocumentSnapshot.resource_id == resource_id,
-            AiDocumentSnapshot.retained_blob_id.is_not(None),
-        )
-        .order_by(AiDocumentSnapshot.id.desc())
-        .limit(1)
-    )
-
-
 def _conditional_headers(previous: AiDocumentSnapshot | None) -> dict[str, str]:
     if previous is None:
         return {}
@@ -1028,14 +1070,3 @@ def _effective_content(
         )
         return result.content, None, state
     return result.content, None, "new"
-
-
-def _mark_inventory_current(db: Session, source_id: int, seen: set[str]) -> None:
-    query = update(UrlSourceEntry).where(
-        UrlSourceEntry.url_source_id == source_id, UrlSourceEntry.is_current.is_(True)
-    )
-    if seen:
-        query = query.where(
-            or_(UrlSourceEntry.normalized_url.is_(None), UrlSourceEntry.normalized_url.not_in(seen))
-        )
-    db.execute(query.values(is_current=False))
