@@ -14,6 +14,7 @@ from app.models import (
     RenderedObservation,
     RenderedPageError,
     ResourceOccurrence,
+    ResourceReferenceOccurrence,
     ResourceSnapshot,
     Scan,
     ScanSeed,
@@ -35,7 +36,10 @@ class DeletionImpact:
     scan: Scan
     snapshots: int
     link_occurrences: int
+    resource_reference_occurrences: int
+    discovered_resource_ids: list[int]
     resource_ids: list[int]
+    observed_resource_ids: list[int]
     referenced_blobs: list[ContentBlob]
     deletable_blobs: list[ContentBlob]
     shared_blob_count: int
@@ -74,6 +78,9 @@ def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None
             status=scan.status,
             snapshots=0,
             link_occurrences=0,
+            resource_reference_occurrences=0,
+            resources_observed=0,
+            resources_discovered=0,
             unique_resources=0,
             html_blobs_referenced=0,
             exclusive_html_blobs=0,
@@ -91,6 +98,9 @@ def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None
             status=scan.status,
             snapshots=0,
             link_occurrences=0,
+            resource_reference_occurrences=0,
+            resources_observed=0,
+            resources_discovered=0,
             unique_resources=0,
             html_blobs_referenced=0,
             exclusive_html_blobs=0,
@@ -108,6 +118,9 @@ def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None
         status=scan.status,
         snapshots=impact.snapshots,
         link_occurrences=impact.link_occurrences,
+        resource_reference_occurrences=impact.resource_reference_occurrences,
+        resources_observed=len(impact.observed_resource_ids),
+        resources_discovered=len(impact.discovered_resource_ids),
         unique_resources=len(impact.resource_ids),
         html_blobs_referenced=len(impact.referenced_blobs),
         exclusive_html_blobs=len(impact.deletable_blobs),
@@ -148,6 +161,11 @@ def delete_scan(
     )
     db.execute(
         delete(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id.in_(snapshot_ids))
+    )
+    db.execute(
+        delete(ResourceReferenceOccurrence).where(
+            ResourceReferenceOccurrence.source_snapshot_id.in_(snapshot_ids)
+        )
     )
     db.execute(
         delete(RenderedNetworkEntry).where(
@@ -224,6 +242,7 @@ def delete_scan(
         deleted_scan_id=scan_id,
         snapshots_deleted=impact.snapshots,
         link_occurrences_deleted=impact.link_occurrences,
+        resource_reference_occurrences_deleted=impact.resource_reference_occurrences,
         resources_deleted=len(deleted_resource_ids),
         html_blob_records_deleted=len(impact.deletable_blobs),
         html_blob_files_deleted=files_deleted,
@@ -260,6 +279,14 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         )
         or 0
     )
+    resource_reference_occurrences = (
+        db.scalar(
+            select(func.count(ResourceReferenceOccurrence.id)).where(
+                ResourceReferenceOccurrence.source_snapshot_id.in_(snapshot_ids)
+            )
+        )
+        or 0
+    )
     referenced_blob_ids = list(
         db.scalars(
             select(distinct(ResourceSnapshot.html_blob_id)).where(
@@ -287,7 +314,26 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         )
         if resource_id is not None
     ]
-    resource_ids = sorted(set(snapshot_resource_ids + seed_resource_ids))
+    observed_resource_ids = [
+        resource_id
+        for resource_id in db.scalars(
+            select(distinct(ResourceSnapshot.resource_id)).where(
+                ResourceSnapshot.scan_id == scan.id,
+                ResourceSnapshot.representation_kind.not_in(("html_page", "unknown")),
+            )
+        )
+        if resource_id is not None
+    ]
+    discovered_resource_ids = [
+        resource_id
+        for resource_id in db.scalars(
+            select(distinct(ResourceReferenceOccurrence.target_resource_id)).where(
+                ResourceReferenceOccurrence.source_snapshot_id.in_(snapshot_ids)
+            )
+        )
+        if resource_id is not None
+    ]
+    resource_ids = sorted(set(snapshot_resource_ids + seed_resource_ids + discovered_resource_ids))
     referenced_blobs = (
         list(db.scalars(select(ContentBlob).where(ContentBlob.id.in_(referenced_blob_ids))))
         if referenced_blob_ids
@@ -364,7 +410,10 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         scan=scan,
         snapshots=snapshots,
         link_occurrences=link_occurrences,
+        resource_reference_occurrences=resource_reference_occurrences,
+        discovered_resource_ids=discovered_resource_ids,
         resource_ids=resource_ids,
+        observed_resource_ids=observed_resource_ids,
         referenced_blobs=referenced_blobs,
         deletable_blobs=deletable_blobs,
         shared_blob_count=len(referenced_blobs) - len(deletable_blobs),
@@ -405,6 +454,13 @@ def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int
             )
         )
     )
+    still_resource_referenced = set(
+        db.scalars(
+            select(distinct(ResourceReferenceOccurrence.target_resource_id)).where(
+                ResourceReferenceOccurrence.target_resource_id.in_(candidate_resource_ids)
+            )
+        )
+    )
     still_source_entry = set(
         db.scalars(
             select(distinct(UrlSourceEntry.resource_id)).where(
@@ -430,6 +486,7 @@ def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int
         set(candidate_resource_ids)
         - still_snapshotted
         - still_targeted
+        - still_resource_referenced
         - still_source_entry
         - still_seeded
         - still_site_pages
