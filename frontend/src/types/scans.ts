@@ -498,6 +498,11 @@ export type Snapshot = {
   declared_content_length?: number | null;
   response_body_state?: string | null;
   inspected_prefix_byte_count?: number;
+  website_property_id: number | null;
+  website_property_name: string | null;
+  site_page_id: number | null;
+  has_persistent_page: boolean;
+  is_html_page: boolean;
 };
 
 export type PersistentPage = {

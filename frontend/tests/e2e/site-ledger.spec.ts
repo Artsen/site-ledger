@@ -134,7 +134,7 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   ).toBeVisible();
 
   await page.getByText("https://example.com/pricing").click();
-  await expect(page.getByText("Page details")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pricing" })).toBeVisible();
   await expect(page.getByText("Redirect chain")).toBeVisible();
 
   await page.getByRole("tab", { name: "Head" }).click();
@@ -163,7 +163,7 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
     ),
   ).toBeUndefined();
 
-  await page.getByRole("link", { name: "Back to page results" }).click();
+  await page.getByRole("link", { name: "Back to Scan Pages" }).click();
   await expect(page).toHaveURL(/\/scans\/1\?tab=pages/);
 
   await page.getByRole("link", { name: "All Scans" }).click();
@@ -270,6 +270,55 @@ test("numbered pagination stays URL-backed and isolated between Scan tabs", asyn
   await expect(page).toHaveURL(/tab=resources/);
   await page.goForward();
   await expect(page).toHaveURL(/tab=rendered/);
+});
+
+test("saved-Site observations link to their exact Page workspace while ad hoc observations do not", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/snapshots/9", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...snapshot,
+        scan_id: 2,
+        website_property_id: 3,
+        website_property_name: "Example Site",
+        site_page_id: 12,
+        has_persistent_page: true,
+        is_html_page: true,
+      }),
+    });
+  });
+  await page.route("**/api/snapshots/10", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...snapshot,
+        id: 10,
+        scan_id: 1,
+        website_property_id: null,
+        website_property_name: null,
+        site_page_id: null,
+        has_persistent_page: false,
+        is_html_page: true,
+      }),
+    });
+  });
+
+  await page.goto("/scans/2/pages/9");
+  const workspaceAction = page.getByRole("link", { name: "Open Page workspace for Pricing" });
+  await expect(workspaceAction).toBeVisible();
+  await expect(workspaceAction).toHaveAttribute("href", "/sites/3/pages/2");
+  await page.getByRole("tab", { name: "Rendered" }).click();
+  await expect(workspaceAction).toBeVisible();
+  await workspaceAction.click();
+  await expect(page).toHaveURL(/\/sites\/3\/pages\/2$/);
+  await expect(page.getByRole("heading", { name: "Pricing" })).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/scans\/2\/pages\/9\?tab=rendered/);
+  await page.goto("/scans/1/pages/10");
+  await expect(page.getByText(/ad hoc Scan and has no Site-scoped Page workspace/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /Open Page workspace/ })).toHaveCount(0);
 });
 
 async function mockApi(page: Page) {
@@ -654,6 +703,13 @@ async function mockApi(page: Page) {
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify(snapshot),
+    });
+  });
+
+  await page.route("**/api/snapshots/9/rendered", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(renderedObservation),
     });
   });
 
@@ -1049,6 +1105,11 @@ const snapshot = {
   id: 9,
   scan_id: 1,
   resource_id: 2,
+  website_property_id: null,
+  website_property_name: null,
+  site_page_id: null,
+  has_persistent_page: false,
+  is_html_page: true,
   requested_url: "https://example.com/pricing-old",
   final_url: "https://example.com/pricing",
   http_status: 200,
@@ -1087,6 +1148,50 @@ const snapshot = {
   fetch_state: "fetched",
   error_type: null,
   error_message: null,
+};
+
+const renderedObservation = {
+  id: 31,
+  snapshot_id: 9,
+  capture_state: "completed_with_warnings",
+  started_at: "2026-08-06T01:00:00Z",
+  finished_at: "2026-08-06T01:00:01Z",
+  requested_url: "https://example.com/pricing",
+  final_url: "https://example.com/pricing",
+  navigation_http_status: 200,
+  document_title: "Pricing",
+  browser_engine: "chromium",
+  browser_version: "151",
+  playwright_version: "1.62",
+  renderer_version: "1",
+  browser_policy_version: "1",
+  capture_schema_version: "1",
+  user_agent: "Chromium",
+  viewport_width: 1440,
+  viewport_height: 900,
+  device_scale_factor: 1,
+  locale: "en-US",
+  timezone_id: "UTC",
+  color_scheme: "light",
+  reduced_motion: "reduce",
+  readiness_state: "load",
+  load_event_reached: true,
+  fonts_ready_reached: true,
+  duration_ms: 450,
+  configuration_fingerprint: "a".repeat(64),
+  network_entry_count: 0,
+  blocked_request_count: 0,
+  console_message_count: 0,
+  page_error_count: 0,
+  warning_count: 1,
+  network_truncated: false,
+  console_truncated: false,
+  page_errors_truncated: false,
+  total_encoded_network_bytes: 0,
+  error_type: null,
+  error_message: null,
+  warnings_json: [],
+  artifacts: [],
 };
 
 function resourceItem(overrides: Record<string, unknown>) {

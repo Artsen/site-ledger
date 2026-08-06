@@ -269,6 +269,11 @@ class SnapshotRead(BaseModel):
     declared_content_length: int | None = None
     response_body_state: str | None = None
     inspected_prefix_byte_count: int = 0
+    website_property_id: int | None = None
+    website_property_name: str | None = None
+    site_page_id: int | None = None
+    has_persistent_page: bool = False
+    is_html_page: bool = False
 
     model_config = {"from_attributes": True}
 

@@ -23,6 +23,12 @@ skipped, redirected, revalidated, or successful result. Ad hoc scans and source-
 candidates do not create `SitePage` rows. The migration backfills distinct saved Site and observed
 resource pairs using the earliest retained observation time when available.
 
+The snapshot detail response resolves Page workspace context through the observation's own Scan.
+It reports the associated Site and matching `SitePage` in one read-only query. Observation views
+link to the workspace only for HTML Page evidence with that exact association; overlapping Sites,
+ad hoc Scans, missing legacy associations, and non-HTML Resources do not produce inferred links or
+create `SitePage` rows during reads.
+
 ## Workspace
 
 The persistent Page route provides URL-backed Overview, Scans, Links, and Notes tabs. Tabs load

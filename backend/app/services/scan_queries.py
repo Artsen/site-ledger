@@ -3,7 +3,15 @@ from typing import Any, Literal
 from sqlalchemy import Select, distinct, func, or_, select
 from sqlalchemy.orm import Session, aliased, joinedload
 
-from app.models import RenderedObservation, ResourceOccurrence, ResourceSnapshot, Scan, WebResource
+from app.models import (
+    RenderedObservation,
+    ResourceOccurrence,
+    ResourceSnapshot,
+    Scan,
+    SitePage,
+    WebResource,
+    WebsiteProperty,
+)
 from app.schemas.scans import (
     InboundLinkList,
     InboundLinkRead,
@@ -14,7 +22,47 @@ from app.schemas.scans import (
     PageList,
     PageRead,
     ScanHistory,
+    SnapshotRead,
 )
+
+
+def get_snapshot_detail(db: Session, snapshot_id: int) -> SnapshotRead | None:
+    row = db.execute(
+        select(
+            ResourceSnapshot,
+            Scan.website_property_id,
+            WebsiteProperty.name,
+            SitePage.id,
+        )
+        .join(Scan, Scan.id == ResourceSnapshot.scan_id)
+        .outerjoin(WebsiteProperty, WebsiteProperty.id == Scan.website_property_id)
+        .outerjoin(
+            SitePage,
+            (SitePage.website_property_id == Scan.website_property_id)
+            & (SitePage.resource_id == ResourceSnapshot.resource_id),
+        )
+        .options(joinedload(ResourceSnapshot.blob))
+        .where(ResourceSnapshot.id == snapshot_id)
+    ).one_or_none()
+    if row is None:
+        return None
+    snapshot, website_property_id, website_property_name, site_page_id = row
+    content_type = (snapshot.content_type or "").lower()
+    is_html_page = bool(
+        snapshot.representation_kind == "html_page"
+        or snapshot.html_blob_id is not None
+        or content_type.startswith("text/html")
+        or content_type.startswith("application/xhtml+xml")
+    )
+    result = SnapshotRead.model_validate(snapshot, from_attributes=True)
+    result.html_raw_byte_size = snapshot.blob.raw_byte_size if snapshot.blob else None
+    result.html_stored_byte_size = snapshot.blob.stored_byte_size if snapshot.blob else None
+    result.website_property_id = website_property_id
+    result.website_property_name = website_property_name
+    result.site_page_id = site_page_id
+    result.has_persistent_page = bool(is_html_page and site_page_id is not None)
+    result.is_html_page = is_html_page
+    return result
 
 
 def list_snapshot_outgoing_links(

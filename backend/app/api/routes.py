@@ -144,6 +144,7 @@ from app.services.resource_queries import (
 from app.services.scan_deletion import delete_scan as delete_scan_service
 from app.services.scan_deletion import preview_scan_deletion
 from app.services.scan_queries import (
+    get_snapshot_detail,
     list_scan_history,
     list_scan_pages,
     list_snapshot_inbound_links,
@@ -1437,12 +1438,9 @@ def list_errors(scan_id: int, db: DbSession) -> list[ResourceSnapshot]:
 
 @router.get("/snapshots/{snapshot_id}", response_model=SnapshotRead)
 def get_snapshot(snapshot_id: int, db: DbSession) -> SnapshotRead:
-    snapshot = db.get(ResourceSnapshot, snapshot_id)
-    if not snapshot:
+    result = get_snapshot_detail(db, snapshot_id)
+    if result is None:
         raise HTTPException(404, "Snapshot not found")
-    result = SnapshotRead.model_validate(snapshot, from_attributes=True)
-    result.html_raw_byte_size = snapshot.blob.raw_byte_size if snapshot.blob else None
-    result.html_stored_byte_size = snapshot.blob.stored_byte_size if snapshot.blob else None
     return result
 
 

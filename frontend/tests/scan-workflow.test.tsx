@@ -641,6 +641,67 @@ describe("scan history workflow", () => {
 });
 
 describe("page detail workflow", () => {
+  it("keeps the associated Site Page workspace action visible across observation tabs", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshotFixture,
+      website_property_id: 3,
+      website_property_name: "Example Site",
+      site_page_id: 12,
+      has_persistent_page: true,
+      is_html_page: true,
+    });
+    api.getRenderedObservation.mockResolvedValue(renderedObservationFixture);
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+
+    const actionName = "Open Page workspace for Example page";
+    const action = await screen.findByRole("link", { name: actionName });
+    expect(action).toHaveAttribute("href", "/sites/3/pages/2");
+    expect(screen.getByText("Example Site")).toBeInTheDocument();
+    expect(screen.getByText(/This observation records what Site Ledger found/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Scan Pages" })).toBeInTheDocument();
+    expect(screen.getByTestId("observation-header-actions")).toHaveClass("flex-wrap");
+
+    for (const tabName of ["Head", "Outgoing links", "Inbound links", "HTML", "Rendered"]) {
+      fireEvent.click(screen.getByRole("tab", { name: new RegExp(tabName, "i") }));
+      expect(screen.getByRole("link", { name: actionName })).toHaveAttribute("href", "/sites/3/pages/2");
+    }
+  });
+
+  it("explains ad hoc and missing legacy Page workspace associations", async () => {
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+    expect(await screen.findByText(/ad hoc Scan and has no Site-scoped Page workspace/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open Page workspace/ })).not.toBeInTheDocument();
+
+    cleanup();
+    api.getSnapshot.mockResolvedValue({
+      ...snapshotFixture,
+      website_property_id: 8,
+      website_property_name: "Legacy Site",
+      site_page_id: null,
+      has_persistent_page: false,
+    });
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+    expect(await screen.findByText(/persistent Page workspace association is unavailable/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open Page workspace/ })).not.toBeInTheDocument();
+  });
+
+  it("does not offer a Page workspace for a non-HTML Resource observation", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshotFixture,
+      content_type: "application/pdf",
+      representation_kind: "document",
+      website_property_id: 3,
+      website_property_name: "Example Site",
+      site_page_id: 12,
+      has_persistent_page: false,
+      is_html_page: false,
+    });
+    renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
+    expect(await screen.findByText(/non-HTML Resource and does not have a Page workspace/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open Page workspace/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open live Resource" })).toBeInTheDocument();
+  });
+
   it("renders redirect chains as ordered fields", async () => {
     renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
 
@@ -694,15 +755,7 @@ describe("page detail workflow", () => {
   });
 
   it("inspects a browser-rendered observation without executing its DOM", async () => {
-    api.getRenderedObservation.mockResolvedValue({
-      id: 7, snapshot_id: 9, capture_state: "completed", started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z",
-      requested_url: "https://example.com/", final_url: "https://example.com/", navigation_http_status: 200, document_title: "Rendered",
-      browser_engine: "chromium", browser_version: "151", playwright_version: "1.62", renderer_version: "1", browser_policy_version: "1", capture_schema_version: "1",
-      user_agent: "Chromium", viewport_width: 1440, viewport_height: 900, device_scale_factor: 1, locale: "en-US", timezone_id: "UTC", color_scheme: "light", reduced_motion: "reduce",
-      readiness_state: "load", load_event_reached: true, fonts_ready_reached: true, duration_ms: 500, configuration_fingerprint: "a".repeat(64), network_entry_count: 1,
-      blocked_request_count: 0, console_message_count: 0, page_error_count: 0, warning_count: 0, network_truncated: false, console_truncated: false,
-      page_errors_truncated: false, total_encoded_network_bytes: 1200, error_type: null, error_message: null, warnings_json: [], artifacts: []
-    });
+    api.getRenderedObservation.mockResolvedValue(renderedObservationFixture);
     renderRoute(<PageDetailPage />, "/scans/:scanId/pages/:snapshotId", "/scans/1/pages/9");
     fireEvent.click(await screen.findByRole("tab", { name: "Rendered" }));
     expect(await screen.findByText(/chromium 151/i)).toBeInTheDocument();
@@ -933,7 +986,22 @@ const snapshotFixture: Snapshot = {
   etag: '"abc"',
   last_modified: "Wed, 05 Aug 2026 00:00:00 GMT",
   cache_control: null,
-  vary_header: null
+  vary_header: null,
+  website_property_id: null,
+  website_property_name: null,
+  site_page_id: null,
+  has_persistent_page: false,
+  is_html_page: true
+};
+
+const renderedObservationFixture = {
+  id: 7, snapshot_id: 9, capture_state: "completed", started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z",
+  requested_url: "https://example.com/", final_url: "https://example.com/", navigation_http_status: 200, document_title: "Rendered",
+  browser_engine: "chromium", browser_version: "151", playwright_version: "1.62", renderer_version: "1", browser_policy_version: "1", capture_schema_version: "1",
+  user_agent: "Chromium", viewport_width: 1440, viewport_height: 900, device_scale_factor: 1, locale: "en-US", timezone_id: "UTC", color_scheme: "light", reduced_motion: "reduce",
+  readiness_state: "load", load_event_reached: true, fonts_ready_reached: true, duration_ms: 500, configuration_fingerprint: "a".repeat(64), network_entry_count: 1,
+  blocked_request_count: 0, console_message_count: 0, page_error_count: 0, warning_count: 0, network_truncated: false, console_truncated: false,
+  page_errors_truncated: false, total_encoded_network_bytes: 1200, error_type: null, error_message: null, warnings_json: [], artifacts: []
 };
 
 const linkFixtures = [
