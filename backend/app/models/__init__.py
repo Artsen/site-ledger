@@ -33,6 +33,11 @@ from app.models.resources import (
 )
 
 __all__ = [
+    "AiDocumentBlob",
+    "AiDocumentReference",
+    "AiDocumentRefresh",
+    "AiDocumentSnapshot",
+    "AiDocumentValidation",
     "BackgroundJob",
     "ContentBlob",
     "HtmlParseAnchor",
@@ -63,3 +68,10 @@ __all__ = [
     "RenderedObservation",
     "RenderedPageError",
 ]
+from app.models.ai_documents import (
+    AiDocumentBlob,
+    AiDocumentReference,
+    AiDocumentRefresh,
+    AiDocumentSnapshot,
+    AiDocumentValidation,
+)
