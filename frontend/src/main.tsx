@@ -15,6 +15,7 @@ import { SitesPage } from "./pages/SitesPage";
 import { NewScanPage } from "./pages/NewScanPage";
 import { AiDocumentEvidencePage } from "./pages/AiDocumentEvidencePage";
 import { AiDocumentSourcePage } from "./pages/AiDocumentSourcePage";
+import { LinkComparisonDetailPage, PageComparisonDetailPage, ResourceComparisonDetailPage } from "./pages/ComparisonDetailPages";
 import "./styles/index.css";
 
 const router = createBrowserRouter([
@@ -27,6 +28,9 @@ const router = createBrowserRouter([
       { path: "sites/new", element: <SiteFormPage mode="create" /> },
       { path: "sites/:siteId", element: <SiteDetailPage /> },
       { path: "sites/:siteId/pages/:resourceId", element: <PersistentPageDetailPage /> },
+      { path: "sites/:siteId/comparisons/:comparisonId/pages/:resourceId", element: <PageComparisonDetailPage /> },
+      { path: "sites/:siteId/comparisons/:comparisonId/resources/:resourceId", element: <ResourceComparisonDetailPage /> },
+      { path: "sites/:siteId/comparisons/:comparisonId/links/:sourceResourceId/:targetResourceId", element: <LinkComparisonDetailPage /> },
       { path: "sites/:siteId/resources/:resourceId", element: <ResourceDetailPage scope="site" /> },
       { path: "sites/:siteId/edit", element: <SiteFormPage mode="edit" /> },
       { path: "ai-document-sources/:sourceId", element: <AiDocumentSourcePage /> },

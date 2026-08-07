@@ -6,6 +6,7 @@ export type Job = {
   priority: number;
   scan_id: number | null;
   source_refresh_id: number | null;
+  scan_comparison_id: number | null;
   website_property_id: number | null;
   dedupe_key: string;
   payload_json: Record<string, unknown>;
