@@ -1,3 +1,11 @@
+from app.models.category_rules import (
+    PageCategoryAssignmentSupport,
+    PageCategoryAutomaticExclusion,
+    PageCategoryRule,
+    PageCategoryRuleCondition,
+    PageCategoryRuleRevision,
+    PageCategoryRuleRun,
+)
 from app.models.projections import (
     ScanLinkProjection,
     ScanPageProjection,
@@ -55,6 +63,12 @@ __all__ = [
     "Note",
     "PageCategory",
     "PageCategoryAssignment",
+    "PageCategoryAssignmentSupport",
+    "PageCategoryAutomaticExclusion",
+    "PageCategoryRule",
+    "PageCategoryRuleCondition",
+    "PageCategoryRuleRevision",
+    "PageCategoryRuleRun",
     "ResourceOccurrence",
     "ResourceReferenceOccurrence",
     "ResourceSnapshot",

@@ -10,7 +10,9 @@ dependencies = [
   "markdown-it-py>=3.0,<4",
   "pydantic-settings>=2.4",
   "playwright>=1.55",
+  "regex>=2024.11.6",
   "sqlalchemy>=2.0",
+  "tzdata>=2025.2; platform_system == 'Windows'",
   "uvicorn>=0.30",
 ]
 

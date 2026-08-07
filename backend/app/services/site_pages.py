@@ -4,7 +4,14 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import PageCategory, PageCategoryAssignment, Scan, SitePage, WebResource
+from app.models import (
+    PageCategory,
+    PageCategoryAssignment,
+    PageCategoryAssignmentSupport,
+    Scan,
+    SitePage,
+    WebResource,
+)
 from app.schemas.page_workspaces import (
     BulkMutationResult,
     BulkPageCategories,
@@ -58,26 +65,68 @@ def update_page_metadata(db: Session, site_page: SitePage, payload: PageMetadata
         categories = _site_categories(db, site_page.website_property_id, payload.category_ids)
         if len(categories) != len(payload.category_ids):
             raise ValueError("One or more categories do not belong to this Site.")
-        existing_category_ids = set(
+        assignments = list(
             db.scalars(
-                select(PageCategoryAssignment.category_id).where(
+                select(PageCategoryAssignment).where(
                     PageCategoryAssignment.site_page_id == site_page.id
                 )
             )
         )
+        assignment_by_category = {assignment.category_id: assignment for assignment in assignments}
+        existing_category_ids = set(assignment_by_category)
         if any(
             not category.is_active and category.id not in existing_category_ids
             for category in categories
         ):
             raise ValueError("Archived categories cannot receive new assignments.")
-        db.execute(
-            delete(PageCategoryAssignment).where(
-                PageCategoryAssignment.site_page_id == site_page.id
-            )
+        desired_manual = set(payload.category_ids)
+        manual_supports = (
+            {
+                support.page_category_assignment_id: support
+                for support in db.scalars(
+                    select(PageCategoryAssignmentSupport).where(
+                        PageCategoryAssignmentSupport.page_category_assignment_id.in_(
+                            [assignment.id for assignment in assignments]
+                        ),
+                        PageCategoryAssignmentSupport.support_type == "manual",
+                    )
+                )
+            }
+            if assignments
+            else {}
         )
-        db.add_all(
-            PageCategoryAssignment(site_page_id=site_page.id, category_id=category_id)
-            for category_id in payload.category_ids
+        for category_id in desired_manual:
+            assignment = assignment_by_category.get(category_id)
+            if assignment is None:
+                assignment = PageCategoryAssignment(
+                    site_page_id=site_page.id, category_id=category_id
+                )
+                db.add(assignment)
+                db.flush()
+                assignment_by_category[category_id] = assignment
+            if assignment.id not in manual_supports:
+                db.add(
+                    PageCategoryAssignmentSupport(
+                        page_category_assignment_id=assignment.id,
+                        support_type="manual",
+                        support_key="manual",
+                    )
+                )
+        db.flush()
+        removed_support_ids = [
+            manual_supports[assignment.id].id
+            for category_id, assignment in assignment_by_category.items()
+            if category_id not in desired_manual and assignment.id in manual_supports
+        ]
+        if removed_support_ids:
+            db.execute(
+                delete(PageCategoryAssignmentSupport).where(
+                    PageCategoryAssignmentSupport.id.in_(removed_support_ids)
+                )
+            )
+            db.flush()
+        _delete_unsupported_assignments(
+            db, [assignment.id for assignment in assignment_by_category.values()]
         )
     db.commit()
     db.refresh(site_page)
@@ -96,35 +145,65 @@ def bulk_categories(db: Session, site_id: int, payload: BulkPageCategories) -> B
     if any(not category.is_active and category.id in added_ids for category in categories):
         raise ValueError("Archived categories cannot receive new assignments.")
     page_ids = [page.id for page in pages]
-    existing = set(
-        db.execute(
-            select(
-                PageCategoryAssignment.site_page_id,
-                PageCategoryAssignment.category_id,
-            ).where(
+    assignments = list(
+        db.scalars(
+            select(PageCategoryAssignment).where(
                 PageCategoryAssignment.site_page_id.in_(page_ids),
                 PageCategoryAssignment.category_id.in_(category_ids),
             )
-        ).all()
+        )
+    )
+    assignment_map = {(item.site_page_id, item.category_id): item for item in assignments}
+    manual_supports = (
+        {
+            support.page_category_assignment_id: support
+            for support in db.scalars(
+                select(PageCategoryAssignmentSupport).where(
+                    PageCategoryAssignmentSupport.page_category_assignment_id.in_(
+                        [assignment.id for assignment in assignments]
+                    ),
+                    PageCategoryAssignmentSupport.support_type == "manual",
+                )
+            )
+        }
+        if assignments
+        else {}
     )
     changed_pages: set[int] = set()
     for page in pages:
         for category_id in payload.add_category_ids:
-            if (page.id, category_id) not in existing:
-                db.add(PageCategoryAssignment(site_page_id=page.id, category_id=category_id))
+            assignment = assignment_map.get((page.id, category_id))
+            if assignment is None:
+                assignment = PageCategoryAssignment(site_page_id=page.id, category_id=category_id)
+                db.add(assignment)
+                db.flush()
+                assignment_map[(page.id, category_id)] = assignment
+            if assignment.id not in manual_supports:
+                db.add(
+                    PageCategoryAssignmentSupport(
+                        page_category_assignment_id=assignment.id,
+                        support_type="manual",
+                        support_key="manual",
+                    )
+                )
                 changed_pages.add(page.id)
+        db.flush()
         removals = [
-            category_id
+            assignment_map[(page.id, category_id)]
             for category_id in payload.remove_category_ids
-            if (page.id, category_id) in existing
+            if (page.id, category_id) in assignment_map
+            and assignment_map[(page.id, category_id)].id in manual_supports
         ]
         if removals:
             db.execute(
-                delete(PageCategoryAssignment).where(
-                    PageCategoryAssignment.site_page_id == page.id,
-                    PageCategoryAssignment.category_id.in_(removals),
+                delete(PageCategoryAssignmentSupport).where(
+                    PageCategoryAssignmentSupport.id.in_(
+                        [manual_supports[item.id].id for item in removals]
+                    ),
                 )
             )
+            db.flush()
+            _delete_unsupported_assignments(db, [item.id for item in removals])
             changed_pages.add(page.id)
     db.commit()
     return BulkMutationResult(
@@ -180,3 +259,23 @@ def _site_categories(db: Session, site_id: int, category_ids: list[int]) -> list
             )
         )
     )
+
+
+def _delete_unsupported_assignments(db: Session, assignment_ids: list[int]) -> None:
+    if not assignment_ids:
+        return
+    unsupported = list(
+        db.scalars(
+            select(PageCategoryAssignment.id).where(
+                PageCategoryAssignment.id.in_(assignment_ids),
+                ~select(PageCategoryAssignmentSupport.id)
+                .where(
+                    PageCategoryAssignmentSupport.page_category_assignment_id
+                    == PageCategoryAssignment.id
+                )
+                .exists(),
+            )
+        )
+    )
+    if unsupported:
+        db.execute(delete(PageCategoryAssignment).where(PageCategoryAssignment.id.in_(unsupported)))

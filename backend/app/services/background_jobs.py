@@ -23,6 +23,7 @@ from app.services.job_types import (
     JOB_STATUS_INTERRUPTED,
     JOB_STATUS_QUEUED,
     JOB_STATUS_RUNNING,
+    JOB_TYPE_CATEGORY_RULE_EVALUATION,
     JOB_TYPE_SCAN,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
@@ -112,6 +113,23 @@ def enqueue_scan_projection_job(
         website_property_id=scan.website_property_id,
         priority=priority,
         payload={"scan_id": scan.id, "projection_build_id": build_id},
+    )
+
+
+def enqueue_category_rule_job(
+    db: Session,
+    run_id: int,
+    site_id: int,
+    *,
+    priority: int = 105,
+) -> BackgroundJob:
+    return _enqueue_job(
+        db,
+        job_type=JOB_TYPE_CATEGORY_RULE_EVALUATION,
+        dedupe_key=f"category-rule-evaluation:{run_id}",
+        website_property_id=site_id,
+        priority=priority,
+        payload={"run_id": run_id, "site_id": site_id, "rerun_requested": False},
     )
 
 
@@ -516,6 +534,15 @@ def recover_expired_jobs(
             job.finished_at = now
             job.error_type = "lease_expired"
             job.error_message = "Worker lease expired before completion."
+        elif job.job_type == JOB_TYPE_CATEGORY_RULE_EVALUATION:
+            from app.models import PageCategoryRuleRun
+
+            run = db.get(PageCategoryRuleRun, int(job.payload_json.get("run_id", 0)))
+            if run and run.status not in TERMINAL_JOB_STATUSES:
+                run.status = "interrupted"
+                run.finished_at = now
+                run.error_type = "lease_expired"
+                run.error_message = "Worker lease expired during Category Rule evaluation."
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan and scan.status not in TERMINAL_JOB_STATUSES:
@@ -551,6 +578,11 @@ def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
             domain_status = JOB_STATUS_COMPLETED
         elif build.status in {"failed", "cancelled"}:
             domain_status = build.status
+    elif job.job_type == JOB_TYPE_CATEGORY_RULE_EVALUATION:
+        from app.models import PageCategoryRuleRun
+
+        run = db.get(PageCategoryRuleRun, int(job.payload_json.get("run_id", 0)))
+        domain_status = run.status if run else JOB_STATUS_FAILED
     elif job.scan_id:
         scan = db.get(Scan, job.scan_id)
         domain_status = scan.status if scan else JOB_STATUS_FAILED
