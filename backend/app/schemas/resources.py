@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.projections import ProjectionMetadata
+
 
 class ResourceInventoryItem(BaseModel):
     resource_id: int
@@ -42,6 +44,7 @@ class ResourceInventoryList(BaseModel):
     total: int
     limit: int
     offset: int
+    projection: ProjectionMetadata | None = None
 
 
 class ResourceSummary(BaseModel):
@@ -50,6 +53,7 @@ class ResourceSummary(BaseModel):
     discovered_only_resources: int
     total_occurrences: int
     kind_counts: dict[str, int] = Field(default_factory=dict)
+    projection: ProjectionMetadata | None = None
 
 
 class ResourceOccurrenceRead(BaseModel):

@@ -3,6 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.projections import ProjectionMetadata
 from app.schemas.scans import LinkRead
 
 
@@ -88,6 +89,7 @@ class GraphResponse(BaseModel):
     nodes: list[GraphNodeRead]
     edges: list[GraphEdgeRead]
     effective_filters: dict[str, str | int | bool | None]
+    projection: ProjectionMetadata | None = None
 
 
 class GraphCapabilitiesRead(BaseModel):
