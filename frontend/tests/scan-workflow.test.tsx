@@ -394,6 +394,23 @@ describe("new scan workflow", () => {
 });
 
 describe("scan results workflow", () => {
+  it("keeps Resource search stable and resets filters when changing Scan tabs", async () => {
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=resources");
+
+    fireEvent.change(await screen.findByLabelText("Search Resources"), { target: { value: "guide" } });
+    await waitFor(() => expect(api.listScanResources).toHaveBeenLastCalledWith("1", expect.stringContaining("search=guide")));
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
+    expect(screen.getByLabelText("Search Resources")).toHaveValue("guide");
+
+    fireEvent.click(screen.getByRole("tab", { name: /Pages/i }));
+    expect(await screen.findByLabelText("Search pages")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("Search pages"), { target: { value: "pricing" } });
+    await waitFor(() => expect(api.listPages).toHaveBeenLastCalledWith("1", expect.stringContaining("search=pricing")));
+
+    fireEvent.click(screen.getByRole("tab", { name: /Resources/i }));
+    expect(await screen.findByLabelText("Search Resources")).toHaveValue("");
+  });
+
   it("keeps terminal evidence usable while optimized results are building", async () => {
     api.getScanProjectionStatus.mockResolvedValue({
       scan_id: 1,

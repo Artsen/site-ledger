@@ -65,10 +65,11 @@ export function ScanDetailPage() {
   const latestJob = jobs.data?.items[0];
 
   useEffect(() => {
+    if (tab !== "pages") return;
     if (searchDraft === (searchParams.get("search") ?? "")) return;
     const timer = window.setTimeout(() => updateParam(setSearchParams, "search", searchDraft || null, { pages_offset: null }), 350);
     return () => window.clearTimeout(timer);
-  }, [searchDraft, searchParams, setSearchParams]);
+  }, [searchDraft, searchParams, setSearchParams, tab]);
 
   const pageQuery = useMemo(() => buildPageQuery(searchParams), [searchParams]);
   const projectionKey = projection.data?.current_build?.id ?? projection.data?.projection_status ?? "unknown";
@@ -184,7 +185,12 @@ export function ScanDetailPage() {
       {cancel.error ? <div className="mb-4"><ErrorBanner error={cancel.error} title="Could not cancel scan" /></div> : null}
       {remove.error ? <div className="mb-4"><ErrorBanner error={remove.error} title="Could not delete scan" /></div> : null}
 
-      <Tabs tabs={tabs} active={tab} onChange={(next) => updateParam(setSearchParams, "tab", next === "overview" ? null : next)} />
+      <Tabs tabs={tabs} active={tab} onChange={(next) => {
+        setSearchDraft("");
+        const nextParams = new URLSearchParams();
+        if (next !== "overview") nextParams.set("tab", next);
+        setSearchParams(nextParams);
+      }} />
 
       <div className="mt-5">
         {tab === "overview" ? (
