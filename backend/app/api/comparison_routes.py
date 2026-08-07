@@ -1,5 +1,5 @@
 import hashlib
-from typing import Annotated, TypeVar
+from typing import Annotated, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
@@ -42,6 +42,7 @@ from app.services.comparison_queries import (
     page_source_diff,
 )
 from app.services.scan_comparisons import (
+    SCAN_COMPARISON_VERSION,
     ComparisonEligibilityError,
     create_comparison,
     create_comparison_build,
@@ -244,9 +245,15 @@ def get_page_source_diff(
     resource_id: int,
     request: Request,
     db: DbSession,
+    mode: Literal["exact", "meaningful"] = "exact",
 ) -> SourceDiffRead:
     result = page_source_diff(
-        db, request.app.state.content_store, site_id, comparison_id, resource_id
+        db,
+        request.app.state.content_store,
+        site_id,
+        comparison_id,
+        resource_id,
+        mode=mode,
     )
     if result is None:
         raise HTTPException(404, "Page comparison not found")
@@ -455,13 +462,13 @@ def _immutable_response(
 ) -> T | Response:
     if build_id is None:
         return result
-    identity = f"{request.url.path}?{request.url.query}|scan-comparison-v1|{build_id}"
+    identity = f"{request.url.path}?{request.url.query}|{SCAN_COMPARISON_VERSION}|{build_id}"
     digest = hashlib.sha256(identity.encode()).hexdigest()
     etag = f'"comparison-{build_id}-{digest[:24]}"'
     headers = {
         "Cache-Control": "private, no-cache",
         "ETag": etag,
-        "X-Comparison-Version": "scan-comparison-v1",
+        "X-Comparison-Version": SCAN_COMPARISON_VERSION,
         "X-Comparison-Build-Id": str(build_id),
     }
     response.headers.update(headers)

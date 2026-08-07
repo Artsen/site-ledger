@@ -492,7 +492,7 @@ test("deterministic Scan comparison selects direction, filters, and sorts neutra
   await expect(page.getByLabel("Target Scan")).toHaveValue("2");
   await page.getByRole("button", { name: "Compare" }).click();
   await expect(page.getByText("Comparable", { exact: true })).toBeVisible();
-  await expect(page.getByText("scan-comparison-v1")).toBeVisible();
+  await expect(page.getByText("scan-comparison-v2")).toBeVisible();
 
   await page.getByRole("tab", { name: /Pages/ }).click();
   await expect(page.getByLabel("Show all Pages")).not.toBeChecked();
@@ -521,8 +521,8 @@ async function mockComparisonApi(page: Page) {
   const build = {
     id: 9,
     scan_comparison_id: 7,
-    comparison_version: "scan-comparison-v1",
-    algorithm_identity: "scan-comparison-v1|page-v1|resource-v1|link-v1|scan-projection-v1",
+    comparison_version: "scan-comparison-v2",
+    algorithm_identity: "scan-comparison-v2|source-signals-v1|incapsula-cb-v1|page-v2|resource-v1|link-v1|scan-projection-v1",
     status: "ready",
     baseline_projection_build_id: 4,
     target_projection_build_id: 5,
@@ -616,7 +616,12 @@ async function mockComparisonApi(page: Page) {
           path: "/learn/old",
           presence_state: "not_observed_in_target",
           change_state: "not_applicable",
+          primary_change_class: "not_applicable",
           content_state: "not_applicable",
+          document_content_state: "not_applicable",
+          metadata_state: "not_applicable",
+          technical_state: "not_applicable",
+          exact_source_state: "not_applicable",
           head_state: "not_applicable",
           changed_field_count: 0,
           baseline_http_status: 200,
@@ -628,7 +633,7 @@ async function mockComparisonApi(page: Page) {
         limit: 50,
         offset: 0,
         comparison_build_id: 9,
-        comparison_version: "scan-comparison-v1",
+        comparison_version: "scan-comparison-v2",
       }),
     });
   });

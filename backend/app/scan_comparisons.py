@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import SessionLocal
 from app.models import Scan, ScanComparison, WebsiteProperty
 from app.services.scan_comparisons import (
@@ -21,6 +22,7 @@ from app.services.scan_projections import (
     current_projection_build,
     execute_projection_build,
 )
+from app.storage.content_store import LocalContentStore
 
 
 def _progress(phase: str, current: int, total: int) -> None:
@@ -36,6 +38,7 @@ def _prepare_scan(db: Session, scan_id: int) -> None:
 
 
 def _build_pair(baseline_id: int, target_id: int, *, force: bool) -> bool:
+    store = LocalContentStore(get_settings().html_storage_root)
     with SessionLocal() as db:
         try:
             baseline = db.get(Scan, baseline_id)
@@ -50,7 +53,7 @@ def _build_pair(baseline_id: int, target_id: int, *, force: bool) -> bool:
                 print(f"Comparison {comparison.id}: build {build.id} is already ready.")
                 return True
             db.commit()
-            ready = execute_comparison_build(db, build.id, progress=_progress)
+            ready = execute_comparison_build(db, build.id, progress=_progress, store=store)
             print(
                 f"Comparison {comparison.id}: ready build {ready.id}, "
                 f"{ready.page_result_count} Pages, {ready.resource_result_count} Resources, "

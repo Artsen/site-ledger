@@ -42,6 +42,7 @@ from app.schemas.comparisons import (
     SourceDiffRead,
 )
 from app.services.scan_comparisons import current_comparison_build
+from app.services.source_comparison import normalize_volatile_source
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
 SOURCE_DIFF_MAX_INPUT_BYTES = 1024 * 1024
@@ -131,7 +132,9 @@ def list_comparison_pages(
     elif changed_only:
         query = query.where(
             or_(
-                ScanComparisonPageResult.change_state == "changed",
+                ScanComparisonPageResult.primary_change_class.in_(
+                    ("substantive_change", "metadata_change", "technical_change")
+                ),
                 ScanComparisonPageResult.presence_state != "observed_in_both",
             )
         )
@@ -166,6 +169,10 @@ def list_comparison_pages(
         "url": ScanComparisonPageResult.normalized_url,
         "presence": ScanComparisonPageResult.presence_state,
         "change": ScanComparisonPageResult.change_state,
+        "content": ScanComparisonPageResult.document_content_state,
+        "metadata": ScanComparisonPageResult.metadata_state,
+        "technical": ScanComparisonPageResult.technical_state,
+        "raw_source": ScanComparisonPageResult.exact_source_state,
         "baseline_status": ScanComparisonPageResult.baseline_http_status,
         "target_status": ScanComparisonPageResult.target_http_status,
         "changed_field_count": ScanComparisonPageResult.changed_field_count,
@@ -476,6 +483,8 @@ def page_source_diff(
     site_id: int,
     comparison_id: int,
     resource_id: int,
+    *,
+    mode: str = "exact",
 ) -> SourceDiffRead | None:
     result = get_comparison_page(db, site_id, comparison_id, resource_id)
     if result is None:
@@ -489,28 +498,31 @@ def page_source_diff(
         db.get(ResourceSnapshot, result.target_snapshot_id) if result.target_snapshot_id else None
     )
     if before is None or before.html_blob_id is None:
-        return SourceDiffRead(state="baseline_missing", diff_text="")
+        return SourceDiffRead(state="baseline_missing", diff_text="", mode=mode)
     if after is None or after.html_blob_id is None:
-        return SourceDiffRead(state="target_missing", diff_text="")
+        return SourceDiffRead(state="target_missing", diff_text="", mode=mode)
     before_blob = db.get(ContentBlob, before.html_blob_id)
     after_blob = db.get(ContentBlob, after.html_blob_id)
     if before_blob is None:
-        return SourceDiffRead(state="baseline_missing", diff_text="")
+        return SourceDiffRead(state="baseline_missing", diff_text="", mode=mode)
     if after_blob is None:
-        return SourceDiffRead(state="target_missing", diff_text="")
+        return SourceDiffRead(state="target_missing", diff_text="", mode=mode)
     if (
         before_blob.raw_byte_size > SOURCE_DIFF_MAX_INPUT_BYTES
         or after_blob.raw_byte_size > SOURCE_DIFF_MAX_INPUT_BYTES
     ):
-        return SourceDiffRead(state="too_large", diff_text="")
+        return SourceDiffRead(state="too_large", diff_text="", mode=mode)
     try:
         before_bytes, after_bytes = store.get(before_blob), store.get(after_blob)
         before_text = before_bytes.decode(before_blob.encoding or "utf-8", errors="strict")
         after_text = after_bytes.decode(after_blob.encoding or "utf-8", errors="strict")
     except (BlobNotFoundError, LookupError, UnicodeDecodeError):
-        return SourceDiffRead(state="decoding_failed", diff_text="")
+        return SourceDiffRead(state="decoding_failed", diff_text="", mode=mode)
+    if mode == "meaningful":
+        before_text = normalize_volatile_source(before_text)[0]
+        after_text = normalize_volatile_source(after_text)[0]
     if before_text == after_text:
-        return SourceDiffRead(state="identical", diff_text="")
+        return SourceDiffRead(state="identical", diff_text="", mode=mode)
     lines = list(
         difflib.unified_diff(
             before_text.splitlines(),
@@ -529,6 +541,7 @@ def page_source_diff(
     return SourceDiffRead(
         state="truncated" if output_truncated else "available",
         diff_text=text,
+        mode=mode,
         output_truncated=output_truncated,
     )
 

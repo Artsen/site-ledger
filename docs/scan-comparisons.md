@@ -7,7 +7,7 @@ score health, infer URL moves, or claim that an unobserved URL was removed from 
 ~~~mermaid
 flowchart LR
   E[Immutable raw evidence] --> P[scan-projection-v1]
-  P --> C[scan-comparison-v1]
+  P --> C[scan-comparison-v2]
   C -. future .-> F[Finding or interpretation]
 ~~~
 
@@ -40,11 +40,12 @@ flowchart LR
 ScanComparison is the Site-scoped logical identity for one directional Scan pair. Its unique key is
 Site, Baseline Scan, and Target Scan. Its current-build pointer identifies the active ready result.
 
-ScanComparisonBuild is an immutable attempt. It stores scan-comparison-v1, algorithm identity
-scan-comparison-v1|page-v1|resource-v1|link-v1|scan-projection-v1, lifecycle and timing, coverage
-fingerprints, warnings, validation, counts, and a deterministic checksum. It pins both projection
-build IDs and copies each projection version, algorithm identity, checksum, and build timestamp.
-Projection FKs use SET NULL, so future projection garbage collection does not erase provenance.
+ScanComparisonBuild is an immutable attempt. Version 2 separates exact source identity, normalized
+source identity, document content, metadata, and technical evidence. The build stores its complete
+algorithm identity, lifecycle and timing, coverage fingerprints, warnings, validation, counts, and
+a deterministic checksum. It pins both projection build IDs and copies each projection version,
+algorithm identity, checksum, and build timestamp. Projection FKs use SET NULL, so future
+projection garbage collection does not erase provenance.
 
 Page, Resource, Link, and summary rows are materialized by build. Their IDs can later be referenced
 by deterministic Findings, but this release creates no Finding records.
@@ -103,15 +104,31 @@ flowchart LR
 ~~~
 
 For Pages observed on both sides, comparison records requested/final URL, redirect state, HTTP and
-fetch state, type, content/head hashes, title, canonical, robots, language, depth, static link and
-embedded-Resource aggregates, and rendered availability/count summaries. Content and head states
-are same, changed, unavailable, or not applicable. Timing and transfer-byte deltas remain
-operational measurements and do not alone mark a structural change. Conditional 304 and parse
-reuse compare the effective reused hashes.
+fetch state, type, exact source/head hashes, title, canonical, robots, language, depth, static link
+and embedded-Resource aggregates, and rendered availability/count summaries. Exact source,
+normalized source, document content, metadata, and technical states are independently same,
+changed, unavailable, or not applicable. Timing and transfer-byte deltas remain operational
+measurements and do not alone mark a structural change. Conditional 304 and parse reuse compare the
+effective reused hashes.
 
-Page detail links to exact Baseline and Target observations. Raw source diff reads stored HTML only
-on demand, decodes using stored encoding, and emits escaped unified text. Each input is limited to
-1 MiB; output is limited to 5,000 lines and 1 MiB. Missing, identical, too-large, decoding-failed,
+The normalized source hash answers whether retained HTML is byte-equivalent after explicit safe
+volatile rules. It is not a document-content hash. The built-in Incapsula rule replaces only the
+`cb` query value in a `script[src]` whose URL path is exactly `/_Incapsula_Resource`. It does not
+normalize other parameters, arbitrary `cb` values, WordPress `ver`, script IDs, numeric values, or
+generated-looking JSON.
+
+Primary classification precedence is substantive document change, meaningful metadata change,
+technical change, normalization only, no tracked change, then indeterminate. Dependency, runtime,
+volatile, document-content, metadata, and unclassified evidence categories can coexist. Unknown
+normalized-source differences remain visible and conservatively become technical changes; they are
+never silently classified as normalization only. Overview counts keep substantive, metadata,
+technical, and normalization-only Pages separate.
+
+Page detail links to exact Baseline and Target observations. Exact source diff reads stored HTML
+only on demand and retains every difference. Meaningful source diff applies only enabled explicit
+volatile normalization, so WordPress versions, dependency URLs, and unknown values remain visible.
+Both modes decode using stored encoding and emit escaped unified text. Each input is limited to 1
+MiB; output is limited to 5,000 lines and 1 MiB. Missing, identical, too-large, decoding-failed,
 available, and truncated states are explicit. No source is executed.
 
 ## Resource Comparison

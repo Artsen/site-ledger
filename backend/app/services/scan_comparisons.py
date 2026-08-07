@@ -10,7 +10,7 @@ from typing import Any, TypeVar
 
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     ResourceSnapshot,
@@ -34,9 +34,18 @@ from app.services.scan_projections import (
     TERMINAL_SCAN_STATUSES,
     current_projection_build,
 )
+from app.services.source_comparison import (
+    SourceAnalysis,
+    analyze_source,
+    source_difference_categories,
+)
+from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
-SCAN_COMPARISON_VERSION = "scan-comparison-v1"
-SCAN_COMPARISON_ALGORITHM = "scan-comparison-v1|page-v1|resource-v1|link-v1|scan-projection-v1"
+SCAN_COMPARISON_VERSION = "scan-comparison-v2"
+SCAN_COMPARISON_ALGORITHM = (
+    "scan-comparison-v2|source-signals-v1|incapsula-cb-v1|page-v2|resource-v1|"
+    "link-v1|scan-projection-v1"
+)
 ACTIVE_COMPARISON_BUILD_STATUSES = {"queued", "waiting_for_projections", "building"}
 COMPARISON_BATCH_SIZE = 400
 T = TypeVar("T")
@@ -159,6 +168,7 @@ def execute_comparison_build(
     *,
     should_cancel: Callable[[], bool] | None = None,
     progress: Callable[[str, int, int], None] | None = None,
+    store: LocalContentStore | None = None,
 ) -> ScanComparisonBuild:
     build = db.get(ScanComparisonBuild, build_id)
     if build is None:
@@ -199,7 +209,9 @@ def execute_comparison_build(
         db.commit()
         _report(progress, "analyzing_coverage", 1, 1)
 
-        page_rows = _page_rows(db, baseline, target, baseline_projection, target_projection)
+        page_rows = _page_rows(
+            db, baseline, target, baseline_projection, target_projection, store=store
+        )
         _insert_batches(
             db,
             ScanComparisonPageResult,
@@ -513,6 +525,8 @@ def _page_rows(
     target_scan: Scan,
     baseline_build: ScanProjectionBuild,
     target_build: ScanProjectionBuild,
+    *,
+    store: LocalContentStore | None,
 ) -> list[dict[str, Any]]:
     baseline = {
         row.resource_id: row
@@ -535,6 +549,18 @@ def _page_rows(
     missing_target = set(resource_ids) - set(target)
     opposite_baseline = _opposite_snapshots(db, baseline_scan.id, missing_baseline)
     opposite_target = _opposite_snapshots(db, target_scan.id, missing_target)
+    snapshot_ids = {
+        row.snapshot_id for row in [*baseline.values(), *target.values()] if row.snapshot_id
+    }
+    snapshots = {
+        snapshot.id: snapshot
+        for snapshot in db.scalars(
+            select(ResourceSnapshot)
+            .options(joinedload(ResourceSnapshot.blob))
+            .where(ResourceSnapshot.id.in_(snapshot_ids))
+        ).unique()
+    }
+    source_cache: dict[int, SourceAnalysis | None] = {}
     rows: list[dict[str, Any]] = []
     for resource_id in resource_ids:
         before = baseline.get(resource_id)
@@ -550,18 +576,47 @@ def _page_rows(
         )
         before_json = _page_projection_json(before) if before else None
         after_json = _page_projection_json(after) if after else None
+        before_snapshot = snapshots.get(before.snapshot_id) if before else None
+        after_snapshot = snapshots.get(after.snapshot_id) if after else None
+        before_source = _source_analysis(before_snapshot, store, source_cache)
+        after_source = _source_analysis(after_snapshot, store, source_cache)
         flags = _page_flags(before_json, after_json)
-        content_state = _equality_state(before, after, "content_hash")
+        exact_source_state = _equality_state(before, after, "content_hash")
+        normalized_source_state = _source_state(
+            before_source.normalized_source_hash if before_source else None,
+            after_source.normalized_source_hash if after_source else None,
+            exact_source_state=exact_source_state,
+            presence=presence,
+        )
+        document_content_state = _source_state(
+            before_source.document_content_hash if before_source else None,
+            after_source.document_content_hash if after_source else None,
+            exact_source_state=exact_source_state,
+            presence=presence,
+        )
+        metadata_state = _metadata_state(before, after, before_snapshot, after_snapshot, presence)
         head_state = _equality_state(before, after, "head_hash")
+        flags["content_changed"] = document_content_state == "changed"
+        categories, normalization_details = (
+            source_difference_categories(
+                before_source,
+                after_source,
+                document_changed=document_content_state == "changed",
+                metadata_changed=metadata_state == "changed",
+            )
+            if before_source and after_source
+            else ([], [])
+        )
+        technical_state = _technical_state(flags, categories, presence)
+        primary_change_class = _primary_change_class(
+            presence=presence,
+            exact_source_state=exact_source_state,
+            normalized_source_state=normalized_source_state,
+            document_content_state=document_content_state,
+            metadata_state=metadata_state,
+            technical_state=technical_state,
+        )
         meaningful = sum(flags.values())
-        if presence != "observed_in_both":
-            change_state = "not_applicable"
-        elif meaningful:
-            change_state = "changed"
-        elif content_state == "unavailable" or head_state == "unavailable":
-            change_state = "indeterminate"
-        else:
-            change_state = "no_tracked_change"
         rows.append(
             {
                 "resource_id": resource_id,
@@ -583,9 +638,25 @@ def _page_rows(
                 "target_presence_detail": "page_observed"
                 if after
                 else _presence_detail(opposite_target.get(resource_id)),
-                "change_state": change_state,
-                "content_state": content_state,
+                "change_state": primary_change_class,
+                "content_state": document_content_state,
                 "head_state": head_state,
+                "exact_source_state": exact_source_state,
+                "exact_source_changed": exact_source_state == "changed",
+                "baseline_normalized_source_hash": before_source.normalized_source_hash
+                if before_source
+                else None,
+                "target_normalized_source_hash": after_source.normalized_source_hash
+                if after_source
+                else None,
+                "normalized_source_state": normalized_source_state,
+                "document_content_state": document_content_state,
+                "metadata_state": metadata_state,
+                "technical_state": technical_state,
+                "primary_change_class": primary_change_class,
+                "normalization_only_changed": primary_change_class == "normalization_only",
+                "source_difference_categories_json": categories,
+                "normalization_details_json": normalization_details,
                 "changed_field_count": meaningful,
                 **flags,
                 "baseline_http_status": before.http_status if before else None,
@@ -927,6 +998,115 @@ def _page_flags(before: dict[str, Any] | None, after: dict[str, Any] | None) -> 
         name: bool(before and after and any(before[field] != after[field] for field in fields))
         for name, fields in mapping.items()
     }
+
+
+def _source_analysis(
+    snapshot: ResourceSnapshot | None,
+    store: LocalContentStore | None,
+    cache: dict[int, SourceAnalysis | None],
+) -> SourceAnalysis | None:
+    if snapshot is None or snapshot.blob is None or store is None:
+        return None
+    if snapshot.blob.id not in cache:
+        try:
+            content = store.get(snapshot.blob)
+        except BlobNotFoundError:
+            cache[snapshot.blob.id] = None
+        else:
+            cache[snapshot.blob.id] = analyze_source(
+                content, snapshot.blob.encoding or snapshot.encoding
+            )
+    return cache[snapshot.blob.id]
+
+
+def _source_state(
+    baseline_hash: str | None,
+    target_hash: str | None,
+    *,
+    exact_source_state: str,
+    presence: str,
+) -> str:
+    if presence != "observed_in_both":
+        return "not_applicable"
+    if baseline_hash is not None and target_hash is not None:
+        return "same" if baseline_hash == target_hash else "changed"
+    if exact_source_state == "same":
+        return "same"
+    return "unavailable"
+
+
+def _metadata_state(
+    before: ScanPageProjection | None,
+    after: ScanPageProjection | None,
+    before_snapshot: ResourceSnapshot | None,
+    after_snapshot: ResourceSnapshot | None,
+    presence: str,
+) -> str:
+    if presence != "observed_in_both":
+        return "not_applicable"
+    if before is None or after is None:
+        return "unavailable"
+    baseline = (
+        before.page_title,
+        before.canonical_url,
+        before.robots_directives,
+        before.language,
+        before_snapshot.meta_description if before_snapshot else None,
+    )
+    target = (
+        after.page_title,
+        after.canonical_url,
+        after.robots_directives,
+        after.language,
+        after_snapshot.meta_description if after_snapshot else None,
+    )
+    return "same" if baseline == target else "changed"
+
+
+def _technical_state(flags: dict[str, bool], categories: list[str], presence: str) -> str:
+    if presence != "observed_in_both":
+        return "not_applicable"
+    technical_flags = (
+        "http_status_changed",
+        "fetch_state_changed",
+        "final_url_changed",
+        "redirect_state_changed",
+        "content_type_changed",
+        "depth_changed",
+        "inbound_links_changed",
+        "outbound_links_changed",
+        "embedded_resources_changed",
+        "rendered_state_changed",
+        "rendered_counts_changed",
+    )
+    changed = any(flags[name] for name in technical_flags) or bool(
+        {"dependency", "unclassified"}.intersection(categories)
+    )
+    return "changed" if changed else "same"
+
+
+def _primary_change_class(
+    *,
+    presence: str,
+    exact_source_state: str,
+    normalized_source_state: str,
+    document_content_state: str,
+    metadata_state: str,
+    technical_state: str,
+) -> str:
+    if presence != "observed_in_both":
+        return "not_applicable"
+    if document_content_state == "changed":
+        return "substantive_change"
+    if metadata_state == "changed":
+        return "metadata_change"
+    if technical_state == "changed":
+        return "technical_change"
+    if exact_source_state == "changed" and normalized_source_state == "same":
+        return "normalization_only"
+    if exact_source_state == "same":
+        return "no_tracked_change"
+    return "indeterminate"
 
 
 def _page_projection_json(row: ScanPageProjection | None) -> dict[str, Any] | None:

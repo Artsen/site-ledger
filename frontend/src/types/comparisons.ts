@@ -36,6 +36,11 @@ export type ComparisonPage = {
   baseline_snapshot_id: number | null; target_snapshot_id: number | null;
   presence_state: string; baseline_presence_detail: string; target_presence_detail: string;
   change_state: string; content_state: string; head_state: string; changed_field_count: number;
+  exact_source_state: string; exact_source_changed: boolean;
+  baseline_normalized_source_hash: string | null; target_normalized_source_hash: string | null;
+  normalized_source_state: string; document_content_state: string; metadata_state: string; technical_state: string;
+  primary_change_class: string; normalization_only_changed: boolean;
+  source_difference_categories_json: string[]; normalization_details_json: Array<Record<string, unknown>>;
   content_changed: boolean; head_changed: boolean; http_status_changed: boolean; fetch_state_changed: boolean;
   final_url_changed: boolean; redirect_state_changed: boolean; content_type_changed: boolean; title_changed: boolean;
   canonical_changed: boolean; robots_changed: boolean; language_changed: boolean; depth_changed: boolean;
@@ -70,6 +75,6 @@ export type ComparisonLink = {
 };
 
 export type ComparisonResultList<T> = { items: T[]; total: number; limit: number; offset: number; comparison_build_id: number; comparison_version: string };
-export type SourceDiff = { state: string; diff_text: string; input_truncated: boolean; output_truncated: boolean };
+export type SourceDiff = { state: string; diff_text: string; mode: "exact" | "meaningful"; input_truncated: boolean; output_truncated: boolean };
 export type OccurrenceDiff = { items: Array<{ state: string; fingerprint: string; occurrence: Record<string, unknown>; count: number }>; total: number; limit: number; offset: number; compared_baseline_count: number; compared_target_count: number; truncated: boolean };
 export type PageChangeHistory = { items: Array<{ scan_id: number; snapshot_id: number; scan_created_at: string; scan_status: string; observed_at: string | null; http_status: number | null; fetch_state: string; content_hash: string | null; head_hash: string | null; title: string | null; canonical_url: string | null; robots_directives: string | null; rendered_state: string | null; change_label: string; changed_flags: string[]; previous_snapshot_id: number | null; previous_scan_id: number | null; intervening_scan_count: number; intervening_unsuccessful_observation_count: number }>; total: number; limit: number; offset: number };

@@ -79,13 +79,14 @@ def test_build_compares_pages_resources_links_and_is_deterministic(db_session) -
     by_resource = {row.resource_id: row for row in pages}
 
     assert ready.status == "ready"
-    assert ready.comparison_version == "scan-comparison-v1"
+    assert ready.comparison_version == "scan-comparison-v2"
     assert ready.algorithm_identity.endswith("scan-projection-v1")
     assert ready.baseline_projection_checksum
     assert ready.target_projection_checksum
-    assert by_resource[resources[0].id].change_state == "changed"
-    assert by_resource[resources[0].id].content_changed is True
-    assert by_resource[resources[1].id].change_state == "changed"
+    assert by_resource[resources[0].id].change_state == "metadata_change"
+    assert by_resource[resources[0].id].content_changed is False
+    assert by_resource[resources[0].id].exact_source_state == "changed"
+    assert by_resource[resources[1].id].change_state == "technical_change"
     assert by_resource[resources[1].id].inbound_links_changed is True
     assert by_resource[resources[2].id].presence_state == "not_observed_in_target"
     assert by_resource[resources[2].id].target_presence_detail == "fetch_failed"
@@ -122,9 +123,7 @@ def test_build_releases_sqlite_write_lock_before_progress_callbacks(db_session) 
         phases.append(phase)
         with Session(db_session.get_bind()) as progress_db:
             progress_db.execute(
-                update(WebsiteProperty)
-                .where(WebsiteProperty.id == site.id)
-                .values(name=site.name)
+                update(WebsiteProperty).where(WebsiteProperty.id == site.id).values(name=site.name)
             )
             progress_db.commit()
 
@@ -271,6 +270,69 @@ def test_source_diff_is_bounded_plain_text_evidence(db_session, tmp_path) -> Non
     assert result.state == "available"
     assert "<script>window.executed=true</script>" in result.diff_text
     assert result.output_truncated is False
+
+
+def test_source_diff_exact_retains_and_meaningful_suppresses_only_incapsula_cb(
+    db_session, tmp_path
+) -> None:
+    site, baseline, target, resources = _fixture(db_session)
+    store = LocalContentStore(tmp_path / "content")
+    before = db_session.scalar(
+        select(ResourceSnapshot).where(
+            ResourceSnapshot.scan_id == baseline.id,
+            ResourceSnapshot.resource_id == resources[0].id,
+        )
+    )
+    after = db_session.scalar(
+        select(ResourceSnapshot).where(
+            ResourceSnapshot.scan_id == target.id,
+            ResourceSnapshot.resource_id == resources[0].id,
+        )
+    )
+    assert before is not None and after is not None
+    baseline_html = b'<main>Same</main><script src="/_Incapsula_Resource?ns=4&cb=111"></script>'
+    target_html = b'<main>Same</main><script src="/_Incapsula_Resource?ns=4&cb=222"></script>'
+    before_blob = store.put_html(db_session, baseline_html, "text/html", "utf-8")
+    after_blob = store.put_html(db_session, target_html, "text/html", "utf-8")
+    before.html_blob_id = before_blob.id
+    before.raw_html_sha256 = before_blob.sha256
+    after.html_blob_id = after_blob.id
+    after.raw_html_sha256 = after_blob.sha256
+    after.page_title = before.page_title
+    extra_target_link = db_session.scalar(
+        select(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id == after.id)
+    )
+    assert extra_target_link is not None
+    db_session.delete(extra_target_link)
+    db_session.commit()
+    _prepare(db_session, baseline, target)
+    comparison = create_comparison(db_session, site.id, baseline.id, target.id)
+    build = create_comparison_build(db_session, comparison.id)
+    db_session.commit()
+    execute_comparison_build(db_session, build.id, store=store)
+
+    page = list_comparison_pages(
+        db_session,
+        site.id,
+        comparison.id,
+        changed_only=False,
+        limit=50,
+        offset=0,
+    ).items[0]
+    exact = page_source_diff(
+        db_session, store, site.id, comparison.id, resources[0].id, mode="exact"
+    )
+    meaningful = page_source_diff(
+        db_session, store, site.id, comparison.id, resources[0].id, mode="meaningful"
+    )
+
+    assert page.exact_source_state == "changed"
+    assert page.normalized_source_state == "same"
+    assert page.document_content_state == "same"
+    assert page.primary_change_class == "normalization_only"
+    assert exact is not None and "cb=111" in exact.diff_text and "cb=222" in exact.diff_text
+    assert meaningful is not None and meaningful.state == "identical"
+    assert meaningful.diff_text == ""
 
 
 def test_page_change_history_tracks_observation_gaps(db_session) -> None:

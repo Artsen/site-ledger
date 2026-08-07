@@ -260,8 +260,9 @@ class ScanProjectionJobHandler:
 
 
 class ScanComparisonJobHandler:
-    def __init__(self, session_factory: Callable[[], Session]):
+    def __init__(self, session_factory: Callable[[], Session], store: LocalContentStore):
         self.session_factory = session_factory
+        self.store = store
 
     async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
         build_id = int(job.payload_json.get("comparison_build_id", 0))
@@ -272,6 +273,7 @@ class ScanComparisonJobHandler:
                 build = execute_comparison_build(
                     db,
                     build_id,
+                    store=self.store,
                     should_cancel=context.check_cancelled,
                     progress=lambda phase, current, total: context.progress(
                         phase=phase,
@@ -369,7 +371,7 @@ def build_handler_registry(
             JOB_TYPE_SCAN: ScanJobHandler(session_factory, store),
             JOB_TYPE_SOURCE_REFRESH: SourceRefreshJobHandler(session_factory),
             JOB_TYPE_SCAN_PROJECTION_BUILD: ScanProjectionJobHandler(session_factory),
-            JOB_TYPE_SCAN_COMPARISON_BUILD: ScanComparisonJobHandler(session_factory),
+            JOB_TYPE_SCAN_COMPARISON_BUILD: ScanComparisonJobHandler(session_factory, store),
             JOB_TYPE_CATEGORY_RULE_EVALUATION: CategoryRuleEvaluationJobHandler(session_factory),
         }
     )

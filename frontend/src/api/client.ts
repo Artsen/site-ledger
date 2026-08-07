@@ -94,7 +94,7 @@ export const cancelComparison = (siteId: string, comparisonId: string) => reques
 export const deleteComparison = (siteId: string, comparisonId: string) => request<{ deleted_comparison_id: number }>(`/api/sites/${siteId}/comparisons/${comparisonId}`, { method: "DELETE" });
 export const listComparisonPages = (siteId: string, comparisonId: string, query = "") => request<ComparisonResultList<ComparisonPage>>(`/api/sites/${siteId}/comparisons/${comparisonId}/pages${query}`);
 export const getComparisonPage = (siteId: string, comparisonId: string, resourceId: string) => request<ComparisonPage>(`/api/sites/${siteId}/comparisons/${comparisonId}/pages/${resourceId}`);
-export const getComparisonPageSourceDiff = (siteId: string, comparisonId: string, resourceId: string) => request<SourceDiff>(`/api/sites/${siteId}/comparisons/${comparisonId}/pages/${resourceId}/source-diff`);
+export const getComparisonPageSourceDiff = (siteId: string, comparisonId: string, resourceId: string, mode: "exact" | "meaningful" = "exact") => request<SourceDiff>(`/api/sites/${siteId}/comparisons/${comparisonId}/pages/${resourceId}/source-diff?mode=${mode}`);
 export const listComparisonResources = (siteId: string, comparisonId: string, query = "") => request<ComparisonResultList<ComparisonResource>>(`/api/sites/${siteId}/comparisons/${comparisonId}/resources${query}`);
 export const getComparisonResource = (siteId: string, comparisonId: string, resourceId: string) => request<ComparisonResource>(`/api/sites/${siteId}/comparisons/${comparisonId}/resources/${resourceId}`);
 export const listComparisonLinks = (siteId: string, comparisonId: string, query = "") => request<ComparisonResultList<ComparisonLink>>(`/api/sites/${siteId}/comparisons/${comparisonId}/links${query}`);

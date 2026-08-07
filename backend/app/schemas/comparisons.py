@@ -95,6 +95,18 @@ class ComparisonPageRead(BaseModel):
     change_state: str
     content_state: str
     head_state: str
+    exact_source_state: str
+    exact_source_changed: bool
+    baseline_normalized_source_hash: str | None
+    target_normalized_source_hash: str | None
+    normalized_source_state: str
+    document_content_state: str
+    metadata_state: str
+    technical_state: str
+    primary_change_class: str
+    normalization_only_changed: bool
+    source_difference_categories_json: list[str]
+    normalization_details_json: list[dict[str, Any]]
     changed_field_count: int
     content_changed: bool
     head_changed: bool
@@ -255,6 +267,7 @@ class SourceDiffRead(BaseModel):
         "truncated",
     ]
     diff_text: str
+    mode: Literal["exact", "meaningful"] = "exact"
     input_truncated: bool = False
     output_truncated: bool = False
 
