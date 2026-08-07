@@ -32,6 +32,8 @@ Python app package.
 - **Activity:** Durable background execution and worker status.
 - **Evidence:** Stored responses, metadata, links, redirects, source provenance, and reuse
   provenance that support an observation.
+- **Scan projection:** A deterministic, versioned, rebuildable index derived from one terminal
+  Scan's immutable evidence. It is never the original evidence.
 
 Use Page instead of WebResource in product copy. Use Observation where Snapshot would be
 unnecessarily technical. Internal classes, API fields, routes, and developer documentation may use
@@ -89,6 +91,8 @@ behavior. Keep storage behind the existing content-store abstraction.
 - parsers.ai_documents and storage.ai_document_store own deterministic AI index parsing and exact
   AI-document evidence; this evidence never uses ResourceSnapshot or Resource Inventory bodies.
 - services.scan_* owns scan inputs, queries, and deletion.
+- services.scan_projections owns versioned builds, validation, atomic activation, and fallback
+  metadata. services.projection_queries owns projection-backed Page, Resource, and graph reads.
 - services.page_queries owns persistent Page catalogs and observation history.
 - services.site_pages, services.page_categories, and services.notes own Site-scoped Page workflow.
 - crawler.link_roles owns pure deterministic link-role classification.
@@ -113,6 +117,8 @@ Do not rename these models or their tables for branding:
 - HtmlParseArtifact
 - Scan
 - BackgroundJob
+- ScanProjectionBuild
+- ScanProjectionState
 - UrlSource
 
 WebResource is the persistent Page identity. ResourceSnapshot is one Page observation. Reused

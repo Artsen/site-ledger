@@ -12,6 +12,11 @@ Site Ledger keeps Page identity and Page observation separate:
 
 This lets saved sites show persistent page history without losing exact scan evidence.
 
+Terminal Scan catalogs may read a versioned `ScanPageProjection`, but Page identity and exact
+observation detail remain `WebResource` and `ResourceSnapshot`. Content/head hashes in the
+projection support future compatible comparisons without rewriting historical observations. See
+[Scan projections](scan-projections.md).
+
 ## Parse Artifact Identity
 
 The content hash is not enough to identify parsed output. Relative URLs, protocol-relative URLs, and

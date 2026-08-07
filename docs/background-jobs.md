@@ -1,6 +1,7 @@
 # Site Ledger Background Jobs
 
-Site Ledger executes scans and source refreshes through a database-backed job queue. API requests
+Site Ledger executes scans, source refreshes, and terminal Scan projection builds through a
+database-backed job queue. API requests
 persist work and return without holding an HTTP connection open for the collection run.
 
 ## Local Commands
@@ -32,7 +33,7 @@ python -m app.worker --recover-only
 ## Model
 
 `BackgroundJob` stores the durable unit of work. A job is tied to exactly one domain subject:
-`scan_id` for crawl jobs or `source_refresh_id` for source refresh jobs. `website_property_id` is
+`scan_id` for crawl/projection jobs or `source_refresh_id` for source refresh jobs. `website_property_id` is
 stored for filtering and display, but it is not the job subject.
 
 `JobEvent` stores coarse lifecycle events for debugging and user-visible history. It intentionally
@@ -54,6 +55,11 @@ the holder of the current lease.
 Cancellation is cooperative. A queued job can move directly to `cancelled`. A running job stores
 `cancellation_requested_at`; handlers check that flag between fetches or source parsing steps, save
 partial results, and finish as `cancelled`.
+
+`scan_projection_build` starts only after Scan evidence reaches a terminal state. It is
+lease-guarded, cancellation-aware, batch-progress-reporting, and deduplicated per build. A failed or
+interrupted projection job records build failure without changing the crawl's terminal result or
+the current ready projection. See [Scan projections](scan-projections.md).
 
 If a worker exits or the process is killed, expired running jobs are reconciled on worker startup.
 When the domain record already reached a terminal state, the job follows that terminal state.

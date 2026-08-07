@@ -4,6 +4,11 @@ Resource Inventory records non-HTML files that a Scan observed directly or that 
 referenced. It is distinct from the URL-source Inventory: Sources describe candidate inputs, while
 Resources describe representation evidence and references found during a Scan.
 
+For terminal Scans, the canonical union is stored in a versioned `ScanResourceProjection` so list,
+filter, sort, pagination, and summary reads do not repeatedly aggregate occurrence unions. Exact
+duplicates and occurrence provenance remain in raw evidence. See
+[Scan projections](scan-projections.md).
+
 AI Document Source bodies are dedicated Source evidence, not Resource Inventory bodies. Fetching
 Markdown, text, JSON, YAML, OpenAPI, AsyncAPI, or llms corpus documents during a Source refresh does
 not create a `ResourceSnapshot`, an observed Resource, a Page graph edge, or a Scan count. See
