@@ -27,6 +27,8 @@ observations from separate scans without erasing the evidence captured by each s
 - Records page metadata, redirect chains, errors, and inbound/outgoing link provenance.
 - Uses conditional HTTP revalidation and deterministic parsed-result reuse when safe.
 - Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
+- Materializes versioned, rebuildable indexes for fast immutable terminal-Scan reads while keeping
+  raw evidence authoritative.
 - Indexes browser-rendered observations from the Scan workspace with exact evidence links.
 - Supports scan, source, Site, and background Activity lifecycle management.
 
@@ -51,6 +53,8 @@ findings.
 See [Product vision](docs/product-vision.md) for the broader model and roadmap.
 See [Resource Inventory](docs/resource-inventory.md) for classification, provenance, and storage
 boundaries.
+See [Scan projections](docs/scan-projections.md) for terminal-result indexing, fallback, and rebuild
+behavior.
 
 ## Architecture Overview
 
@@ -112,6 +116,9 @@ cd backend
 .\.venv\Scripts\Activate.ps1
 python -m app.worker
 ~~~
+
+Historical terminal Scans can prepare optimized results with
+`python -m app.scan_projections build-missing --limit 25` from `backend`.
 
 Run the frontend in a third terminal:
 

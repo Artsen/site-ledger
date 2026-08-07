@@ -163,17 +163,86 @@ def list_scan_history(
     order_col = sort_map[sort]
     order = order_col.desc() if direction == "desc" else order_col.asc()
     id_order = Scan.id.desc() if direction == "desc" else Scan.id.asc()
-    scans = list(
-        db.scalars(
-            query.order_by(order, id_order)
-            .limit(limit)
-            .offset(offset)
-        )
-    )
+    scans = list(db.scalars(query.order_by(order, id_order).limit(limit).offset(offset)))
     return ScanHistory(items=scans, total=total, limit=limit, offset=offset)
 
 
-def list_scan_pages(
+def list_scan_pages_routed(
+    db: Session,
+    scan_id: int,
+    search: str | None,
+    status: int | None,
+    host: str | None,
+    path_prefix: str | None,
+    depth: int | None,
+    min_depth: int | None,
+    max_depth: int | None,
+    error_state: Literal["any", "with_errors", "without_errors"],
+    sort: Literal["requested_url", "status", "title", "depth", "duration", "rendered_state"],
+    direction: Literal["asc", "desc"],
+    limit: int,
+    offset: int,
+    rendered_state: Literal[
+        "any",
+        "not_requested",
+        "captured",
+        "captured_with_warnings",
+        "failed",
+        "skipped",
+        "interrupted",
+    ] = "any",
+) -> PageList:
+    from app.services.projection_queries import list_projected_pages
+    from app.services.scan_projections import dynamic_metadata, resolve_projection_context
+
+    context = resolve_projection_context(db, scan_id)
+
+    projected = (
+        list_projected_pages(
+            db,
+            scan_id,
+            search,
+            status,
+            host,
+            path_prefix,
+            depth,
+            min_depth,
+            max_depth,
+            error_state,
+            sort,
+            direction,
+            limit,
+            offset,
+            rendered_state,
+            context.build,
+        )
+        if context.build is not None
+        else None
+    )
+    if projected is not None:
+        return projected
+    result = list_scan_pages_dynamic(
+        db,
+        scan_id,
+        search,
+        status,
+        host,
+        path_prefix,
+        depth,
+        min_depth,
+        max_depth,
+        error_state,
+        sort,
+        direction,
+        limit,
+        offset,
+        rendered_state,
+    )
+    result.projection = dynamic_metadata(context.scan)
+    return result
+
+
+def list_scan_pages_dynamic(
     db: Session,
     scan_id: int,
     search: str | None,
@@ -261,11 +330,7 @@ def list_scan_pages(
     order_col = sort_map[sort]
     order = order_col.desc() if direction == "desc" else order_col.asc()
     id_order = ResourceSnapshot.id.desc() if direction == "desc" else ResourceSnapshot.id.asc()
-    rows = db.execute(
-        base.order_by(order, id_order)
-        .limit(limit)
-        .offset(offset)
-    ).all()
+    rows = db.execute(base.order_by(order, id_order).limit(limit).offset(offset)).all()
     return PageList(
         items=[
             PageRead(
@@ -506,3 +571,8 @@ def _apply_inbound_filters(
     elif link_role:
         query = query.where(ResourceOccurrence.link_role == link_role)
     return query
+
+
+# Keep the raw query as the stable service-level equivalence oracle. API routes use
+# list_scan_pages_routed so ordinary terminal-Scan reads can select projections.
+list_scan_pages = list_scan_pages_dynamic

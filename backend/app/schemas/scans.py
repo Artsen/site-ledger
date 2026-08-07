@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.browser.config import DEFAULTS, validate_render_config
 from app.schemas.page_workspaces import PageCategoryRead
+from app.schemas.projections import ProjectionMetadata
 
 
 class ScopeConfigPayload(BaseModel):
@@ -140,6 +141,7 @@ class PageList(BaseModel):
     total: int
     limit: int
     offset: int
+    projection: ProjectionMetadata | None = None
 
 
 class PersistentPageRead(BaseModel):

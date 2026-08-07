@@ -28,6 +28,7 @@ The current application implements:
 - Stored HTML evidence and parsed head metadata.
 - Inbound and outgoing link occurrence provenance.
 - Scan-specific 2D and 3D topology graphs.
+- Versioned prepared results for immutable terminal Scans, with raw evidence fallback and rebuilds.
 - Scan, source, Site, and Activity lifecycle management.
 
 ## Product Vocabulary
@@ -72,6 +73,12 @@ layout and camera state are not persisted.
 ### Activity
 
 Durable background execution, lifecycle events, leases, cancellation, and worker status.
+
+### Scan Projection
+
+A deterministic, versioned, rebuildable index derived only from one terminal Scan's immutable
+evidence. It accelerates ordinary reads but never replaces observations or exact evidence. See
+[Scan projections](scan-projections.md).
 
 ## Page Versus Observation
 

@@ -1,4 +1,5 @@
-from typing import Annotated, Literal
+import hashlib
+from typing import Annotated, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
@@ -41,6 +42,7 @@ from app.schemas.page_workspaces import (
     PageCategoryUpdate,
     PageMetadataUpdate,
 )
+from app.schemas.projections import ScanProjectionBuildRead, ScanProjectionStatusRead
 from app.schemas.rendered import (
     RenderCapabilitiesRead,
     RenderedArtifactRead,
@@ -100,6 +102,7 @@ from app.services.background_jobs import (
     active_job_for_scan,
     active_job_for_source_refresh,
     enqueue_scan_job,
+    enqueue_scan_projection_job,
     enqueue_source_refresh_job,
     presentation_status,
     request_cancellation,
@@ -143,12 +146,19 @@ from app.services.resource_queries import (
 )
 from app.services.scan_deletion import delete_scan as delete_scan_service
 from app.services.scan_deletion import preview_scan_deletion
+from app.services.scan_projections import (
+    create_projection_build,
+    projection_status,
+    verify_projection_build,
+)
 from app.services.scan_queries import (
     get_snapshot_detail,
     list_scan_history,
-    list_scan_pages,
     list_snapshot_inbound_links,
     list_snapshot_outgoing_links,
+)
+from app.services.scan_queries import (
+    list_scan_pages_routed as list_scan_pages,
 )
 from app.services.site_management import (
     DuplicateSiteError,
@@ -186,6 +196,9 @@ from app.storage.artifact_store import ArtifactNotFoundError, LocalArtifactStore
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
 router = APIRouter(prefix="/api")
+ProjectionResponseT = TypeVar(
+    "ProjectionResponseT", PageList, ResourceInventoryList, ResourceSummary, GraphResponse
+)
 DbSession = Annotated[Session, Depends(get_db)]
 ScanListLimit = Annotated[int, Query(ge=1, le=250)]
 PageLimit = Annotated[int, Query(ge=1, le=250)]
@@ -1055,9 +1068,45 @@ def delete_scan(scan_id: int, request: Request, db: DbSession) -> ScanDeleteResu
     return result
 
 
+@router.get("/scans/{scan_id}/projection", response_model=ScanProjectionStatusRead)
+def get_scan_projection_status(scan_id: int, db: DbSession) -> ScanProjectionStatusRead:
+    result = projection_status(db, scan_id)
+    if result is None:
+        raise HTTPException(404, "Scan not found")
+    return result
+
+
+@router.post(
+    "/scans/{scan_id}/projection/build",
+    response_model=ScanProjectionBuildRead,
+    status_code=202,
+)
+def build_scan_projection(scan_id: int, db: DbSession) -> ScanProjectionBuildRead:
+    return _queue_scan_projection(db, scan_id, force=False)
+
+
+@router.post(
+    "/scans/{scan_id}/projection/rebuild",
+    response_model=ScanProjectionBuildRead,
+    status_code=202,
+)
+def rebuild_scan_projection(scan_id: int, db: DbSession) -> ScanProjectionBuildRead:
+    return _queue_scan_projection(db, scan_id, force=True)
+
+
+@router.post("/scans/{scan_id}/projection/verify")
+def verify_scan_projection(scan_id: int, db: DbSession) -> dict[str, object]:
+    try:
+        return verify_projection_build(db, scan_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.get("/scans/{scan_id}/pages", response_model=PageList)
 def list_pages(
     scan_id: int,
+    request: Request,
+    response: Response,
     db: DbSession,
     search: str | None = None,
     status: int | None = None,
@@ -1082,8 +1131,8 @@ def list_pages(
     direction: Literal["asc", "desc"] = "asc",
     limit: PageLimit = 50,
     offset: PageOffset = 0,
-) -> PageList:
-    return list_scan_pages(
+) -> PageList | Response:
+    result = list_scan_pages(
         db,
         scan_id,
         search,
@@ -1100,11 +1149,14 @@ def list_pages(
         offset,
         rendered_state,
     )
+    return _projection_http_response(request, response, result)
 
 
 @router.get("/scans/{scan_id}/resources", response_model=ResourceInventoryList)
 def get_scan_resources(
     scan_id: int,
+    request: Request,
+    response: Response,
     db: DbSession,
     search: str | None = None,
     resource_kind: str | None = None,
@@ -1122,7 +1174,7 @@ def get_scan_resources(
     direction: Literal["asc", "desc"] = "asc",
     limit: PageLimit = 50,
     offset: PageOffset = 0,
-) -> ResourceInventoryList:
+) -> ResourceInventoryList | Response:
     result = list_scan_resources(
         db,
         scan_id,
@@ -1145,7 +1197,7 @@ def get_scan_resources(
     )
     if result is None:
         raise HTTPException(404, "Scan not found")
-    return result
+    return _projection_http_response(request, response, result)
 
 
 @router.get("/sites/{site_id}/resources", response_model=ResourceInventoryList)
@@ -1244,11 +1296,13 @@ def get_site_resource_occurrences(
 
 
 @router.get("/scans/{scan_id}/resources/summary", response_model=ResourceSummary)
-def get_scan_resource_summary(scan_id: int, db: DbSession) -> ResourceSummary:
+def get_scan_resource_summary(
+    scan_id: int, request: Request, response: Response, db: DbSession
+) -> ResourceSummary | Response:
     result = scan_resource_summary(db, scan_id)
     if result is None:
         raise HTTPException(404, "Scan not found")
-    return result
+    return _projection_http_response(request, response, result)
 
 
 @router.get("/scans/{scan_id}/resources/{resource_id}", response_model=ResourceDetail)
@@ -1330,6 +1384,8 @@ def get_scan_rendered_observations(
 @router.get("/scans/{scan_id}/graph", response_model=GraphResponse)
 def get_graph(
     scan_id: int,
+    request: Request,
+    response: Response,
     db: DbSession,
     max_nodes: int = Query(
         GRAPH_CONFIG.default_node_limit,
@@ -1358,7 +1414,7 @@ def get_graph(
         ge=1,
         le=GRAPH_CONFIG.maximum_focus_hops,
     ),
-) -> GraphResponse:
+) -> GraphResponse | Response:
     if min_depth is not None and max_depth is not None and min_depth > max_depth:
         raise HTTPException(422, "min_depth cannot be greater than max_depth")
     try:
@@ -1387,7 +1443,7 @@ def get_graph(
         raise HTTPException(404, str(exc)) from exc
     if graph is None:
         raise HTTPException(404, "Scan not found")
-    return graph
+    return _projection_http_response(request, response, graph)
 
 
 @router.get("/graph/capabilities", response_model=GraphCapabilitiesRead)
@@ -1697,6 +1753,54 @@ def get_resource_occurrences(resource_id: int, db: DbSession) -> list[ResourceOc
             select(ResourceOccurrence).where(ResourceOccurrence.target_resource_id == resource_id)
         )
     )
+
+
+def _queue_scan_projection(db: Session, scan_id: int, *, force: bool) -> ScanProjectionBuildRead:
+    scan = db.get(Scan, scan_id)
+    if scan is None:
+        raise HTTPException(404, "Scan not found")
+    try:
+        build = create_projection_build(db, scan_id, force=force)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if build.status == "queued":
+        enqueue_scan_projection_job(db, build.id, scan)
+    db.commit()
+    db.refresh(build)
+    return ScanProjectionBuildRead.model_validate(build)
+
+
+def _projection_http_response(
+    request: Request,
+    response: Response,
+    result: ProjectionResponseT,
+) -> ProjectionResponseT | Response:
+    metadata = result.projection
+    if metadata is None:
+        return result
+    response.headers["X-Projection-Source"] = metadata.projection_source
+    response.headers["X-Projection-Version"] = metadata.projection_version
+    response.headers["X-Projection-Status"] = metadata.projection_status
+    if metadata.projection_source != "materialized" or metadata.projection_build_id is None:
+        return result
+    identity = (
+        f"{request.url.path}?{request.url.query}|{metadata.projection_version}|"
+        f"{metadata.projection_build_id}"
+    )
+    digest = hashlib.sha256(identity.encode()).hexdigest()
+    etag = f'"scan-{metadata.projection_build_id}-{digest[:24]}"'
+    headers = {
+        "Cache-Control": "private, no-cache",
+        "ETag": etag,
+        "X-Projection-Source": metadata.projection_source,
+        "X-Projection-Version": metadata.projection_version,
+        "X-Projection-Status": metadata.projection_status,
+        "X-Projection-Build-Id": str(metadata.projection_build_id),
+    }
+    response.headers.update(headers)
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return result
 
 
 def _job_read(job: BackgroundJob, health: WorkerHealth) -> JobRead:

@@ -272,6 +272,80 @@ test("numbered pagination stays URL-backed and isolated between Scan tabs", asyn
   await expect(page).toHaveURL(/tab=rendered/);
 });
 
+test("terminal Scan projections switch from fallback and preserve ready results during rebuild", async ({ page }) => {
+  await mockApi(page);
+  let state: "missing" | "building" | "ready" | "failed" = "missing";
+  let currentBuild: number | null = null;
+  let pageRequests = 0;
+  await page.route("**/api/scans/1/projection**", async (route) => {
+    const method = route.request().method();
+    const pathname = new URL(route.request().url()).pathname;
+    if (method === "POST") {
+      state = "building";
+      await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ id: currentBuild ? 10 : 9, scan_id: 1, status: "queued" }) });
+      return;
+    }
+    if (pathname !== "/api/scans/1/projection") return route.fallback();
+    const active = state === "building" ? { id: currentBuild ? 10 : 9, status: "building", error_message: null } : null;
+    const failed = state === "failed" ? { id: 10, status: "failed", error_message: "Synthetic rebuild failure" } : null;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        scan_id: 1,
+        scan_status: "completed",
+        expected_version: "scan-projection-v1",
+        projection_source: currentBuild ? "materialized" : "dynamic",
+        projection_status: state,
+        current_build: currentBuild ? { id: currentBuild, status: "ready" } : null,
+        active_build: active,
+        latest_build: failed ?? active ?? (currentBuild ? { id: currentBuild, status: "ready" } : null),
+        can_build: state === "missing" || (state === "failed" && !currentBuild),
+        can_rebuild: Boolean(currentBuild && state !== "building"),
+      }),
+    });
+  });
+  await page.route("**/api/scans/1/pages**", async (route) => {
+    pageRequests += 1;
+    const url = new URL(route.request().url());
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ ...pageRow, id: offset + 1 }], total: 125, limit, offset }) });
+  });
+
+  await page.goto("/scans/1?tab=pages");
+  await expect(page.getByText("Using current evidence while optimized results are prepared")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Pricing", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Prepare results" }).click();
+  await expect(page.getByText("Building optimized results")).toBeVisible();
+
+  state = "ready";
+  currentBuild = 9;
+  await page.reload();
+  await expect(page.getByText("Optimized results ready")).toBeVisible();
+  await page.getByRole("button", { name: "Go to Page 2" }).first().click();
+  await expect(page).toHaveURL(/pages_offset=50/);
+  const requestsBeforeFocus = pageRequests;
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForTimeout(300);
+  expect(pageRequests).toBe(requestsBeforeFocus);
+
+  await page.getByRole("tab", { name: /Resources/i }).click();
+  await page.getByLabel("Resource kind").selectOption("document");
+  await expect(page).toHaveURL(/resource_kind=document/);
+  await page.goto("/scans/1?tab=graph&selected_edge=8-2");
+  await expect(page.getByText("Pricing link")).toBeVisible();
+  await expect(page.getByText("Selected edge")).toBeVisible();
+
+  await page.getByRole("button", { name: "Rebuild results" }).click();
+  await expect(page.getByText("Building optimized results")).toBeVisible();
+  await expect(page.getByText("Website topology graph")).toBeVisible();
+  state = "failed";
+  await page.reload();
+  await expect(page.getByText("Optimized results failed; using current evidence")).toBeVisible();
+  await expect(page.getByText("Synthetic rebuild failure")).toBeVisible();
+  await expect(page.getByText("Website topology graph")).toBeVisible();
+});
+
 test("saved-Site observations link to their exact Page workspace while ad hoc observations do not", async ({ page }) => {
   await mockApi(page);
   await page.route("**/api/snapshots/9", async (route) => {
@@ -383,6 +457,14 @@ async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
   let siteActive = true;
   let pageNote: Record<string, unknown> | null = null;
+
+  await page.route("**/api/scans/1/projection**", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ id: 10, scan_id: 1, status: "queued" }) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ scan_id: 1, scan_status: "completed", expected_version: "scan-projection-v1", projection_source: "materialized", projection_status: "ready", current_build: { id: 9, status: "ready" }, active_build: null, latest_build: { id: 9, status: "ready" }, can_build: false, can_rebuild: true }) });
+  });
 
   await page.route("**/api/scans/1/resources/summary", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ unique_resources: 2, observed_resources: 1, discovered_only_resources: 1, total_occurrences: 3, kind_counts: { image: 1, document: 1, script: 1, stylesheet: 1, font: 1 } }) });

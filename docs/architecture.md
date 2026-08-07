@@ -41,6 +41,8 @@ current implementations.
   AI Document Source evidence without creating Scan observations.
 - ScanSeed and ScanSeedOrigin preserve explicit scan-input provenance.
 - BackgroundJob, JobEvent, and WorkerInstance store durable Activity state.
+- ScanProjectionBuild and ScanProjectionState select a complete compatible set of Page, Resource,
+  Link, and summary projections for fast terminal-Scan reads.
 
 These internal class and table names are stable technical contracts. Product copy uses Page and
 Observation where the implementation names would be unnecessarily technical.
@@ -63,6 +65,11 @@ occurrences, or graph data. See [Browser-rendered observations](browser-rendered
 services.resource_queries aggregates observed non-HTML snapshots, anchor-linked files, and
 embedded references with set-based SQL. Embedded references are not automatically fetched and
 non-HTML response bodies are not retained. See [Resource Inventory](resource-inventory.md).
+
+Terminal Scans enqueue a durable projection build after evidence commits. Active and missing-build
+reads remain dynamic; compatible ready builds route Page, Resource, summary, and graph reads through
+indexed projection tables. Activation is an atomic state-pointer update, and failed rebuilds leave
+the previous ready build current. See [Scan projections](scan-projections.md).
 
 The crawler does not execute JavaScript, submit forms, forward cookies, or send user credentials.
 Only HTTP and HTTPS are supported. Redirects are followed manually so every destination is checked

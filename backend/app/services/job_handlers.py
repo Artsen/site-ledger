@@ -20,9 +20,16 @@ from app.services.job_types import (
     JOB_STATUS_COMPLETED_WITH_ERRORS,
     JOB_STATUS_FAILED,
     JOB_TYPE_SCAN,
+    JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
 )
 from app.services.scan_execution import ScanExecutionCoordinator
+from app.services.scan_projections import (
+    ProjectionBuildCancelled,
+    create_projection_build,
+    execute_projection_build,
+    mark_projection_build_terminal,
+)
 from app.services.source_refresh import execute_source_refresh
 from app.storage.ai_document_store import LocalAiDocumentStore
 from app.storage.artifact_store import LocalArtifactStore
@@ -140,6 +147,7 @@ class ScanJobHandler:
             )
             await coordinator.execute(scan)
             db.refresh(scan)
+            _enqueue_projection_for_terminal_scan(db, scan)
             if scan.status == JOB_STATUS_CANCELLED:
                 return HandlerResult(status=JOB_STATUS_CANCELLED, result_json=_scan_result(scan))
             if scan.status == JOB_STATUS_COMPLETED_WITH_ERRORS:
@@ -200,6 +208,40 @@ class SourceRefreshJobHandler:
             return HandlerResult(status=JOB_STATUS_FAILED, result_json=_refresh_result(refresh))
 
 
+class ScanProjectionJobHandler:
+    def __init__(self, session_factory: Callable[[], Session]):
+        self.session_factory = session_factory
+
+    async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
+        build_id = int(job.payload_json.get("projection_build_id", 0))
+        if not build_id:
+            raise ValueError("Projection job is missing projection_build_id.")
+        try:
+            with self.session_factory() as db:
+                build = execute_projection_build(
+                    db,
+                    build_id,
+                    should_cancel=context.check_cancelled,
+                    progress=lambda phase, current, total: context.progress(
+                        phase=phase,
+                        current_operation=f"Preparing {phase}",
+                        current=current,
+                        total=total,
+                        unit="rows",
+                    ),
+                )
+                return HandlerResult(
+                    result_json={
+                        "scan_id": build.scan_id,
+                        "projection_build_id": build.id,
+                        "projection_version": build.projection_version,
+                        "checksum_sha256": build.checksum_sha256,
+                    }
+                )
+        except ProjectionBuildCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
+
 class JobHandlerRegistry:
     def __init__(self, handlers: dict[str, JobHandler]):
         self.handlers = handlers
@@ -218,6 +260,7 @@ def build_handler_registry(
         {
             JOB_TYPE_SCAN: ScanJobHandler(session_factory, store),
             JOB_TYPE_SOURCE_REFRESH: SourceRefreshJobHandler(session_factory),
+            JOB_TYPE_SCAN_PROJECTION_BUILD: ScanProjectionJobHandler(session_factory),
         }
     )
 
@@ -322,12 +365,21 @@ def _refresh_result(refresh: SourceRefresh) -> dict[str, Any]:
 def _mark_domain_cancelled(session_factory: Callable[[], Session], job: BackgroundJob) -> None:
     with session_factory() as db:
         now = datetime.now(UTC)
-        if job.scan_id:
+        if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
+            mark_projection_build_terminal(
+                db,
+                int(job.payload_json.get("projection_build_id", 0)),
+                "cancelled",
+                "cancelled",
+                "Projection build cancelled by user.",
+            )
+        elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
                 scan.status = "cancelled"
                 scan.stop_reason = "cancelled_by_user"
                 scan.finished_at = now
+                _enqueue_projection_for_terminal_scan(db, scan)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:
@@ -346,7 +398,15 @@ def _mark_domain_interrupted(
 ) -> None:
     with session_factory() as db:
         now = datetime.now(UTC)
-        if job.scan_id:
+        if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
+            mark_projection_build_terminal(
+                db,
+                int(job.payload_json.get("projection_build_id", 0)),
+                "failed",
+                reason,
+                "Worker interrupted during projection build.",
+            )
+        elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
                 scan.status = "interrupted"
@@ -355,6 +415,7 @@ def _mark_domain_interrupted(
                 from app.services.rendered_capture import mark_capturing_interrupted
 
                 mark_capturing_interrupted(db, scan.id, reason)
+                _enqueue_projection_for_terminal_scan(db, scan)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:
@@ -373,12 +434,21 @@ def _mark_domain_failed(
 ) -> None:
     with session_factory() as db:
         now = datetime.now(UTC)
-        if job.scan_id:
+        if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
+            mark_projection_build_terminal(
+                db,
+                int(job.payload_json.get("projection_build_id", 0)),
+                "failed",
+                type(exc).__name__,
+                str(exc),
+            )
+        elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
                 scan.status = "failed"
                 scan.fatal_error_message = str(exc)
                 scan.finished_at = now
+                _enqueue_projection_for_terminal_scan(db, scan)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:
@@ -392,3 +462,18 @@ def _mark_domain_failed(
                     refresh.url_source.last_error_message = refresh.error_message
                     refresh.url_source.last_refresh_finished_at = now
         db.commit()
+
+
+def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan) -> None:
+    if scan.status not in {
+        "completed",
+        "completed_with_errors",
+        "failed",
+        "cancelled",
+        "interrupted",
+    }:
+        return
+    build = create_projection_build(db, scan.id)
+    if build.status == "queued":
+        background_jobs.enqueue_scan_projection_job(db, build.id, scan)
+    db.commit()

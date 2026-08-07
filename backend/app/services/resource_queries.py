@@ -60,7 +60,87 @@ def list_scan_resources(
     limit: int = 50,
     offset: int = 0,
 ) -> ResourceInventoryList | None:
-    scan = db.get(Scan, scan_id)
+    from app.services.projection_queries import list_projected_resources
+    from app.services.scan_projections import dynamic_metadata, resolve_projection_context
+
+    context = resolve_projection_context(db, scan_id)
+
+    projected = (
+        list_projected_resources(
+            db,
+            scan_id,
+            search=search,
+            resource_kind=resource_kind,
+            mime_type=mime_type,
+            extension=extension,
+            host=host,
+            status=status,
+            evidence_state=evidence_state,
+            scope_state=scope_state,
+            location_state=location_state,
+            min_size=min_size,
+            max_size=max_size,
+            has_multiple_source_pages=has_multiple_source_pages,
+            sort=sort,
+            direction=direction,
+            limit=limit,
+            offset=offset,
+            build=context.build,
+        )
+        if context.build is not None
+        else None
+    )
+    if projected is not None:
+        return projected
+    result = list_scan_resources_dynamic(
+        db,
+        scan_id,
+        search=search,
+        resource_kind=resource_kind,
+        mime_type=mime_type,
+        extension=extension,
+        host=host,
+        status=status,
+        evidence_state=evidence_state,
+        scope_state=scope_state,
+        location_state=location_state,
+        min_size=min_size,
+        max_size=max_size,
+        has_multiple_source_pages=has_multiple_source_pages,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+        _scan=context.scan,
+    )
+    if result is not None:
+        result.projection = dynamic_metadata(context.scan)
+    return result
+
+
+def list_scan_resources_dynamic(
+    db: Session,
+    scan_id: int,
+    *,
+    search: str | None = None,
+    resource_kind: str | None = None,
+    mime_type: str | None = None,
+    extension: str | None = None,
+    host: str | None = None,
+    status: int | None = None,
+    evidence_state: Literal["any", "observed", "discovered_only"] = "any",
+    scope_state: Literal["any", "in_scope", "out_of_scope"] = "any",
+    location_state: Literal["any", "internal", "external"] = "any",
+    min_size: int | None = None,
+    max_size: int | None = None,
+    has_multiple_source_pages: bool = False,
+    sort: ResourceSort = "url",
+    direction: Literal["asc", "desc"] = "asc",
+    limit: int = 50,
+    offset: int = 0,
+    _scan: Scan | None = None,
+) -> ResourceInventoryList | None:
+    scan = _scan or db.get(Scan, scan_id)
     if scan is None:
         return None
     query = _resource_aggregate(_evidence_query(scan_id=scan_id))
@@ -128,7 +208,27 @@ def list_site_resources(
 
 
 def scan_resource_summary(db: Session, scan_id: int) -> ResourceSummary | None:
-    if db.get(Scan, scan_id) is None:
+    from app.services.projection_queries import projected_resource_summary
+    from app.services.scan_projections import dynamic_metadata, resolve_projection_context
+
+    context = resolve_projection_context(db, scan_id)
+    projected = (
+        projected_resource_summary(db, scan_id, context.build)
+        if context.build is not None
+        else None
+    )
+    if projected is not None:
+        return projected
+    result = scan_resource_summary_dynamic(db, scan_id, context.scan)
+    if result is not None:
+        result.projection = dynamic_metadata(context.scan)
+    return result
+
+
+def scan_resource_summary_dynamic(
+    db: Session, scan_id: int, _scan: Scan | None = None
+) -> ResourceSummary | None:
+    if _scan is None and db.get(Scan, scan_id) is None:
         return None
     return _summary(db, _resource_aggregate(_evidence_query(scan_id=scan_id)))
 

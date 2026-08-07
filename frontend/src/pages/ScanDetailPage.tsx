@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { cancelScan, createScanNote, deleteScan, getScan, getScanDeletePreview, getWorkerHealth, listErrors, listJobs, listPages, listScanNotes, listScanRenderedObservations, listScanSeeds } from "../api/client";
+import { buildScanProjection, cancelScan, createScanNote, deleteScan, getScan, getScanDeletePreview, getScanProjectionStatus, getWorkerHealth, listErrors, listJobs, listPages, listScanNotes, listScanRenderedObservations, listScanSeeds, rebuildScanProjection } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
 import { RenderedObservationTable } from "../components/RenderedObservationTable";
 import { ResourceInventoryView } from "../components/ResourceInventoryView";
@@ -22,6 +22,7 @@ import type { Page, RenderedObservationIndexItem, Scan, ScanSeed, Snapshot } fro
 import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
+import { projectionStatusRefetchInterval, scanResultQueryOptions } from "../utils/scanQueryOptions";
 
 export function ScanDetailPage() {
   const { scanId = "" } = useParams();
@@ -38,6 +39,12 @@ export function ScanDetailPage() {
   });
   useDocumentTitle(scan.data ? `Scan ${scan.data.id}` : scanId ? `Scan ${scanId}` : "Scan");
   const isActiveScan = Boolean(scan.data && !isTerminalStatus(scan.data.status));
+  const projection = useQuery({
+    queryKey: ["scan-projection", scanId],
+    queryFn: () => getScanProjectionStatus(scanId),
+    enabled: Boolean(scan.data),
+    refetchInterval: (query) => projectionStatusRefetchInterval(query.state.data)
+  });
   const jobs = useQuery({
     queryKey: ["jobs", "scan", scanId],
     queryFn: () => listJobs(`?scan_id=${encodeURIComponent(scanId)}&limit=1`),
@@ -58,17 +65,19 @@ export function ScanDetailPage() {
   const latestJob = jobs.data?.items[0];
 
   useEffect(() => {
+    if (tab !== "pages") return;
     if (searchDraft === (searchParams.get("search") ?? "")) return;
     const timer = window.setTimeout(() => updateParam(setSearchParams, "search", searchDraft || null, { pages_offset: null }), 350);
     return () => window.clearTimeout(timer);
-  }, [searchDraft, searchParams, setSearchParams]);
+  }, [searchDraft, searchParams, setSearchParams, tab]);
 
   const pageQuery = useMemo(() => buildPageQuery(searchParams), [searchParams]);
+  const projectionKey = projection.data?.current_build?.id ?? projection.data?.projection_status ?? "unknown";
   const pages = useQuery({
-    queryKey: ["pages", scanId, pageQuery],
+    queryKey: ["pages", scanId, projectionKey, pageQuery],
     queryFn: () => listPages(scanId, pageQuery),
     enabled: tab === "overview" || tab === "pages",
-    refetchInterval: isActiveScan ? 2000 : false,
+    ...scanResultQueryOptions(scan.data?.status, projection.data),
     placeholderData: (previous) => previous
   });
   const errors = useQuery({
@@ -102,9 +111,16 @@ export function ScanDetailPage() {
   const remove = useMutation({
     mutationFn: () => deleteScan(scanId),
     onSuccess: async () => {
+      queryClient.removeQueries({ predicate: (query) => query.queryKey.some((part) => String(part) === scanId) });
       await queryClient.invalidateQueries({ queryKey: ["scans"] });
       await queryClient.invalidateQueries({ queryKey: ["scan-history"] });
       navigate("/scans");
+    }
+  });
+  const prepareProjection = useMutation({
+    mutationFn: () => projection.data?.can_rebuild ? rebuildScanProjection(scanId) : buildScanProjection(scanId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["scan-projection", scanId] });
     }
   });
 
@@ -164,10 +180,17 @@ export function ScanDetailPage() {
       {scan.data.scope_config.render_mode !== "none" ? <Link to={`/scans/${scanId}?tab=rendered`} className="mb-6 grid grid-cols-2 gap-3 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 md:grid-cols-5" aria-label="View rendered captures"><Metric label="Render selected" value={scan.data.rendered_selected_count} /><Metric label="Rendered" value={scan.data.rendered_completed_count} /><Metric label="Render failed" value={scan.data.rendered_failed_count} /><Metric label="Blocked requests" value={scan.data.rendered_blocked_request_count} /><Metric label="Artifacts" value={scan.data.rendered_artifact_count} /></Link> : null}
 
       {latestJob && !isTerminalStatus(latestJob.status) ? <JobNotice job={latestJob} workerHealth={workerHealth.data} /> : null}
+      {projection.data && projection.data.projection_status !== "not_terminal" ? <ProjectionNotice status={projection.data.projection_status} canBuild={projection.data.can_build} canRebuild={projection.data.can_rebuild} errorMessage={projection.data.active_build?.error_message ?? projection.data.latest_build?.error_message} loading={prepareProjection.isPending} onBuild={() => prepareProjection.mutate()} /> : null}
+      {prepareProjection.error ? <div className="mb-4"><ErrorBanner error={prepareProjection.error} title="Could not prepare results" /></div> : null}
       {cancel.error ? <div className="mb-4"><ErrorBanner error={cancel.error} title="Could not cancel scan" /></div> : null}
       {remove.error ? <div className="mb-4"><ErrorBanner error={remove.error} title="Could not delete scan" /></div> : null}
 
-      <Tabs tabs={tabs} active={tab} onChange={(next) => updateParam(setSearchParams, "tab", next === "overview" ? null : next)} />
+      <Tabs tabs={tabs} active={tab} onChange={(next) => {
+        setSearchDraft("");
+        const nextParams = new URLSearchParams();
+        if (next !== "overview") nextParams.set("tab", next);
+        setSearchParams(nextParams);
+      }} />
 
       <div className="mt-5">
         {tab === "overview" ? (
@@ -201,15 +224,26 @@ export function ScanDetailPage() {
             activeScan={isActiveScan}
           />
         ) : null}
-        {tab === "resources" ? <ResourceInventoryView scope="scan" id={scanId} /> : null}
+        {tab === "resources" ? <ResourceInventoryView scope="scan" id={scanId} scanStatus={scan.data.status} projectionStatus={projection.data} /> : null}
         {tab === "rendered" ? <RenderedObservationTable scanId={scanId} renderMode={scan.data.scope_config.render_mode} /> : null}
         {tab === "inputs" ? <InputsView seeds={seeds.data?.items ?? []} loading={seeds.isLoading} error={seeds.error} /> : null}
         {tab === "errors" ? <ErrorsView scanId={scanId} errors={errors.data ?? []} loading={errors.isLoading} error={errors.error} /> : null}
-        {tab === "graph" ? <ScanGraphView scan={scan.data} /> : null}
+        {tab === "graph" ? <ScanGraphView scan={scan.data} projectionStatus={projection.data} /> : null}
         {tab === "notes" ? <NotesPanel queryKey={["scan-notes", scanId]} list={(query) => listScanNotes(scanId, query)} create={(body, pinned) => createScanNote(scanId, body, pinned)} context={`Scan ${scanId}`} /> : null}
       </div>
     </PageFrame>
   );
+}
+
+function ProjectionNotice({ status, canBuild, canRebuild, errorMessage, loading, onBuild }: { status: string; canBuild: boolean; canRebuild: boolean; errorMessage?: string | null; loading: boolean; onBuild: () => void }) {
+  const ready = status === "ready";
+  const building = status === "queued" || status === "building";
+  const failed = status === "failed" || status === "cancelled";
+  const label = ready ? "Optimized results ready" : building ? "Building optimized results" : failed ? "Optimized results failed; using current evidence" : "Using current evidence while optimized results are prepared";
+  return <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm" role="status" aria-live="polite">
+    <div><span className="font-medium text-stone-800">{label}</span>{failed && errorMessage ? <span className="ml-2 text-stone-600">{errorMessage}</span> : null}</div>
+    {(canBuild || canRebuild) ? <Button type="button" variant="ghost" loading={loading} onClick={onBuild}>{canRebuild ? "Rebuild results" : "Prepare results"}</Button> : null}
+  </div>;
 }
 
 function PageFrame({ children }: { children: React.ReactNode }) {

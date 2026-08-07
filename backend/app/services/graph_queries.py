@@ -75,7 +75,27 @@ def get_graph_capabilities() -> GraphCapabilitiesRead:
 
 
 def get_scan_graph(db: Session, scan_id: int, filters: GraphFilters) -> GraphResponse | None:
-    scan = db.scalar(
+    from app.services.projection_queries import get_projected_graph
+    from app.services.scan_projections import dynamic_metadata, resolve_projection_context
+
+    context = resolve_projection_context(db, scan_id)
+    projected = (
+        get_projected_graph(db, scan_id, filters, build=context.build, scan=context.scan)
+        if context.build is not None
+        else None
+    )
+    if projected is not None:
+        return projected
+    result = get_scan_graph_dynamic(db, scan_id, filters, context.scan)
+    if result is not None:
+        result.projection = dynamic_metadata(context.scan)
+    return result
+
+
+def get_scan_graph_dynamic(
+    db: Session, scan_id: int, filters: GraphFilters, _scan: Scan | None = None
+) -> GraphResponse | None:
+    scan = _scan or db.scalar(
         select(Scan).options(joinedload(Scan.website_property)).where(Scan.id == scan_id)
     )
     if scan is None:

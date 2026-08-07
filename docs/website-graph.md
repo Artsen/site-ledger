@@ -7,8 +7,8 @@ captured by the static crawler and links already stored as occurrences.
 
 ```mermaid
 flowchart LR
-  Snapshots[ResourceSnapshot rows] --> Queries[services.graph_queries]
-  Occurrences[ResourceOccurrence rows] --> Queries
+  Snapshots[ResourceSnapshot or ScanPageProjection rows] --> Queries[services.graph_queries]
+  Occurrences[ResourceOccurrence or ScanLinkProjection rows] --> Queries
   Seeds[ScanSeed rows] --> Queries
   Config[services.graph_config] --> API[Graph capabilities API]
   Queries --> API[Graph API schemas and routes]
@@ -24,6 +24,10 @@ flowchart LR
 and topology assembly. Route handlers validate query parameters and return typed responses only.
 Frontend code loads capabilities once through TanStack Query, uses application-owned graph types, and
 converts them into renderer data through the graph adapter modules.
+
+Active Scans and terminal fallback use raw evidence. Compatible terminal builds use Page projections
+as nodes and Link projections as edges and metrics; exact edge occurrence inspection still reads
+`ResourceOccurrence`. See [Scan projections](scan-projections.md).
 
 ## Node Semantics
 
