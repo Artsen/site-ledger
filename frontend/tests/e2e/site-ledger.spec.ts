@@ -481,6 +481,159 @@ test("Site timezone and automatic Category Rule workflow", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Create Rule" })).toBeVisible();
 });
 
+test("deterministic Scan comparison selects direction, filters, and sorts neutral results", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await mockComparisonApi(page);
+
+  await page.goto("/sites/3?tab=comparisons");
+  await expect(page.getByLabel("Baseline Scan")).toHaveValue("1");
+  await expect(page.getByLabel("Target Scan")).toHaveValue("2");
+  await page.getByRole("button", { name: "Compare" }).click();
+  await expect(page.getByText("Comparable", { exact: true })).toBeVisible();
+  await expect(page.getByText("scan-comparison-v1")).toBeVisible();
+
+  await page.getByRole("tab", { name: /Pages/ }).click();
+  await expect(page.getByLabel("Show all Pages")).not.toBeChecked();
+  await expect(page.getByText("Not Observed In Target", { exact: true })).toBeVisible();
+  await expect(page.getByText(/removed from website/i)).toHaveCount(0);
+  await page.getByRole("button", { name: "Sort URL ascending" }).click();
+  await expect(page).toHaveURL(/comparison_sort=url/);
+  await page.getByLabel("Presence filter").selectOption("not_observed_in_target");
+  await expect(page).toHaveURL(/comparison_presence=not_observed_in_target/);
+  await page.getByLabel("Show all Pages").check();
+  await expect(page).toHaveURL(/comparison_show_all=true/);
+});
+
+async function mockComparisonApi(page: Page) {
+  let created = false;
+  const scanSide = (id: number, createdAt: string) => ({
+    id,
+    status: "completed",
+    starting_url: "https://example.com/learn/",
+    created_at: createdAt,
+    started_at: createdAt,
+    finished_at: createdAt,
+    stop_reason: "queue_empty",
+    failed_count: 0,
+  });
+  const build = {
+    id: 9,
+    scan_comparison_id: 7,
+    comparison_version: "scan-comparison-v1",
+    algorithm_identity: "scan-comparison-v1|page-v1|resource-v1|link-v1|scan-projection-v1",
+    status: "ready",
+    baseline_projection_build_id: 4,
+    target_projection_build_id: 5,
+    baseline_projection_version: "scan-projection-v1",
+    target_projection_version: "scan-projection-v1",
+    baseline_projection_algorithm_identity: "projection",
+    target_projection_algorithm_identity: "projection",
+    baseline_projection_checksum: "baseline",
+    target_projection_checksum: "target",
+    baseline_scope_fingerprint: "same",
+    target_scope_fingerprint: "same",
+    baseline_seed_fingerprint: "same",
+    target_seed_fingerprint: "same",
+    coverage_state: "comparable",
+    warnings_json: [],
+    validation_json: {},
+    comparison_checksum_sha256: "deterministic-checksum",
+    started_at: "2026-08-07T12:00:00Z",
+    finished_at: "2026-08-07T12:00:01Z",
+    failed_at: null,
+    build_duration_ms: 1000,
+    error_type: null,
+    error_message: null,
+    page_result_count: 1,
+    resource_result_count: 0,
+    link_result_count: 0,
+    created_at: "2026-08-07T12:00:00Z",
+  };
+  const comparison = {
+    id: 7,
+    website_property_id: 3,
+    baseline_scan_id: 1,
+    target_scan_id: 2,
+    current_build_id: 9,
+    created_at: "2026-08-07T12:00:00Z",
+    updated_at: "2026-08-07T12:00:01Z",
+    baseline_scan: scanSide(1, "2026-08-06T12:00:00Z"),
+    target_scan: scanSide(2, "2026-08-07T12:00:00Z"),
+    current_build: build,
+    active_build: null,
+  };
+  const overview = {
+    comparison,
+    summary: {
+      pages: { total: 1, not_observed_in_target: 1 },
+      resources: { total: 0 },
+      links: { total: 0 },
+      scan: {},
+    },
+  };
+  await page.route("**/api/sites/3/scans**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          scanSide(2, "2026-08-07T12:00:00Z"),
+          scanSide(1, "2026-08-06T12:00:00Z"),
+        ],
+        total: 2,
+        limit: 250,
+        offset: 0,
+      }),
+    });
+  });
+  await page.route(/\/api\/sites\/3\/comparisons(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "POST") {
+      created = true;
+      await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(overview) });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: created ? [comparison] : [], total: created ? 1 : 0, limit: 100, offset: 0 }),
+    });
+  });
+  await page.route("**/api/sites/3/comparisons/7/status", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(overview) });
+  });
+  await page.route(/\/api\/sites\/3\/comparisons\/7$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(overview) });
+  });
+  await page.route("**/api/sites/3/comparisons/7/pages**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [{
+          id: 1,
+          resource_id: 2,
+          normalized_url: "https://example.com/learn/old",
+          host: "example.com",
+          path: "/learn/old",
+          presence_state: "not_observed_in_target",
+          change_state: "not_applicable",
+          content_state: "not_applicable",
+          head_state: "not_applicable",
+          changed_field_count: 0,
+          baseline_http_status: 200,
+          target_http_status: null,
+          response_time_ms_delta: null,
+          network_bytes_delta: null,
+        }],
+        total: 1,
+        limit: 50,
+        offset: 0,
+        comparison_build_id: 9,
+        comparison_version: "scan-comparison-v1",
+      }),
+    });
+  });
+}
+
 async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
   let siteActive = true;

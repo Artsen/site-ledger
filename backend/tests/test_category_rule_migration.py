@@ -64,6 +64,7 @@ def test_category_rule_migration_backfills_manual_support_and_timezone_null(
         )
         connection.close()
         command.upgrade(config, "202608060017")
+        command.upgrade(config, "head")
         command.check(config)
     finally:
         get_settings.cache_clear()
