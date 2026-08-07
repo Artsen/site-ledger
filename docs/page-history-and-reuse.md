@@ -76,3 +76,7 @@ page state.
 
 If compatibility is uncertain, the crawler falls back to a full GET or records a structured crawler
 error through the existing safe fetch path.
+
+Effective reused content/head hashes participate in deterministic comparison exactly like hashes
+from a full response. Persistent Page Change History compares the previous observed snapshot and
+preserves intervening Scan gaps. See [Deterministic Scan comparisons](scan-comparisons.md).

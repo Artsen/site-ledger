@@ -19,6 +19,9 @@ UTC tzinfo for legacy and current rows before Pydantic serialization. The API th
 `Z` or `+00:00` offset. The frontend also treats legacy timezone-less API values as UTC at its
 shared parsing boundary.
 
+Comparison and Page Change History timestamps use this same Site presentation timezone. Changing it
+rerenders dates only and cannot alter projection/comparison evidence or checksums.
+
 Site create forms preselect `Intl.DateTimeFormat().resolvedOptions().timeZone` when available and
 offer the environment's full `Intl.supportedValuesOf("timeZone")` list. Clearing the field restores
 browser-local behavior. IANA data handles DST, so `America/New_York` displays EDT in summer and EST

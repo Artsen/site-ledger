@@ -179,6 +179,6 @@ a live Resource is an explicit user action.
 
 This implementation does not store Resource bodies, derive image dimensions, hash duplicate files,
 extract PDF text or metadata, parse Office/archive contents, parse CSS references, discover
-Resources from rendered DOM/network evidence, compare Resources across time, or create Resource
-findings. Those are future capabilities and require separate evidence, storage, security, and
-retention designs.
+Resources from rendered DOM/network evidence, or create Resource findings. Deterministic
+Scan-to-Scan Resource metadata comparison is supported, but Resource body comparison is not; see
+[Deterministic Scan comparisons](scan-comparisons.md).

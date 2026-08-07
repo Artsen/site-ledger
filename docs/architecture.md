@@ -215,10 +215,13 @@ crawl behavior, or break operator configuration.
 
 ## Deferred Areas
 
-Resource-body storage, complete scan comparison, environment comparison,
+Resource-body storage, environment comparison,
 findings, accessibility and performance observations, analytics integrations, semantic analysis,
 investigation workflow, scheduling, notifications, authentication, and multi-user permissions are
 future direction.
+
+Versioned deterministic Scan comparison is implemented above prepared Scan projections. See
+[Deterministic Scan comparisons](scan-comparisons.md).
 
 Robots.txt enforcement and concurrent requests within one crawl also remain deferred. The current
 static crawler uses a sequential request loop with an optional delay.

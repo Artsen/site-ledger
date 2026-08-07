@@ -190,15 +190,16 @@ Timings are diagnostics, not CI budgets.
 flowchart LR
   A[Scan A projection] --> V{Versions compatible?}
   B[Scan B projection] --> V
-  V -- Yes --> C[Future Scan comparison]
+  V -- Yes --> C[Versioned Scan comparison]
   V -- No --> R[Request versioned rebuild]
   C --> E[Open exact raw evidence]
 ```
 
-Future comparison can align normalized URL, snapshot/resource identity, content/head hashes, HTTP
+Comparison aligns normalized URL, snapshot/resource identity, content/head hashes, HTTP
 and fetch state, redirects, canonical/indexability fields, link identity, Resource classification,
 and rendered availability. It must compare compatible projection versions or request rebuilds, and
-must open raw evidence for detailed changes. This PR adds no comparison tables or behavior.
+must open raw evidence for detailed changes. See
+[Deterministic Scan comparisons](scan-comparisons.md).
 
 ## Limitations
 
