@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import BackgroundJob, Scan, SourceRefresh, WorkerInstance
+from app.models import BackgroundJob, Scan, ScanProjectionBuild, SourceRefresh, WorkerInstance
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate
 from app.schemas.sources import UrlSourceCreate
@@ -12,6 +12,7 @@ from app.services.background_jobs import (
     StaleLeaseError,
     claim_next_job,
     enqueue_scan_job,
+    enqueue_scan_projection_job,
     enqueue_source_refresh_job,
     heartbeat_job,
     recover_expired_jobs,
@@ -20,6 +21,7 @@ from app.services.background_jobs import (
     update_progress,
     worker_health,
 )
+from app.services.scan_projections import create_projection_build
 from app.services.site_management import create_site
 from app.services.source_management import create_source
 from app.services.source_refresh import create_source_refresh
@@ -122,6 +124,30 @@ def test_queued_cancellation_is_durable(db_session: Session) -> None:
     assert job.status == "cancelled"
     assert job.cancellation_requested_at is not None
     assert job.cancelled_at is not None
+
+
+def test_expired_projection_job_fails_build_without_mutating_terminal_scan(
+    db_session: Session,
+) -> None:
+    scan = _scan(db_session, "https://example.com/")
+    scan.status = "completed"
+    build = create_projection_build(db_session, scan.id)
+    job = enqueue_scan_projection_job(db_session, build.id, scan)
+    db_session.commit()
+    claimed = claim_next_job(db_session, worker_id="worker-a", lease_seconds=1)
+    assert claimed is not None and claimed.job.id == job.id
+    job.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+
+    assert recover_expired_jobs(db_session) == 1
+
+    db_session.refresh(scan)
+    db_session.refresh(job)
+    failed_build = db_session.get(ScanProjectionBuild, build.id)
+    assert scan.status == "completed"
+    assert job.status == "interrupted"
+    assert failed_build is not None and failed_build.status == "failed"
+    assert failed_build.active_key is None
 
 
 def test_source_refresh_enqueue(db_session: Session) -> None:

@@ -22,6 +22,9 @@ import type { PageList, ResourceInventoryItem, Scan, Snapshot } from "../src/typ
 const api = vi.hoisted(() => ({
   createScan: vi.fn(),
   getScan: vi.fn(),
+  getScanProjectionStatus: vi.fn(),
+  buildScanProjection: vi.fn(),
+  rebuildScanProjection: vi.fn(),
   listPages: vi.fn(),
   listErrors: vi.fn(),
   getSnapshot: vi.fn(),
@@ -152,6 +155,20 @@ beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
   api.createScan.mockResolvedValue({ id: 44 });
   api.getScan.mockResolvedValue(scanFixture);
+  api.getScanProjectionStatus.mockResolvedValue({
+    scan_id: scanFixture.id,
+    scan_status: scanFixture.status,
+    expected_version: "scan-projection-v1",
+    projection_source: "materialized",
+    projection_status: "ready",
+    current_build: { id: 9 },
+    active_build: null,
+    latest_build: null,
+    can_build: false,
+    can_rebuild: true
+  });
+  api.buildScanProjection.mockResolvedValue({ id: 1 });
+  api.rebuildScanProjection.mockResolvedValue({ id: 2 });
   api.listPages.mockResolvedValue(emptyPageList);
   api.listErrors.mockResolvedValue([]);
   api.getSnapshot.mockResolvedValue(snapshotFixture);
@@ -377,6 +394,34 @@ describe("new scan workflow", () => {
 });
 
 describe("scan results workflow", () => {
+  it("keeps terminal evidence usable while optimized results are building", async () => {
+    api.getScanProjectionStatus.mockResolvedValue({
+      scan_id: 1,
+      scan_status: "completed",
+      expected_version: "scan-projection-v1",
+      projection_source: "dynamic",
+      projection_status: "building",
+      current_build: null,
+      active_build: null,
+      latest_build: null,
+      can_build: false,
+      can_rebuild: false
+    });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=resources");
+
+    expect(await screen.findByText("Building optimized results")).toBeInTheDocument();
+    expect(screen.getByText("Preparing optimized results. Current evidence remains available.")).toBeInTheDocument();
+    expect(api.listScanResources).toHaveBeenCalled();
+  });
+
+  it("offers an accessible rebuild action for prepared terminal results", async () => {
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Rebuild results" }));
+
+    await waitFor(() => expect(api.rebuildScanProjection).toHaveBeenCalledWith("1"));
+  });
+
   it("lists and filters observed and discovered Resources", async () => {
     api.getScan.mockResolvedValue({ ...scanFixture, resource_discovered_count: 2 });
     api.getScanResourceSummary.mockResolvedValue({ unique_resources: 2, observed_resources: 1, discovered_only_resources: 1, total_occurrences: 4, kind_counts: { document: 1, image: 1, script: 0, stylesheet: 0, font: 0 } });
