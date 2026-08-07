@@ -49,6 +49,7 @@ import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SortableTableHeader, type SortDirection } from "../components/ui/SortableTableHeader";
 import { classificationLabel } from "../types/siteClassifications";
 import type { Job, WorkerHealth } from "../types/jobs";
 import type {
@@ -67,6 +68,7 @@ import {
 } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
+import { useTableSort } from "../utils/useTableSort";
 
 export function SiteDetailPage() {
   const { siteId = "" } = useParams();
@@ -454,6 +456,9 @@ function PagesTab({ site }: { site: Site }) {
           pages={pages.data.items}
           selected={selected}
           setSelected={setSelected}
+          activeSort={searchParams.get("sort")}
+          direction={searchParams.get("direction") as SortDirection | null}
+          onSort={(column, direction) => setSitePageSort(setSearchParams, column, direction)}
         />
       ) : !pages.isLoading ? (
         <EmptyState
@@ -471,11 +476,17 @@ function SitePagesTable({
   pages,
   selected,
   setSelected,
+  activeSort,
+  direction,
+  onSort,
 }: {
   siteId: number;
   pages: PersistentPage[];
   selected: number[];
   setSelected: (ids: number[]) => void;
+  activeSort: string | null;
+  direction: SortDirection | null;
+  onSort: (column: string | null, direction: SortDirection | null) => void;
 }) {
   const allSelected =
     pages.length > 0 &&
@@ -499,20 +510,8 @@ function SitePagesTable({
                 }
               />
             </th>
-            {[
-              "Page",
-              "Owner",
-              "Workflow",
-              "Categories",
-              "Notes",
-              "Observations",
-              "Latest observation",
-              "Actions",
-            ].map((header) => (
-              <th key={header} scope="col" className="px-3 py-2">
-                {header}
-              </th>
-            ))}
+            {[["url", "Page"], ["owner", "Owner"], ["workflow", "Workflow"], ["categories", "Categories"], ["notes", "Notes"], ["observations", "Observations"], ["latest_observed", "Latest observation"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={activeSort} direction={direction} onChange={onSort} defaultDirection={column === "latest_observed" ? "desc" : "asc"} />)}
+            <th className="px-3 py-2 font-medium">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -603,6 +602,16 @@ function CategoriesTab({ site }: { site: Site }) {
     queryFn: () => listPageCategories(String(site.id), "?active_state=all&limit=200"),
   });
   return <div className="space-y-4"><div className="flex gap-1 border-b border-stone-200" role="tablist">{(["categories", "rules", "history"] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={view === item} onClick={() => setView(item)} className={`border-b-2 px-3 py-2 text-sm font-medium ${view === item ? "border-stone-900 text-stone-900" : "border-transparent text-stone-500"}`}>{item === "history" ? "Evaluation History" : formatStatus(item)}</button>)}</div>{view === "categories" ? <CategoryListPanel site={site} /> : null}{view === "rules" ? categories.isLoading ? <LoadingBlock label="Loading categories..." /> : categories.error ? <ErrorBanner error={categories.error} title="Could not load categories" /> : <CategoryRulesPanel siteId={String(site.id)} categories={categories.data?.items ?? []} timeZone={site.display_timezone} /> : null}{view === "history" ? <CategoryRuleHistoryPanel siteId={String(site.id)} timeZone={site.display_timezone} /> : null}</div>;
+}
+
+function setSitePageSort(setSearchParams: ReturnType<typeof useSearchParams>[1], column: string | null, direction: SortDirection | null) {
+  setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    if (column && direction) { next.set("sort", column); next.set("direction", direction); }
+    else { next.delete("sort"); next.delete("direction"); }
+    next.delete("site_pages_offset");
+    return next;
+  });
 }
 
 function CategoryListPanel({ site }: { site: Site }) {
@@ -1186,20 +1195,19 @@ function SourceTable({
   onCancel: (job: Job) => void;
   onDelete: (source: UrlSource) => void;
 }) {
+  const values = { source: (source: UrlSource) => source.name, type: (source: UrlSource) => source.source_type, status: (source: UrlSource) => activeSourceJob(jobs, source.id)?.presentation_status ?? source.last_refresh_status, urls: (source: UrlSource) => source.current_entry_count };
+  const { sortedItems, sort, changeSort } = useTableSort(sources, values);
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
-            {["Source", "Type", "Status", "URLs", "Actions"].map((header) => (
-              <th key={header} className="px-3 py-2">
-                {header}
-              </th>
-            ))}
+            {[["source", "Source"], ["type", "Type"], ["status", "Status"], ["urls", "URLs"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
+            <th className="px-3 py-2 font-medium">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {sources.map((source) => {
+          {sortedItems.map((source) => {
             const activeJob = activeSourceJob(jobs, source.id);
             const displayStatus =
               activeJob?.presentation_status ??
@@ -1368,22 +1376,18 @@ function InventoryTab({ site }: { site: Site }) {
 }
 
 function InventoryTable({ items }: { items: InventoryItem[] }) {
+  const values = { url: (item: InventoryItem) => item.normalized_url, sources: (item: InventoryItem) => item.source_count, scope: (item: InventoryItem) => item.scope_decision, validation: (item: InventoryItem) => item.validation_state, classification: (item: InventoryItem) => item.classification };
+  const { sortedItems, sort, changeSort } = useTableSort(items, values);
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
-            {["URL", "Sources", "Scope", "Validation", "Classification"].map(
-              (header) => (
-                <th key={header} className="px-3 py-2">
-                  {header}
-                </th>
-              ),
-            )}
+            {[["url", "URL"], ["sources", "Sources"], ["scope", "Scope"], ["validation", "Validation"], ["classification", "Classification"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
           </tr>
         </thead>
         <tbody>
-          {items.map((item) => (
+          {sortedItems.map((item) => (
             <tr
               key={
                 item.normalized_url ??

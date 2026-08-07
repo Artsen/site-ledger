@@ -29,6 +29,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SortableTableHeader } from "../components/ui/SortableTableHeader";
 import { Tabs } from "../components/ui/Tabs";
 import type {
   LinkOccurrence,
@@ -38,6 +39,7 @@ import type {
 import { formatDate, formatStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
+import { useTableSort } from "../utils/useTableSort";
 
 const WORKFLOWS = [
   "unreviewed",
@@ -478,28 +480,19 @@ function ObservationTable({
 }: {
   observations: PageObservation[];
 }) {
+  const values = { scan: (item: PageObservation) => item.scan_id, observation: (item: PageObservation) => item.snapshot_id, status: (item: PageObservation) => item.http_status ?? item.fetch_state, retrieval: (item: PageObservation) => item.retrieval_method, response: (item: PageObservation) => item.response_time_ms ?? item.crawl_depth, rendered: (item: PageObservation) => item.rendered_capture_state };
+  const { sortedItems, sort, changeSort } = useTableSort(observations, values);
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
-            {[
-              "Scan",
-              "Observation",
-              "Status",
-              "Retrieval",
-              "Depth / response",
-              "Rendered",
-              "Actions",
-            ].map((header) => (
-              <th key={header} scope="col" className="px-3 py-2">
-                {header}
-              </th>
-            ))}
+            {[["scan", "Scan"], ["observation", "Observation"], ["status", "Status"], ["retrieval", "Retrieval"], ["response", "Depth / response"], ["rendered", "Rendered"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
+            <th className="px-3 py-2 font-medium">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {observations.map((item) => (
+          {sortedItems.map((item) => (
             <tr
               key={item.snapshot_id}
               className="border-t border-stone-100 align-top"
@@ -744,26 +737,18 @@ function LinkTable({
   links: LinkOccurrence[];
   inbound: boolean;
 }) {
+  const values = { endpoint: (link: LinkOccurrence) => inbound && "source_requested_url" in link ? String(link.source_requested_url) : link.resolved_url ?? link.normalized_target_url, anchor: (link: LinkOccurrence) => link.anchor_text ?? link.aria_label, role: (link: LinkOccurrence) => link.link_role, scope: (link: LinkOccurrence) => link.scope_decision, evidence: (link: LinkOccurrence) => link.link_role_rule };
+  const { sortedItems, sort, changeSort } = useTableSort(links, values);
   return (
     <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
-            {[
-              inbound ? "Source" : "Destination",
-              "Anchor",
-              "Role",
-              "Scope decision",
-              "Evidence",
-            ].map((header) => (
-              <th key={header} scope="col" className="px-3 py-2">
-                {header}
-              </th>
-            ))}
+            {[["endpoint", inbound ? "Source" : "Destination"], ["anchor", "Anchor"], ["role", "Role"], ["scope", "Scope decision"], ["evidence", "Evidence"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
           </tr>
         </thead>
         <tbody>
-          {links.map((link) => (
+          {sortedItems.map((link) => (
             <tr key={link.id} className="border-t border-stone-100 align-top">
               <td className="max-w-md break-all px-3 py-2 font-mono text-xs">
                 {inbound && "source_requested_url" in link

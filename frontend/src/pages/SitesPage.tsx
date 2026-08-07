@@ -9,6 +9,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SortableTableHeader, type SortDirection } from "../components/ui/SortableTableHeader";
 import { inputClass } from "../components/ui/styles";
 import { classificationLabel } from "../types/siteClassifications";
 import type { SiteListItem } from "../types/scans";
@@ -53,13 +54,6 @@ export function SitesPage() {
             <option value="inactive">Inactive</option>
             <option value="all">All</option>
           </select>
-          <select aria-label="Sort sites" value={searchParams.get("sort") ?? "name"} onChange={(event) => updateParam(setSearchParams, "sort", event.target.value)} className={inputClass()}>
-            <option value="name">Name</option>
-            <option value="base_url">Base URL</option>
-            <option value="created_at">Created</option>
-            <option value="updated_at">Updated</option>
-            <option value="latest_scan_at">Latest scan</option>
-          </select>
         </div>
         <div className="mt-3"><Button type="button" variant="ghost" onClick={() => setSearchParams({ sites_limit: String(pagination.limit), sites_offset: "0" })}>Clear filters</Button></div>
       </section>
@@ -67,7 +61,7 @@ export function SitesPage() {
       {sites.isLoading ? <LoadingBlock label="Loading sites..." /> : null}
       {!sites.isLoading && !sites.data?.items.length ? <EmptyState title="No sites found" message="Create a saved site or adjust the filters." /> : null}
       {controls ? <div className="mb-4">{controls}</div> : null}
-      {sites.data?.items.length ? <SitesTable sites={sites.data.items} onDelete={(site) => {
+      {sites.data?.items.length ? <SitesTable sites={sites.data.items} activeSort={searchParams.get("sort")} direction={searchParams.get("direction") as SortDirection | null} onSort={(column, direction) => setTableSort(setSearchParams, column, direction, "sites_offset")} onDelete={(site) => {
         if (window.confirm(`Delete ${site.name}? Sites with scans cannot be deleted.`)) remove.mutate(site);
       }} /> : null}
       {controls ? <div className="mt-4">{controls}</div> : null}
@@ -75,12 +69,19 @@ export function SitesPage() {
   );
 }
 
-function SitesTable({ sites, onDelete }: { sites: SiteListItem[]; onDelete: (site: SiteListItem) => void }) {
+function SitesTable({ sites, activeSort, direction, onSort, onDelete }: { sites: SiteListItem[]; activeSort: string | null; direction: SortDirection | null; onSort: (column: string | null, direction: SortDirection | null) => void; onDelete: (site: SiteListItem) => void }) {
+  const columns = [
+    ["name", "Site"],
+    ["classification", "Classification"],
+    ["state", "State"],
+    ["latest_scan_at", "Latest scan"],
+    ["scan_count", "Scans"],
+  ];
   return (
     <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
-          <tr>{["Site", "Classification", "State", "Latest scan", "Scans", "Actions"].map((header) => <th key={header} className="px-3 py-2 font-medium">{header}</th>)}</tr>
+          <tr>{columns.map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={activeSort} direction={direction} onChange={onSort} />)}<th className="px-3 py-2 font-medium">Actions</th></tr>
         </thead>
         <tbody>
           {sites.map((site) => (
@@ -111,6 +112,16 @@ function SitesTable({ sites, onDelete }: { sites: SiteListItem[]; onDelete: (sit
       </table>
     </div>
   );
+}
+
+function setTableSort(setSearchParams: ReturnType<typeof useSearchParams>[1], column: string | null, direction: SortDirection | null, offsetKey: string) {
+  setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    if (column && direction) { next.set("sort", column); next.set("direction", direction); }
+    else { next.delete("sort"); next.delete("direction"); }
+    next.delete(offsetKey);
+    return next;
+  });
 }
 
 function FilterInput({ label, param, placeholder, searchParams, setSearchParams }: { label: string; param: string; placeholder: string; searchParams: URLSearchParams; setSearchParams: ReturnType<typeof useSearchParams>[1] }) {

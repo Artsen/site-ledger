@@ -13,6 +13,7 @@ import { ErrorBanner } from "./ui/ErrorBanner";
 import { LoadingBlock } from "./ui/Loading";
 import { PaginatedTableControls } from "./ui/PaginatedTableControls";
 import { StatusBadge } from "./ui/StatusBadge";
+import { SortableTableHeader, type SortDirection } from "./ui/SortableTableHeader";
 import { inputClass } from "./ui/styles";
 
 const resourceKinds = ["image", "document", "stylesheet", "script", "font", "video", "audio", "archive", "feed", "manifest", "structured_data", "other", "unknown"];
@@ -69,7 +70,7 @@ export function ResourceInventoryView({ scope, id, scanStatus, projectionStatus 
     {controls}
     {resources.isLoading ? <LoadingBlock label="Loading Resources..." /> : null}
     {!resources.isLoading && !resources.data?.items.length ? <EmptyState title="No Resources found" message="Resources appear when non-HTML responses or embedded file references are retained in this scope." /> : null}
-    {resources.data?.items.length ? <ResourceTable items={resources.data.items} detailBase={detailBase} /> : null}
+    {resources.data?.items.length ? <ResourceTable items={resources.data.items} detailBase={detailBase} activeSort={searchParams.get("sort")} direction={searchParams.get("direction") as SortDirection | null} onSort={(column, direction) => setResourceSort(setSearchParams, column, direction)} /> : null}
     {controls}
   </div>;
 }
@@ -84,8 +85,9 @@ function ResourceSummary({ summary, loading }: { summary?: { unique_resources: n
   return <div className="grid grid-cols-2 gap-3 md:grid-cols-5">{metrics.map(([label, value]) => <div key={label} className="rounded-md border border-stone-200 bg-white px-3 py-2 shadow-sm"><div className="text-xs font-medium uppercase text-stone-500">{label}</div><div className="mt-1 text-xl font-semibold">{value}</div></div>)}</div>;
 }
 
-function ResourceTable({ items, detailBase }: { items: ResourceInventoryItem[]; detailBase: string }) {
-  return <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Type", "Resource", "MIME", "Status", "Size", "Observation", "Used by", "Scope", "Latest evidence"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr></thead><tbody>{items.map((item) => <tr key={item.resource_id} className="border-t border-stone-100 align-top hover:bg-stone-50">
+function ResourceTable({ items, detailBase, activeSort, direction, onSort }: { items: ResourceInventoryItem[]; detailBase: string; activeSort: string | null; direction: SortDirection | null; onSort: (column: string | null, direction: SortDirection | null) => void }) {
+  const columns = [["kind", "Type"], ["url", "Resource"], ["mime_type", "MIME"], ["http_status", "Status"], ["declared_size", "Size"], ["observed", "Observation"], ["source_page_count", "Used by"], ["in_scope_count", "Scope"], ["latest_discovered", "Latest evidence"]];
+  return <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{columns.map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={activeSort} direction={direction} onChange={onSort} defaultDirection={column === "latest_discovered" ? "desc" : "asc"} />)}</tr></thead><tbody>{items.map((item) => <tr key={item.resource_id} className="border-t border-stone-100 align-top hover:bg-stone-50">
     <td className="px-3 py-2"><ResourceKindBadge kind={item.effective_kind} label={item.effective_kind_label} /><span className="mt-1 block text-xs text-stone-500">{item.classification_source}</span></td>
     <td className="max-w-xl px-3 py-2"><Link to={`${detailBase}/${item.resource_id}`} className="block truncate font-mono text-xs underline" title={item.normalized_url}>{item.normalized_url}</Link><span className="mt-1 block text-xs text-stone-500">{item.file_extension ? `.${item.file_extension}` : "No extension"}</span></td>
     <td className="max-w-xs px-3 py-2">{item.normalized_mime_type ?? "Not observed"}</td>
@@ -116,5 +118,6 @@ function buildResourceQuery(searchParams: URLSearchParams, limit: number, offset
 }
 
 function setResourceParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string) { setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); next.delete("resources_offset"); return next; }); }
+function setResourceSort(setSearchParams: ReturnType<typeof useSearchParams>[1], column: string | null, direction: SortDirection | null) { setSearchParams((current) => { const next = new URLSearchParams(current); if (column && direction) { next.set("sort", column); next.set("direction", direction); } else { next.delete("sort"); next.delete("direction"); } next.delete("resources_offset"); return next; }); }
 function clearResourceParams(setSearchParams: ReturnType<typeof useSearchParams>[1], current: URLSearchParams) { const next = new URLSearchParams(); const tab = current.get("tab"); if (tab) next.set("tab", tab); setSearchParams(next); }
 function kindLabel(kind: string) { return kind === "html_page" ? "HTML Page" : kind === "structured_data" ? "Structured data" : kind.split("_").map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" "); }

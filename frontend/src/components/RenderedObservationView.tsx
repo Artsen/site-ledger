@@ -9,7 +9,9 @@ import { EmptyState } from "./ui/EmptyState";
 import { LoadingBlock } from "./ui/Loading";
 import { PaginatedTableControls } from "./ui/PaginatedTableControls";
 import { StatusBadge } from "./ui/StatusBadge";
+import { SortableTableHeader } from "./ui/SortableTableHeader";
 import { useUrlPagination } from "../utils/useUrlPagination";
+import { useTableSort } from "../utils/useTableSort";
 
 type Tab = "overview" | "screenshots" | "dom" | "network" | "console" | "errors";
 
@@ -53,6 +55,8 @@ function PaginatedDataTable({ headers, rows, total, pagination, itemLabel, loadi
 }
 
 function DataTable({ headers, rows }: { headers: string[]; rows: Array<Array<string | number | null | undefined>> }) {
+  const values = Object.fromEntries(headers.map((_, index) => [String(index), (row: (typeof rows)[number]) => row[index]]));
+  const { sortedItems, sort, changeSort } = useTableSort(rows, values);
   if (!rows.length) return <EmptyState title="No entries" message="No evidence was recorded for this category." />;
-  return <div className="overflow-x-auto rounded-md border border-stone-200"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100"><tr>{headers.map((header) => <th key={header} className="px-3 py-2">{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index} className="border-t border-stone-100">{row.map((value, cell) => <td key={cell} className="max-w-xl break-all px-3 py-2">{value ?? "Not available"}</td>)}</tr>)}</tbody></table></div>;
+  return <div className="overflow-x-auto rounded-md border border-stone-200"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100"><tr>{headers.map((header, index) => <SortableTableHeader key={header} column={String(index)} label={header} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}</tr></thead><tbody>{sortedItems.map((row, index) => <tr key={index} className="border-t border-stone-100">{row.map((value, cell) => <td key={cell} className="max-w-xl break-all px-3 py-2">{value ?? "Not available"}</td>)}</tr>)}</tbody></table></div>;
 }

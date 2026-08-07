@@ -20,6 +20,7 @@ import { ErrorBanner } from "./ui/ErrorBanner";
 import { LoadingBlock } from "./ui/Loading";
 import { PaginatedTableControls } from "./ui/PaginatedTableControls";
 import { StatusBadge } from "./ui/StatusBadge";
+import { SortableTableHeader, type SortDirection } from "./ui/SortableTableHeader";
 
 const emptyCondition = (): CategoryRuleCondition => ({
   target: "path",
@@ -36,9 +37,12 @@ export function CategoryRulesPanel({ siteId, categories, timeZone }: { siteId: s
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<CategoryRule | null>(null);
   const [creating, setCreating] = useState(false);
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection | null>(null);
+  const sortQuery = sortColumn && sortDirection ? `&sort=${sortColumn}&direction=${sortDirection}` : "";
   const rules = useQuery({
-    queryKey: ["category-rules", siteId, search, offset],
-    queryFn: () => listCategoryRules(siteId, `?limit=25&offset=${offset}&search=${encodeURIComponent(search)}`),
+    queryKey: ["category-rules", siteId, search, offset, sortColumn, sortDirection],
+    queryFn: () => listCategoryRules(siteId, `?limit=25&offset=${offset}&search=${encodeURIComponent(search)}${sortQuery}`),
   });
   const recalculate = useMutation({
     mutationFn: () => evaluateCategoryRules(siteId),
@@ -58,7 +62,7 @@ export function CategoryRulesPanel({ siteId, categories, timeZone }: { siteId: s
       {creating || editing ? <RuleEditor siteId={siteId} categories={categories.filter((item) => item.is_active)} rule={editing} onClose={() => { setCreating(false); setEditing(null); }} onSaved={refresh} /> : null}
       {rules.error || recalculate.error ? <ErrorBanner error={rules.error ?? recalculate.error} title="Category Rule action failed" /> : null}
       {rules.isLoading ? <LoadingBlock label="Loading Category Rules..." /> : null}
-      {rules.data?.items.length ? <div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Active", "Rule", "Category", "Mode", "Conditions", "Matches", "Excluded", "Last evaluated", "Actions"].map((header) => <th key={header} className="px-3 py-2">{header}</th>)}</tr></thead><tbody>{rules.data.items.map((rule) => <RuleRow key={rule.id} rule={rule} siteId={siteId} timeZone={timeZone} edit={() => setEditing(rule)} refresh={refresh} />)}</tbody></table></div> : !rules.isLoading ? <EmptyState title="No Category Rules" message="Create a deterministic URL Rule to organize this Site's Pages." /> : null}
+      {rules.data?.items.length ? <div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{[["active", "Active"], ["name", "Rule"], ["category", "Category"], ["mode", "Mode"], ["condition_count", "Conditions"], ["match_count", "Matches"], ["excluded_count", "Excluded"], ["last_evaluated_at", "Last evaluated"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sortColumn} direction={sortDirection} onChange={(column, direction) => { setSortColumn(column); setSortDirection(direction); setOffset(0); }} defaultDirection={column === "last_evaluated_at" ? "desc" : "asc"} />)}<th className="px-3 py-2 font-medium">Actions</th></tr></thead><tbody>{rules.data.items.map((rule) => <RuleRow key={rule.id} rule={rule} siteId={siteId} timeZone={timeZone} edit={() => setEditing(rule)} refresh={refresh} />)}</tbody></table></div> : !rules.isLoading ? <EmptyState title="No Category Rules" message="Create a deterministic URL Rule to organize this Site's Pages." /> : null}
       {rules.data ? <PaginatedTableControls total={rules.data.total} limit={25} offset={offset} onPageChange={(page) => setOffset((page - 1) * 25)} onPageSizeChange={() => undefined} itemLabel="Rule" isLoading={rules.isFetching} allowedPageSizes={[25]} /> : null}
     </div>
   );
@@ -108,9 +112,12 @@ function ConditionRow({ condition, index, change, move, canMoveUp, canMoveDown, 
 
 export function CategoryRuleHistoryPanel({ siteId, timeZone }: { siteId: string; timeZone: string | null }) {
   const [offset, setOffset] = useState(0);
-  const runs = useQuery({ queryKey: ["category-rule-runs", siteId, offset], queryFn: () => listCategoryRuleRuns(siteId, `?limit=25&offset=${offset}`), refetchInterval: (query) => query.state.data?.items.some((item) => item.status === "queued" || item.status === "running") ? 1500 : false });
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection | null>(null);
+  const sortQuery = sortColumn && sortDirection ? `&sort=${sortColumn}&direction=${sortDirection}` : "";
+  const runs = useQuery({ queryKey: ["category-rule-runs", siteId, offset, sortColumn, sortDirection], queryFn: () => listCategoryRuleRuns(siteId, `?limit=25&offset=${offset}${sortQuery}`), refetchInterval: (query) => query.state.data?.items.some((item) => item.status === "queued" || item.status === "running") ? 1500 : false });
   if (runs.isLoading) return <LoadingBlock label="Loading Rule evaluation history..." />;
   if (runs.error) return <ErrorBanner error={runs.error} title="Could not load evaluation history" />;
   if (!runs.data?.items.length) return <EmptyState title="No evaluations" message="Rule evaluations will appear here after a Rule is saved or recalculated." />;
-  return <div className="space-y-4"><div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Trigger", "Status", "Started", "Pages", "Rules", "Matches", "Supports + / -", "Assignments + / -", "Excluded", "Evaluator"].map((header) => <th key={header} className="px-3 py-2">{header}</th>)}</tr></thead><tbody>{runs.data.items.map((run) => <tr key={run.id} className="border-t border-stone-100"><td className="px-3 py-2">{formatStatus(run.trigger_type)}</td><td className="px-3 py-2"><StatusBadge status={run.status} /></td><td className="whitespace-nowrap px-3 py-2">{formatDate(run.started_at ?? run.created_at, { timeZone, showTimeZone: true })}</td><td className="px-3 py-2">{run.page_count}</td><td className="px-3 py-2">{run.rule_count}</td><td className="px-3 py-2">{run.match_count}</td><td className="px-3 py-2">{run.rule_supports_added} / {run.rule_supports_removed}</td><td className="px-3 py-2">{run.effective_assignments_added} / {run.effective_assignments_removed}</td><td className="px-3 py-2">{run.exclusions_suppressing_matches}</td><td className="px-3 py-2 font-mono text-xs">{run.evaluator_version}</td></tr>)}</tbody></table></div><PaginatedTableControls total={runs.data.total} limit={25} offset={offset} onPageChange={(page) => setOffset((page - 1) * 25)} onPageSizeChange={() => undefined} itemLabel="evaluation" isLoading={runs.isFetching} allowedPageSizes={[25]} /></div>;
+  return <div className="space-y-4"><div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{[["trigger", "Trigger"], ["status", "Status"], ["started_at", "Started"], ["page_count", "Pages"], ["rule_count", "Rules"], ["match_count", "Matches"], ["supports_delta", "Supports + / -"], ["assignments_delta", "Assignments + / -"], ["excluded_count", "Excluded"], ["evaluator", "Evaluator"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sortColumn} direction={sortDirection} onChange={(column, direction) => { setSortColumn(column); setSortDirection(direction); setOffset(0); }} defaultDirection={column === "started_at" ? "desc" : "asc"} />)}</tr></thead><tbody>{runs.data.items.map((run) => <tr key={run.id} className="border-t border-stone-100"><td className="px-3 py-2">{formatStatus(run.trigger_type)}</td><td className="px-3 py-2"><StatusBadge status={run.status} /></td><td className="whitespace-nowrap px-3 py-2">{formatDate(run.started_at ?? run.created_at, { timeZone, showTimeZone: true })}</td><td className="px-3 py-2">{run.page_count}</td><td className="px-3 py-2">{run.rule_count}</td><td className="px-3 py-2">{run.match_count}</td><td className="px-3 py-2">{run.rule_supports_added} / {run.rule_supports_removed}</td><td className="px-3 py-2">{run.effective_assignments_added} / {run.effective_assignments_removed}</td><td className="px-3 py-2">{run.exclusions_suppressing_matches}</td><td className="px-3 py-2 font-mono text-xs">{run.evaluator_version}</td></tr>)}</tbody></table></div><PaginatedTableControls total={runs.data.total} limit={25} offset={offset} onPageChange={(page) => setOffset((page - 1) * 25)} onPageSizeChange={() => undefined} itemLabel="evaluation" isLoading={runs.isFetching} allowedPageSizes={[25]} /></div>;
 }

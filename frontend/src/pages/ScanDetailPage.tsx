@@ -14,6 +14,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SortableTableHeader, type SortDirection } from "../components/ui/SortableTableHeader";
 import { Tabs } from "../components/ui/Tabs";
 import { inputClass } from "../components/ui/styles";
 import { ScanGraphView } from "../features/graph/ScanGraphView";
@@ -22,6 +23,7 @@ import type { Page, RenderedObservationIndexItem, Scan, ScanSeed, Snapshot } fro
 import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
+import { useTableSort } from "../utils/useTableSort";
 import { projectionStatusRefetchInterval, scanResultQueryOptions } from "../utils/scanQueryOptions";
 
 export function ScanDetailPage() {
@@ -518,22 +520,20 @@ function PagesView({
           message={activeScan ? "Fetched pages will appear here as the scan progresses." : hasFilters(searchParams) ? "Clear filters or broaden the search." : "This scan did not return page snapshots."}
         />
       ) : (
-        <PageTable scanId={scanId} pages={pages} />
+        <PageTable scanId={scanId} pages={pages} activeSort={searchParams.get("sort")} direction={searchParams.get("direction") as SortDirection | null} onSort={(column, direction) => setScanPageSort(setSearchParams, column, direction)} />
       )}
       {controls}
     </div>
   );
 }
 
-function PageTable({ pages, scanId }: { pages: Page[]; scanId: string }) {
+function PageTable({ pages, scanId, activeSort, direction, onSort }: { pages: Page[]; scanId: string; activeSort: string | null; direction: SortDirection | null; onSort: (column: string | null, direction: SortDirection | null) => void }) {
   return (
     <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
-            {["Status", "URL", "Title", "Depth", "Content type", "Duration", "Inbound", "Rendered", "Error"].map((header) => (
-              <th key={header} scope="col" className="whitespace-nowrap px-3 py-2 font-medium">{header}</th>
-            ))}
+            {[["status", "Status"], ["requested_url", "URL"], ["title", "Title"], ["depth", "Depth"], ["content_type", "Content type"], ["duration", "Duration"], ["inbound", "Inbound"], ["rendered_state", "Rendered"], ["error", "Error"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={activeSort} direction={direction} onChange={onSort} />)}
           </tr>
         </thead>
         <tbody>
@@ -569,6 +569,16 @@ function PageTable({ pages, scanId }: { pages: Page[]; scanId: string }) {
   );
 }
 
+function setScanPageSort(setSearchParams: ReturnType<typeof useSearchParams>[1], column: string | null, direction: SortDirection | null) {
+  setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    if (column && direction) { next.set("sort", column); next.set("direction", direction); }
+    else { next.delete("sort"); next.delete("direction"); }
+    next.delete("pages_offset");
+    return next;
+  });
+}
+
 function ErrorsView({ scanId, errors, loading, error }: { scanId: string; errors: Snapshot[]; loading: boolean; error: unknown }) {
   if (error) return <ErrorBanner error={error} title="Could not load errors" />;
   if (loading) return <LoadingBlock label="Loading errors..." />;
@@ -599,6 +609,8 @@ function ErrorsView({ scanId, errors, loading, error }: { scanId: string; errors
 }
 
 function InputsView({ seeds, loading, error }: { seeds: ScanSeed[]; loading: boolean; error: unknown }) {
+  const values = { url: (seed: ScanSeed) => seed.normalized_url ?? seed.requested_url, queue: (seed: ScanSeed) => seed.queue_state, scope: (seed: ScanSeed) => seed.scope_decision, origins: (seed: ScanSeed) => seed.origins.length };
+  const { sortedItems, sort, changeSort } = useTableSort(seeds, values);
   if (error) return <ErrorBanner error={error} title="Could not load scan inputs" />;
   if (loading) return <LoadingBlock label="Loading scan inputs..." />;
   if (!seeds.length) return <EmptyState title="No saved inputs" message="This scan was created before URL inventory inputs were recorded." />;
@@ -606,10 +618,10 @@ function InputsView({ seeds, loading, error }: { seeds: ScanSeed[]; loading: boo
     <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
-          <tr>{["URL", "Queue", "Scope", "Origins"].map((header) => <th key={header} className="px-3 py-2 font-medium">{header}</th>)}</tr>
+          <tr>{[["url", "URL"], ["queue", "Queue"], ["scope", "Scope"], ["origins", "Origins"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}</tr>
         </thead>
         <tbody>
-          {seeds.map((seed) => (
+          {sortedItems.map((seed) => (
             <tr key={seed.id} className="border-t border-stone-100 align-top">
               <td className="max-w-xl px-3 py-2 font-mono text-xs">{seed.normalized_url ?? seed.requested_url}</td>
               <td className="px-3 py-2">{seed.queue_state}</td>
