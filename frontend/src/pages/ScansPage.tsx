@@ -9,6 +9,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SortableTableHeader, type SortDirection } from "../components/ui/SortableTableHeader";
 import { inputClass } from "../components/ui/styles";
 import type { Scan, ScanDeletePreview } from "../types/scans";
 import { formatBytes, formatDate, formatDuration, hostnameFromUrl, isTerminalStatus } from "../utils/format";
@@ -65,22 +66,11 @@ export function ScansPage() {
         </Link>
       </div>
       <section className="mb-4 rounded-md border border-stone-200 bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <input aria-label="Search scans" value={searchParams.get("search") ?? ""} onChange={(event) => updateHistoryParam(setSearchParams, "search", event.target.value || null)} placeholder="Search starting URL" className={`${inputClass()} md:col-span-2`} />
           <select aria-label="Scan status" value={searchParams.get("status") ?? ""} onChange={(event) => updateHistoryParam(setSearchParams, "status", event.target.value || null)} className={inputClass()}>
             <option value="">Any status</option>
             {statusOptions.map((status) => <option key={status} value={status}>{status.replace(/_/g, " ")}</option>)}
-          </select>
-          <select aria-label="Sort scans" value={searchParams.get("sort") ?? "created_at"} onChange={(event) => updateHistoryParam(setSearchParams, "sort", event.target.value)} className={inputClass()}>
-            <option value="created_at">Created</option>
-            <option value="started_at">Started</option>
-            <option value="finished_at">Finished</option>
-            <option value="status">Status</option>
-            <option value="starting_url">Starting URL</option>
-          </select>
-          <select aria-label="Sort direction" value={searchParams.get("direction") ?? "desc"} onChange={(event) => updateHistoryParam(setSearchParams, "direction", event.target.value)} className={inputClass()}>
-            <option value="desc">Descending</option>
-            <option value="asc">Ascending</option>
           </select>
         </div>
         <div className="mt-3">
@@ -97,9 +87,8 @@ export function ScansPage() {
           <table className="min-w-full text-left text-sm">
             <thead className="bg-stone-100 text-xs uppercase text-stone-500">
               <tr>
-                {["Starting URL", "Status", "Created", "Started", "Finished", "Duration", "Counts", "Stop reason", "Actions"].map((header) => (
-                  <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>
-                ))}
+                {[["starting_url", "Starting URL"], ["status", "Status"], ["created_at", "Created"], ["started_at", "Started"], ["finished_at", "Finished"], ["duration", "Duration"], ["discovered_count", "Counts"], ["stop_reason", "Stop reason"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={searchParams.get("sort")} direction={searchParams.get("direction") as SortDirection | null} onChange={(column, direction) => setHistorySort(setSearchParams, column, direction)} defaultDirection={column.endsWith("_at") ? "desc" : "asc"} />)}
+                <th className="px-3 py-2 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -156,6 +145,16 @@ export function ScansPage() {
       ) : null}
     </section>
   );
+}
+
+function setHistorySort(setSearchParams: ReturnType<typeof useSearchParams>[1], column: string | null, direction: SortDirection | null) {
+  setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    if (column && direction) { next.set("sort", column); next.set("direction", direction); }
+    else { next.delete("sort"); next.delete("direction"); }
+    next.delete("scans_offset");
+    return next;
+  });
 }
 
 function DeleteDialog({ state, loading, deleting, error, onCancel, onConfirm }: { state: { scan: Scan; preview?: ScanDeletePreview }; loading: boolean; deleting: boolean; error: unknown; onCancel: () => void; onConfirm: () => void }) {

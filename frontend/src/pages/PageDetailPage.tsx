@@ -13,6 +13,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SortableTableHeader, type SortDirection } from "../components/ui/SortableTableHeader";
 import { Tabs } from "../components/ui/Tabs";
 import { UrlText } from "../components/ui/UrlText";
 import { inputClass } from "../components/ui/styles";
@@ -20,6 +21,7 @@ import type { InboundLinkList, InboundLinkOccurrence, LinkOccurrence, Snapshot, 
 import { formatBytes, formatDate, formatScopeDecision, formatStatus } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
+import { useTableSort } from "../utils/useTableSort";
 
 export function PageDetailPage() {
   const { scanId = "", snapshotId = "" } = useParams();
@@ -131,7 +133,7 @@ function InboundLinksView({
         </div>
       </section>
       <PaginatedTableControls total={inbound.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inbound occurrence" />
-      {!inbound.items.length ? <EmptyState title={hasInboundFilters(searchParams) ? "No inbound links match" : "No inbound links"} message={hasInboundFilters(searchParams) ? "Clear filters or broaden the search." : "No pages in this scan link to this page."} /> : <InboundTable items={inbound.items} scanId={scanId} />}
+      {!inbound.items.length ? <EmptyState title={hasInboundFilters(searchParams) ? "No inbound links match" : "No inbound links"} message={hasInboundFilters(searchParams) ? "Clear filters or broaden the search." : "No pages in this scan link to this page."} /> : <InboundTable items={inbound.items} scanId={scanId} activeSort={searchParams.get("inbound_sort")} direction={searchParams.get("inbound_direction") as SortDirection | null} onSort={(column, direction) => setInboundSort(setSearchParams, column, direction)} />}
       <PaginatedTableControls total={inbound.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inbound occurrence" />
     </div>
   );
@@ -146,12 +148,12 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function InboundTable({ items, scanId }: { items: InboundLinkOccurrence[]; scanId: string }) {
+function InboundTable({ items, scanId, activeSort, direction, onSort }: { items: InboundLinkOccurrence[]; scanId: string; activeSort: string | null; direction: SortDirection | null; onSort: (column: string | null, direction: SortDirection | null) => void }) {
   return (
     <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
-          <tr>{["Source page", "Status", "Depth", "Anchor text", "Role", "Raw href", "rel", "Scope decision", "Provenance"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
+          <tr>{[["source_url", "Source page"], ["source_status", "Status"], ["source_depth", "Depth"], ["anchor_text", "Anchor text"], ["link_role", "Role"], ["raw_href", "Raw href"], ["rel", "rel"], ["scope_decision", "Scope decision"], ["discovered_at", "Provenance"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={activeSort} direction={direction} onChange={onSort} defaultDirection={column === "discovered_at" ? "desc" : "asc"} />)}</tr>
         </thead>
         <tbody>
           {items.map((link) => (
@@ -201,6 +203,8 @@ function PageFrame({ children }: { children: React.ReactNode }) {
 }
 
 function Overview({ snapshot, attempts, attemptsLoading }: { snapshot: Snapshot; attempts: StaticFetchAttempt[]; attemptsLoading: boolean }) {
+  const attemptValues = { attempt: (item: StaticFetchAttempt) => item.attempt_number, outcome: (item: StaticFetchAttempt) => item.outcome, status: (item: StaticFetchAttempt) => item.retrieval_http_status, duration: (item: StaticFetchAttempt) => item.response_time_ms, transferred: (item: StaticFetchAttempt) => item.network_bytes_transferred, retry: (item: StaticFetchAttempt) => item.retry_reason, error: (item: StaticFetchAttempt) => item.error_type };
+  const attemptSort = useTableSort(attempts, attemptValues);
   return (
     <div className="space-y-5">
       <PageWorkspaceRelationship snapshot={snapshot} />
@@ -235,8 +239,8 @@ function Overview({ snapshot, attempts, attemptsLoading }: { snapshot: Snapshot;
         {attemptsLoading ? <LoadingBlock label="Loading fetch attempts..." /> : !attempts.length ? <EmptyState title="No attempt history" message="This legacy snapshot predates durable static attempt evidence." /> : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
-              <thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{["Attempt", "Outcome", "Status", "Duration", "Transferred", "Retry decision", "Error"].map((header) => <th key={header} className="px-3 py-2 font-medium">{header}</th>)}</tr></thead>
-              <tbody>{attempts.map((attempt) => <tr key={attempt.id} className="border-t border-stone-100 align-top">
+              <thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{[["attempt", "Attempt"], ["outcome", "Outcome"], ["status", "Status"], ["duration", "Duration"], ["transferred", "Transferred"], ["retry", "Retry decision"], ["error", "Error"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={attemptSort.sort?.column ?? null} direction={attemptSort.sort?.direction ?? null} onChange={attemptSort.changeSort} />)}</tr></thead>
+              <tbody>{attemptSort.sortedItems.map((attempt) => <tr key={attempt.id} className="border-t border-stone-100 align-top">
                 <td className="px-3 py-2 font-medium">{attempt.attempt_number}</td>
                 <td className="px-3 py-2"><StatusBadge status={attempt.outcome} /></td>
                 <td className="px-3 py-2">{attempt.retrieval_http_status ?? "No response"}</td>
@@ -353,6 +357,8 @@ function KeyValueSection({ title, values }: { title: string; values: Record<stri
 }
 
 function RecordTable({ title, records, columns }: { title: string; records: Array<Record<string, unknown>>; columns: string[] }) {
+  const values = Object.fromEntries(columns.map((column) => [column, (record: Record<string, unknown>) => String(record[column] ?? "")]));
+  const recordSort = useTableSort(records, values);
   if (!records.length) return <EmptyState title={`No ${title.toLowerCase()}`} message="No matching elements were preserved in the parsed head." />;
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
@@ -360,10 +366,10 @@ function RecordTable({ title, records, columns }: { title: string; records: Arra
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">
           <thead className="text-xs uppercase text-stone-500">
-            <tr>{columns.map((column) => <th key={column} scope="col" className="px-3 py-2 font-medium">{column}</th>)}</tr>
+            <tr>{columns.map((column) => <SortableTableHeader key={column} column={column} label={column} activeColumn={recordSort.sort?.column ?? null} direction={recordSort.sort?.direction ?? null} onChange={recordSort.changeSort} />)}</tr>
           </thead>
           <tbody>
-            {records.map((record, index) => (
+            {recordSort.sortedItems.map((record, index) => (
               <tr key={index} className="border-t border-stone-100">
                 {columns.map((column) => <td key={column} className="max-w-md break-words px-3 py-2">{String(record[column] ?? "")}</td>)}
               </tr>
@@ -408,6 +414,8 @@ function LinksView({ links, loading, error }: { links: LinkOccurrence[]; loading
     const haystack = [link.resolved_url, link.normalized_target_url, link.raw_href, link.anchor_text, link.scope_decision].join(" ").toLowerCase();
     return (!search || haystack.includes(search.toLowerCase())) && (decision === "all" || link.scope_decision === decision) && (role === "all" || (link.link_role ?? "legacy_unclassified") === role) && (!inScopeOnly || link.in_scope);
   });
+  const linkValues = { destination: (link: LinkOccurrence) => link.resolved_url ?? link.normalized_target_url, anchor: (link: LinkOccurrence) => link.anchor_text ?? link.aria_label, role: (link: LinkOccurrence) => link.link_role, scope: (link: LinkOccurrence) => link.scope_decision, raw: (link: LinkOccurrence) => link.raw_href, attributes: (link: LinkOccurrence) => `${link.rel ?? ""} ${link.target ?? ""} ${link.title ?? ""}`, dom: (link: LinkOccurrence) => link.dom_path };
+  const linkSort = useTableSort(filtered, linkValues);
   const decisions = Array.from(new Set(links.map((link) => link.scope_decision))).sort();
   if (error) return <ErrorBanner error={error} title="Could not load links" />;
   if (loading) return <LoadingBlock label="Loading links..." />;
@@ -432,10 +440,10 @@ function LinksView({ links, loading, error }: { links: LinkOccurrence[]; loading
       <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm">
         <table className="min-w-full text-left text-sm">
           <thead className="bg-stone-100 text-xs uppercase text-stone-500">
-            <tr>{["Destination", "Anchor text", "Role", "Scope decision", "Raw href", "Attributes", "DOM path"].map((header) => <th key={header} scope="col" className="px-3 py-2 font-medium">{header}</th>)}</tr>
+            <tr>{[["destination", "Destination"], ["anchor", "Anchor text"], ["role", "Role"], ["scope", "Scope decision"], ["raw", "Raw href"], ["attributes", "Attributes"], ["dom", "DOM path"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={linkSort.sort?.column ?? null} direction={linkSort.sort?.direction ?? null} onChange={linkSort.changeSort} />)}</tr>
           </thead>
           <tbody>
-            {filtered.map((link) => (
+            {linkSort.sortedItems.map((link) => (
               <tr key={link.id} className="border-t border-stone-100 align-top">
                 <td className="max-w-sm px-3 py-2"><UrlText value={link.resolved_url ?? link.normalized_target_url} /></td>
                 <td className="max-w-xs px-3 py-2">
@@ -546,6 +554,8 @@ function buildInboundQuery(searchParams: URLSearchParams) {
     ["source_status", "source_status"],
     ["rel", "rel"],
     ["link_role", "link_role"],
+    ["inbound_sort", "sort"],
+    ["inbound_direction", "direction"],
     ["inbound_limit", "limit"],
     ["inbound_offset", "offset"]
   ];
@@ -554,6 +564,17 @@ function buildInboundQuery(searchParams: URLSearchParams) {
     if (value) params.set(to, value);
   }
   return `?${params.toString()}`;
+}
+
+function setInboundSort(setSearchParams: ReturnType<typeof useSearchParams>[1], column: string | null, direction: SortDirection | null) {
+  setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    next.set("tab", "inbound");
+    if (column && direction) { next.set("inbound_sort", column); next.set("inbound_direction", direction); }
+    else { next.delete("inbound_sort"); next.delete("inbound_direction"); }
+    next.delete("inbound_offset");
+    return next;
+  });
 }
 
 function updateInboundParam(setSearchParams: ReturnType<typeof useSearchParams>[1], key: string, value: string | null) {
@@ -569,7 +590,7 @@ function updateInboundParam(setSearchParams: ReturnType<typeof useSearchParams>[
 
 function tabOnly(searchParams: URLSearchParams, tab: string) {
   const next = new URLSearchParams(searchParams);
-  for (const key of ["inbound_search", "scope_decision", "source_status", "rel", "link_role", "inbound_offset"]) {
+  for (const key of ["inbound_search", "scope_decision", "source_status", "rel", "link_role", "inbound_sort", "inbound_direction", "inbound_offset"]) {
     next.delete(key);
   }
   next.set("tab", tab);

@@ -5,7 +5,6 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -17,6 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.database import UTCDateTime as DateTime
 
 
 class ScanProjectionState(Base):

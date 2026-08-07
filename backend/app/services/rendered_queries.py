@@ -30,6 +30,7 @@ def list_scan_rendered_observations(
         "navigation_status",
         "warning_count",
         "page_error_count",
+        "browser_evidence",
         "capture_time",
     ] = "capture_time",
     direction: Literal["asc", "desc"] = "desc",
@@ -99,6 +100,11 @@ def list_scan_rendered_observations(
         "navigation_status": RenderedObservation.navigation_http_status,
         "warning_count": RenderedObservation.warning_count,
         "page_error_count": RenderedObservation.page_error_count,
+        "browser_evidence": func.coalesce(artifacts.c.viewport, 0)
+        + func.coalesce(artifacts.c.full_page, 0)
+        + func.coalesce(artifacts.c.dom, 0)
+        + RenderedObservation.console_message_count
+        + RenderedObservation.blocked_request_count,
         "capture_time": RenderedObservation.finished_at,
     }
     order = sort_map[sort].desc() if direction == "desc" else sort_map[sort].asc()

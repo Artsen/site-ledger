@@ -3,6 +3,7 @@ from sqlalchemy import delete, event, func, select
 
 from app.models import (
     BackgroundJob,
+    PageCategory,
     ResourceOccurrence,
     ResourceReferenceOccurrence,
     ResourceSnapshot,
@@ -12,7 +13,9 @@ from app.models import (
     ScanProjectionBuild,
     ScanProjectionState,
     ScanResourceProjection,
+    SitePage,
     WebResource,
+    WebsiteProperty,
 )
 from app.services.graph_filters import GraphFilters
 from app.services.graph_queries import get_scan_graph, get_scan_graph_dynamic
@@ -76,6 +79,68 @@ def test_projection_build_activates_equivalent_page_resource_and_graph_reads(db_
     assert [item.model_dump() for item in projected_graph.edges] == [
         item.model_dump() for item in dynamic_graph.edges
     ]
+
+
+def test_mutable_site_metadata_does_not_change_scan_projection(db_session) -> None:
+    scan = _fixture(db_session, "completed")
+    site = WebsiteProperty(
+        name="Example",
+        base_url="https://example.com/",
+        normalized_base_url="https://example.com/",
+        description=None,
+        group_key="default",
+        locale=None,
+        platform_key="unknown",
+        ownership_key="unknown",
+        display_timezone=None,
+        scope_config={},
+    )
+    db_session.add(site)
+    db_session.flush()
+    scan.website_property_id = site.id
+    db_session.commit()
+
+    build = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    ready = execute_projection_build(db_session, build.id)
+    immutable_state = (
+        ready.id,
+        ready.projection_version,
+        ready.checksum_sha256,
+        ready.created_at,
+        ready.started_at,
+        ready.finished_at,
+    )
+
+    resource = db_session.scalar(select(WebResource).where(WebResource.path == "/"))
+    assert resource is not None
+    db_session.add(
+        SitePage(website_property_id=site.id, resource_id=resource.id, workflow_status="unreviewed")
+    )
+    db_session.add(
+        PageCategory(
+            website_property_id=site.id,
+            name="Marketing",
+            normalized_name="marketing",
+            description=None,
+            color_key="teal",
+            sort_order=0,
+            is_active=True,
+        )
+    )
+    site.display_timezone = "America/New_York"
+    db_session.commit()
+    db_session.refresh(ready)
+
+    assert (
+        ready.id,
+        ready.projection_version,
+        ready.checksum_sha256,
+        ready.created_at,
+        ready.started_at,
+        ready.finished_at,
+    ) == immutable_state
+    assert current_projection_build(db_session, scan.id).id == ready.id
 
 
 def test_terminal_scan_queues_projection_job_but_active_scan_does_not(db_session) -> None:

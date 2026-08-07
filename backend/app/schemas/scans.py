@@ -71,6 +71,7 @@ class ScanRead(BaseModel):
     website_property_id: int | None = None
     website_property_name: str | None = None
     website_property_base_url: str | None = None
+    website_property_display_timezone: str | None = None
     starting_url: str
     status: str
     scope_config: dict[str, Any]

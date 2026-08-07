@@ -3,6 +3,7 @@ export type Scan = {
   website_property_id: number | null;
   website_property_name: string | null;
   website_property_base_url: string | null;
+  website_property_display_timezone?: string | null;
   starting_url: string;
   status: string;
   scope_config: ScopeConfig;
@@ -98,6 +99,7 @@ export type Site = {
   locale: string | null;
   platform_key: string;
   ownership_key: string;
+  display_timezone: string | null;
   scope_config: ScopeConfig;
   is_active: boolean;
   created_at: string;
@@ -139,6 +141,7 @@ export type SitePayload = {
   locale: string | null;
   platform_key: string;
   ownership_key: string;
+  display_timezone: string | null;
   scope_config: ScopeConfig;
   is_active: boolean;
 };
@@ -704,8 +707,90 @@ export type PageCategory = {
   sort_order: number;
   is_active: boolean;
   assignment_count: number;
+  manual_assignment_count: number;
+  automatic_assignment_count: number;
+  exclusion_count: number;
+  rule_count: number;
   created_at: string;
   updated_at: string;
+};
+
+export type CategoryRuleCondition = {
+  id?: number;
+  rule_id?: number;
+  target: "normalized_url" | "host" | "path" | "query" | "filename";
+  operator: "equals" | "starts_with" | "ends_with" | "contains" | "glob" | "regex";
+  value: string;
+  negate: boolean;
+  case_sensitive: boolean;
+  sort_order: number;
+  created_at?: string;
+};
+
+export type CategoryRule = {
+  id: number;
+  website_property_id: number;
+  category_id: number;
+  category_name: string;
+  name: string;
+  description: string | null;
+  match_mode: "all" | "any";
+  is_active: boolean;
+  sort_order: number;
+  current_revision_number: number;
+  current_match_count: number;
+  current_excluded_count: number;
+  last_evaluated_at: string | null;
+  created_at: string;
+  updated_at: string;
+  conditions: CategoryRuleCondition[];
+};
+
+export type CategoryRuleList = { items: CategoryRule[]; total: number; limit: number; offset: number };
+export type CategoryRulePreview = {
+  total_pages_evaluated: number;
+  matching_pages: number;
+  currently_assigned: number;
+  would_gain_automatic_support: number;
+  would_lose_automatic_support: number;
+  excluded_matches: number;
+  sample_matching_pages: Array<{ resource_id: number; normalized_url: string }>;
+  sample_non_matching_pages: Array<{ resource_id: number; normalized_url: string }>;
+  invalid_conditions: string[];
+  evaluation_duration_ms: number;
+};
+export type CategoryRuleRun = {
+  id: number;
+  website_property_id: number;
+  trigger_type: string;
+  trigger_rule_id: number | null;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  page_count: number;
+  rule_count: number;
+  condition_count: number;
+  match_count: number;
+  rule_supports_added: number;
+  rule_supports_removed: number;
+  effective_assignments_added: number;
+  effective_assignments_removed: number;
+  exclusions_suppressing_matches: number;
+  unchanged_count: number;
+  error_type: string | null;
+  error_message: string | null;
+  evaluator_version: string;
+  created_at: string;
+};
+export type CategoryRuleRunList = { items: CategoryRuleRun[]; total: number; limit: number; offset: number };
+export type CategoryProvenance = {
+  category_id: number;
+  category_name: string;
+  manually_assigned: boolean;
+  matching_rules: Array<{ id: number; name: string }>;
+  automatic_exclusion: boolean;
+  effective: boolean;
+  effective_reason: string;
 };
 
 export type PageCategoryList = {
@@ -713,6 +798,17 @@ export type PageCategoryList = {
   total: number;
   limit: number;
   offset: number;
+};
+
+export type PageCategoryDeletionPreview = {
+  category: PageCategory;
+  assignment_count: number;
+  manual_support_count: number;
+  rule_support_count: number;
+  rule_count: number;
+  exclusion_count: number;
+  sample_pages: Array<{ resource_id: number; normalized_url: string }>;
+  can_delete: boolean;
 };
 
 export type Note = {

@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -15,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.database import UTCDateTime as DateTime
 
 if TYPE_CHECKING:
     from app.models.resources import SourceRefresh

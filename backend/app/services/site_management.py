@@ -34,6 +34,7 @@ def create_site(db: Session, payload: WebsitePropertyCreate) -> WebsiteProperty:
         locale=payload.locale,
         platform_key=payload.platform_key,
         ownership_key=payload.ownership_key,
+        display_timezone=payload.display_timezone,
         scope_config=payload.scope_config.model_dump(),
         is_active=payload.is_active,
     )

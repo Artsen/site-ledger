@@ -1,17 +1,43 @@
 import sqlite3
 from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import DateTime, create_engine, event
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.types import TypeDecorator
 
 from app.config import get_settings
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class UTCDateTime(TypeDecorator[datetime]):
+    """Persist UTC instants and restore tzinfo stripped by SQLite."""
+
+    impl = DateTime
+    cache_ok = True
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        super().__init__(timezone=True)
+
+    def process_bind_param(self, value: datetime | None, _dialect: object) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    def process_result_value(self, value: datetime | None, _dialect: object) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 settings = get_settings()

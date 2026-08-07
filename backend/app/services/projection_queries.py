@@ -93,8 +93,11 @@ def list_projected_pages(
         "status": ScanPageProjection.http_status,
         "title": ScanPageProjection.page_title,
         "depth": ScanPageProjection.crawl_depth,
+        "content_type": ScanPageProjection.content_type,
         "duration": ScanPageProjection.response_time_ms,
+        "inbound": ScanPageProjection.inbound_occurrence_count,
         "rendered_state": func.coalesce(ScanPageProjection.rendered_capture_state, "not_requested"),
+        "error": ScanPageProjection.error_type,
     }
     order = sort_map[sort].desc() if direction == "desc" else sort_map[sort].asc()
     id_order = (
@@ -188,6 +191,8 @@ def list_projected_resources(
         "declared_size": ScanResourceProjection.declared_content_length,
         "occurrence_count": ScanResourceProjection.occurrence_count,
         "source_page_count": ScanResourceProjection.source_page_count,
+        "observed": ScanResourceProjection.observed,
+        "in_scope_count": ScanResourceProjection.in_scope_occurrence_count,
         "first_discovered": ScanResourceProjection.first_discovered_at,
         "latest_discovered": ScanResourceProjection.latest_discovered_at,
     }

@@ -33,6 +33,7 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
     locale: "",
     platform_key: "Other",
     ownership_key: "Unknown",
+    display_timezone: mode === "create" ? detectedBrowserTimezone() : null,
     scope_config: defaultScope(),
     is_active: true
   });
@@ -62,6 +63,7 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
       locale: existing.data.locale ?? "",
       platform_key: existing.data.platform_key,
       ownership_key: existing.data.ownership_key,
+      display_timezone: existing.data.display_timezone,
       scope_config: { ...defaultScope(), ...existing.data.scope_config },
       is_active: existing.data.is_active
     });
@@ -115,6 +117,10 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
               <Field id="site-locale" label="Locale" error={validation.locale} helper="Optional. Example: en-US"><input id="site-locale" value={form.locale ?? ""} onChange={(event) => setForm({ ...form, locale: event.target.value })} className={inputClass(Boolean(validation.locale))} /></Field>
               <Field id="site-platform" label="Platform" helper="Optional. Example: WordPress Learn"><input id="site-platform" value={form.platform_key} onChange={(event) => setForm({ ...form, platform_key: event.target.value })} className={inputClass()} placeholder="WordPress" /></Field>
               <Field id="site-ownership" label="Ownership" helper="Optional. Team or owner name."><input id="site-ownership" value={form.ownership_key} onChange={(event) => setForm({ ...form, ownership_key: event.target.value })} className={inputClass()} placeholder="Web Team" /></Field>
+              <Field id="site-timezone" label="Time zone" helper="Controls how dates and times are displayed for this Site. Stored timestamps are not changed.">
+                <input id="site-timezone" list="site-timezones" value={form.display_timezone ?? ""} onChange={(event) => setForm({ ...form, display_timezone: event.target.value || null })} className={inputClass()} placeholder="Browser local / Automatic" />
+                <datalist id="site-timezones">{supportedTimezones().map((zone) => <option key={zone} value={zone} />)}</datalist>
+              </Field>
             </div>
             {mode === "edit" ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_active} onChange={(event) => setForm({ ...form, is_active: event.target.checked })} className="size-4 rounded border-stone-300" />Active site</label> : null}
           </div>
@@ -246,4 +252,21 @@ function validateInteger(value: number, min: number, max: number, message: strin
 function validateNumber(value: number, min: number, max: number, message: string) {
   if (!Number.isFinite(value) || value < min || value > max) return message;
   return null;
+}
+
+function detectedBrowserTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
+function supportedTimezones() {
+  const intl = Intl as typeof Intl & { supportedValuesOf?: (key: "timeZone") => string[] };
+  try {
+    return intl.supportedValuesOf?.("timeZone") ?? [];
+  } catch {
+    return [];
+  }
 }

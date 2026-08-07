@@ -17,6 +17,7 @@ import {
   createPageCategory,
   createSiteNote,
   deletePageCategory,
+  getPageCategoryDeletionPreview,
   deleteSite,
   deleteSource,
   discoverRobots,
@@ -34,6 +35,7 @@ import {
   updateSite,
 } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
+import { CategoryRuleHistoryPanel, CategoryRulesPanel } from "../components/CategoryRulesPanel";
 import { ResourceInventoryView } from "../components/ResourceInventoryView";
 import {
   PageCategoryBadges,
@@ -47,6 +49,7 @@ import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SortableTableHeader, type SortDirection } from "../components/ui/SortableTableHeader";
 import { classificationLabel } from "../types/siteClassifications";
 import type { Job, WorkerHealth } from "../types/jobs";
 import type {
@@ -65,6 +68,7 @@ import {
 } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
+import { useTableSort } from "../utils/useTableSort";
 
 export function SiteDetailPage() {
   const { siteId = "" } = useParams();
@@ -452,6 +456,9 @@ function PagesTab({ site }: { site: Site }) {
           pages={pages.data.items}
           selected={selected}
           setSelected={setSelected}
+          activeSort={searchParams.get("sort")}
+          direction={searchParams.get("direction") as SortDirection | null}
+          onSort={(column, direction) => setSitePageSort(setSearchParams, column, direction)}
         />
       ) : !pages.isLoading ? (
         <EmptyState
@@ -469,11 +476,17 @@ function SitePagesTable({
   pages,
   selected,
   setSelected,
+  activeSort,
+  direction,
+  onSort,
 }: {
   siteId: number;
   pages: PersistentPage[];
   selected: number[];
   setSelected: (ids: number[]) => void;
+  activeSort: string | null;
+  direction: SortDirection | null;
+  onSort: (column: string | null, direction: SortDirection | null) => void;
 }) {
   const allSelected =
     pages.length > 0 &&
@@ -497,20 +510,8 @@ function SitePagesTable({
                 }
               />
             </th>
-            {[
-              "Page",
-              "Owner",
-              "Workflow",
-              "Categories",
-              "Notes",
-              "Observations",
-              "Latest observation",
-              "Actions",
-            ].map((header) => (
-              <th key={header} scope="col" className="px-3 py-2">
-                {header}
-              </th>
-            ))}
+            {[["url", "Page"], ["owner", "Owner"], ["workflow", "Workflow"], ["categories", "Categories"], ["notes", "Notes"], ["observations", "Observations"], ["latest_observed", "Latest observation"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={activeSort} direction={direction} onChange={onSort} defaultDirection={column === "latest_observed" ? "desc" : "asc"} />)}
+            <th className="px-3 py-2 font-medium">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -595,6 +596,25 @@ function SitePagesTable({
 }
 
 function CategoriesTab({ site }: { site: Site }) {
+  const [view, setView] = useState<"categories" | "rules" | "history">("categories");
+  const categories = useQuery({
+    queryKey: ["page-categories", String(site.id)],
+    queryFn: () => listPageCategories(String(site.id), "?active_state=all&limit=200"),
+  });
+  return <div className="space-y-4"><div className="flex gap-1 border-b border-stone-200" role="tablist">{(["categories", "rules", "history"] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={view === item} onClick={() => setView(item)} className={`border-b-2 px-3 py-2 text-sm font-medium ${view === item ? "border-stone-900 text-stone-900" : "border-transparent text-stone-500"}`}>{item === "history" ? "Evaluation History" : formatStatus(item)}</button>)}</div>{view === "categories" ? <CategoryListPanel site={site} /> : null}{view === "rules" ? categories.isLoading ? <LoadingBlock label="Loading categories..." /> : categories.error ? <ErrorBanner error={categories.error} title="Could not load categories" /> : <CategoryRulesPanel siteId={String(site.id)} categories={categories.data?.items ?? []} timeZone={site.display_timezone} /> : null}{view === "history" ? <CategoryRuleHistoryPanel siteId={String(site.id)} timeZone={site.display_timezone} /> : null}</div>;
+}
+
+function setSitePageSort(setSearchParams: ReturnType<typeof useSearchParams>[1], column: string | null, direction: SortDirection | null) {
+  setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    if (column && direction) { next.set("sort", column); next.set("direction", direction); }
+    else { next.delete("sort"); next.delete("direction"); }
+    next.delete("site_pages_offset");
+    return next;
+  });
+}
+
+function CategoryListPanel({ site }: { site: Site }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [color, setColor] = useState("stone");
@@ -726,7 +746,14 @@ function CategoryRow({
     onSuccess: refresh,
   });
   const remove = useMutation({
-    mutationFn: () => deletePageCategory(siteId, category.id),
+    mutationFn: async () => {
+      const preview = await getPageCategoryDeletionPreview(siteId, category.id);
+      const confirmed = window.confirm(
+        `Delete ${category.name}? This removes ${preview.assignment_count} effective assignments, ${preview.manual_support_count} manual supports, ${preview.rule_support_count} Rule supports, ${preview.rule_count} Rules, and ${preview.exclusion_count} exclusions. Pages, Scans, notes, and projections are retained.`,
+      );
+      if (!confirmed) throw new Error("Deletion cancelled");
+      return deletePageCategory(siteId, category.id);
+    },
     onSuccess: refresh,
   });
   return (
@@ -756,7 +783,7 @@ function CategoryRow({
         </label>
         <div className="flex flex-wrap items-end gap-2">
           <span className="self-center text-sm">
-            {plural(category.assignment_count, "assignment")}
+            {plural(category.assignment_count, "assignment")} ({category.manual_assignment_count} manual, {category.automatic_assignment_count} automatic, {plural(category.rule_count, "Rule")}, {plural(category.exclusion_count, "exclusion")})
           </span>
           <Button type="submit" loading={save.isPending}>
             Save
@@ -767,20 +794,13 @@ function CategoryRow({
           <Button
             type="button"
             variant="danger"
-            onClick={() => {
-              if (
-                window.confirm(
-                  `Delete ${category.name}? This removes ${category.assignment_count} assignments but does not delete Pages or notes.`,
-                )
-              )
-                remove.mutate();
-            }}
+            onClick={() => remove.mutate()}
           >
             Delete
           </Button>
         </div>
       </form>
-      {save.error || archive.error || remove.error ? (
+      {save.error || archive.error || (remove.error && remove.error.message !== "Deletion cancelled") ? (
         <ErrorBanner
           error={save.error ?? archive.error ?? remove.error}
           title="Category action failed"
@@ -825,8 +845,8 @@ function OverviewTab({ site }: { site: Site }) {
                 label: "Ownership",
                 value: classificationLabel(site.ownership_key),
               },
-              { label: "Created", value: formatDate(site.created_at) },
-              { label: "Updated", value: formatDate(site.updated_at) },
+              { label: "Created", value: formatDate(site.created_at, { timeZone: site.display_timezone, showTimeZone: true }) },
+              { label: "Updated", value: formatDate(site.updated_at, { timeZone: site.display_timezone, showTimeZone: true }) },
             ]}
           />
         </section>
@@ -878,7 +898,7 @@ function ScansTab({
               >
                 <StatusBadge status={scan.status} />
                 <span className="mt-1 block text-xs text-stone-500">
-                  {formatDate(scan.created_at)} - {scan.discovered_count}{" "}
+                  {formatDate(scan.created_at, { timeZone: site.display_timezone, showTimeZone: true })} - {scan.discovered_count}{" "}
                   discovered - {scan.failed_count} failed
                 </span>
               </Link>
@@ -1175,20 +1195,19 @@ function SourceTable({
   onCancel: (job: Job) => void;
   onDelete: (source: UrlSource) => void;
 }) {
+  const values = { source: (source: UrlSource) => source.name, type: (source: UrlSource) => source.source_type, status: (source: UrlSource) => activeSourceJob(jobs, source.id)?.presentation_status ?? source.last_refresh_status, urls: (source: UrlSource) => source.current_entry_count };
+  const { sortedItems, sort, changeSort } = useTableSort(sources, values);
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
-            {["Source", "Type", "Status", "URLs", "Actions"].map((header) => (
-              <th key={header} className="px-3 py-2">
-                {header}
-              </th>
-            ))}
+            {[["source", "Source"], ["type", "Type"], ["status", "Status"], ["urls", "URLs"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
+            <th className="px-3 py-2 font-medium">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {sources.map((source) => {
+          {sortedItems.map((source) => {
             const activeJob = activeSourceJob(jobs, source.id);
             const displayStatus =
               activeJob?.presentation_status ??
@@ -1357,22 +1376,18 @@ function InventoryTab({ site }: { site: Site }) {
 }
 
 function InventoryTable({ items }: { items: InventoryItem[] }) {
+  const values = { url: (item: InventoryItem) => item.normalized_url, sources: (item: InventoryItem) => item.source_count, scope: (item: InventoryItem) => item.scope_decision, validation: (item: InventoryItem) => item.validation_state, classification: (item: InventoryItem) => item.classification };
+  const { sortedItems, sort, changeSort } = useTableSort(items, values);
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
-            {["URL", "Sources", "Scope", "Validation", "Classification"].map(
-              (header) => (
-                <th key={header} className="px-3 py-2">
-                  {header}
-                </th>
-              ),
-            )}
+            {[["url", "URL"], ["sources", "Sources"], ["scope", "Scope"], ["validation", "Validation"], ["classification", "Classification"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
           </tr>
         </thead>
         <tbody>
-          {items.map((item) => (
+          {sortedItems.map((item) => (
             <tr
               key={
                 item.normalized_url ??

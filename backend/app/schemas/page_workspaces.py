@@ -43,6 +43,10 @@ class PageCategoryRead(BaseModel):
     sort_order: int
     is_active: bool
     assignment_count: int = 0
+    manual_assignment_count: int = 0
+    automatic_assignment_count: int = 0
+    exclusion_count: int = 0
+    rule_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -117,6 +121,10 @@ class CategoryDeletionPage(BaseModel):
 class PageCategoryDeletionPreview(BaseModel):
     category: PageCategoryRead
     assignment_count: int
+    manual_support_count: int = 0
+    rule_support_count: int = 0
+    rule_count: int = 0
+    exclusion_count: int = 0
     sample_pages: list[CategoryDeletionPage]
     can_delete: bool = True
 

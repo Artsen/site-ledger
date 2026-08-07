@@ -66,8 +66,12 @@ Workflow status is explicit manual metadata with stable keys: `unreviewed`, `nee
 
 Categories are flat and Site-scoped. Names use case-insensitive normalized identity while preserving
 display spelling. Colors come from a fixed accessible palette. A Page can have several categories.
-Archiving prevents normal new assignment while preserving existing badges; deletion removes only
-assignments, never Pages or notes.
+Automatic Category Rules add normalized support provenance without replacing the effective
+assignment relation. Manual and several Rule supports may coexist, while a Page/Category exclusion
+suppresses automatic support only. See [Page Category Rules](page-category-rules.md).
+Archiving prevents new assignment and disables active Rules. Existing manual assignments remain;
+automatic-only assignments disappear after reconciliation. Deletion removes only organization
+metadata, never Pages or notes.
 
 ```mermaid
 erDiagram

@@ -23,6 +23,8 @@ The current application implements:
 - Persistent Pages across saved-site scans.
 - Page observation history.
 - Site-scoped Page organization, categories, owner labels, workflow status, and plain-text notes.
+- Deterministic URL-based automatic Category Rules with provenance and exclusions.
+- Site-scoped IANA display timezones over immutable UTC evidence.
 - Deterministic link roles on individual source-DOM occurrences.
 - Conditional HTTP revalidation and parsed-result reuse.
 - Stored HTML evidence and parsed head metadata.

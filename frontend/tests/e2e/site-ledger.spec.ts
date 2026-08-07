@@ -261,9 +261,9 @@ test("numbered pagination stays URL-backed and isolated between Scan tabs", asyn
   await expect(page).toHaveURL(/pages_offset=0/);
 
   await page.getByRole("tab", { name: /Resources/i }).click();
-  await expect(page).toHaveURL(/resources_limit=25/);
-  await expect(page).toHaveURL(/resources_offset=25/);
-  await expect(page.getByText("Showing 26-50 of 100 Resources").first()).toBeVisible();
+  await expect(page).not.toHaveURL(/resources_limit=/);
+  await expect(page).not.toHaveURL(/resources_offset=/);
+  await expect(page.getByText("Showing 1-50 of 100 Resources").first()).toBeVisible();
   await page.getByRole("tab", { name: /Rendered/i }).click();
   await expect(page).not.toHaveURL(/rendered_offset=25/);
   await page.goBack();
@@ -453,6 +453,34 @@ test("AI Document Sources preserve nested evidence, provenance, history, and saf
   await expect(page.getByRole("tab", { name: /Pages/i })).toBeVisible();
 });
 
+test("Site timezone and automatic Category Rule workflow", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/sites/3/category-rules", async (route) => {
+    if (route.request().method() === "POST") {
+      const payload = await route.request().postDataJSON();
+      await route.fulfill({ contentType: "application/json", status: 201, body: JSON.stringify({ id: 31, website_property_id: 3, category_name: "Editorial", current_revision_number: 1, current_match_count: 2, current_excluded_count: 0, last_evaluated_at: null, created_at: "2026-08-07T02:23:00Z", updated_at: "2026-08-07T02:23:00Z", ...payload, is_active: true }) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], total: 0, limit: 25, offset: 0 }) });
+  });
+  await page.route("**/api/sites/3/category-rules/preview", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total_pages_evaluated: 3, matching_pages: 2, currently_assigned: 0, would_gain_automatic_support: 2, would_lose_automatic_support: 0, excluded_matches: 0, sample_matching_pages: [{ resource_id: 2, normalized_url: "https://example.com/blog/a" }], sample_non_matching_pages: [], invalid_conditions: [], evaluation_duration_ms: 2 }) }));
+
+  await page.goto("/sites/3/edit");
+  await page.getByLabel("Time zone").fill("America/New_York");
+  await page.getByRole("button", { name: "Save site" }).click();
+  await expect(page).toHaveURL(/\/sites\/3$/);
+  await page.goto("/sites/3?tab=categories");
+  await page.getByRole("tab", { name: "Rules" }).click();
+  await page.getByRole("button", { name: "Create Rule" }).click();
+  await page.getByLabel("Rule name").fill("Blog paths");
+  await page.getByLabel("Rule Category").selectOption("7");
+  await page.getByLabel("Condition 1 value").fill("/blog/");
+  await page.getByRole("button", { name: "Preview" }).click();
+  await expect(page.getByText("Preview: 2 matching Pages")).toBeVisible();
+  await page.getByRole("button", { name: "Save & Apply" }).click();
+  await expect(page.getByRole("button", { name: "Create Rule" })).toBeVisible();
+});
+
 async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
   let siteActive = true;
@@ -567,6 +595,15 @@ async function mockApi(page: Page) {
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify(persistentPage),
+    });
+  });
+
+  await page.route("**/api/sites/3/pages/2/categories/details", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [{ category_id: 7, category_name: "Editorial", manually_assigned: true, matching_rules: [], automatic_exclusion: false, effective: true, effective_reason: "Manual" }],
+      }),
     });
   });
 
@@ -704,6 +741,7 @@ async function mockApi(page: Page) {
         body: JSON.stringify({
           ...site,
           is_active: siteActive,
+          display_timezone: body.display_timezone ?? site.display_timezone,
           scope_config: body.scope_config ?? site.scope_config,
         }),
       });
@@ -952,6 +990,7 @@ const site = {
   locale: "en-US",
   platform_key: "WordPress Learn",
   ownership_key: "Web Team",
+  display_timezone: null,
   scope_config: { ...scope, included_path_prefixes: ["/learn/"] },
   is_active: true,
   created_at: "2026-07-30T01:00:00Z",
@@ -1000,6 +1039,10 @@ const pageCategories = [
     sort_order: 0,
     is_active: true,
     assignment_count: 1,
+    manual_assignment_count: 1,
+    automatic_assignment_count: 0,
+    exclusion_count: 0,
+    rule_count: 0,
     created_at: "2026-08-05T10:00:00Z",
     updated_at: "2026-08-05T10:00:00Z",
   },
@@ -1012,6 +1055,10 @@ const pageCategories = [
     sort_order: 1,
     is_active: false,
     assignment_count: 0,
+    manual_assignment_count: 0,
+    automatic_assignment_count: 0,
+    exclusion_count: 0,
+    rule_count: 0,
     created_at: "2026-08-05T10:00:00Z",
     updated_at: "2026-08-05T10:00:00Z",
   },

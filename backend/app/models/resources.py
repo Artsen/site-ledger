@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import (
     JSON,
     CheckConstraint,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -16,6 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.database import UTCDateTime as DateTime
 
 if TYPE_CHECKING:
     from app.models.ai_documents import AiDocumentRefresh
@@ -85,6 +85,10 @@ class Scan(Base):
     def website_property_base_url(self) -> str | None:
         return self.website_property.base_url if self.website_property else None
 
+    @property
+    def website_property_display_timezone(self) -> str | None:
+        return self.website_property.display_timezone if self.website_property else None
+
 
 class WebsiteProperty(Base):
     __tablename__ = "website_properties"
@@ -98,6 +102,7 @@ class WebsiteProperty(Base):
     locale: Mapped[str | None] = mapped_column(String(32), index=True)
     platform_key: Mapped[str] = mapped_column(String(64), index=True)
     ownership_key: Mapped[str] = mapped_column(String(64), index=True)
+    display_timezone: Mapped[str | None] = mapped_column(String(255))
     scope_config: Mapped[dict[str, Any]] = mapped_column(JSON)
     is_active: Mapped[bool] = mapped_column(default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -752,7 +757,9 @@ class BackgroundJob(Base):
     __table_args__ = (
         CheckConstraint(
             "(scan_id IS NOT NULL AND source_refresh_id IS NULL) OR "
-            "(scan_id IS NULL AND source_refresh_id IS NOT NULL)",
+            "(scan_id IS NULL AND source_refresh_id IS NOT NULL) OR "
+            "(scan_id IS NULL AND source_refresh_id IS NULL AND website_property_id IS NOT NULL "
+            "AND job_type = 'category_rule_evaluation')",
             name="ck_background_job_one_subject",
         ),
         Index(

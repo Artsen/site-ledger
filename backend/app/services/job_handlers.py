@@ -7,18 +7,21 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import is_transient_database_lock
-from app.models import BackgroundJob, Scan, SourceRefresh
+from app.models import BackgroundJob, PageCategoryRule, PageCategoryRuleRun, Scan, SourceRefresh
 from app.services import background_jobs
+from app.services.category_rules import create_followup_evaluation, reconcile_site
 from app.services.job_types import (
     JOB_STATUS_CANCELLED,
     JOB_STATUS_COMPLETED,
     JOB_STATUS_COMPLETED_WITH_ERRORS,
     JOB_STATUS_FAILED,
+    JOB_TYPE_CATEGORY_RULE_EVALUATION,
     JOB_TYPE_SCAN,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
@@ -242,6 +245,63 @@ class ScanProjectionJobHandler:
             raise JobCancelled(str(exc)) from exc
 
 
+class CategoryRuleEvaluationJobHandler:
+    def __init__(self, session_factory: Callable[[], Session]):
+        self.session_factory = session_factory
+
+    async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
+        run_id = int(job.payload_json.get("run_id", 0))
+        if not run_id:
+            raise ValueError("Category Rule job is missing run_id.")
+        try:
+            with self.session_factory() as db:
+                run = reconcile_site(
+                    db,
+                    run_id,
+                    should_cancel=context.check_cancelled,
+                    progress=lambda current, total: context.progress(
+                        phase="reconciling",
+                        current_operation="Applying Page category Rules",
+                        current=current,
+                        total=total,
+                        unit="Pages",
+                    ),
+                )
+                result = {
+                    "run_id": run.id,
+                    "site_id": run.website_property_id,
+                    "rule_supports_added": run.rule_supports_added,
+                    "rule_supports_removed": run.rule_supports_removed,
+                }
+                if run.status == "cancelled":
+                    raise JobCancelled("Category Rule evaluation cancelled by user.")
+        except JobCancelled:
+            raise
+        except Exception as exc:
+            with self.session_factory() as db:
+                failed_run = db.get(PageCategoryRuleRun, run_id)
+                if failed_run:
+                    failed_run.status = "failed"
+                    failed_run.finished_at = datetime.now(UTC)
+                    failed_run.error_type = type(exc).__name__
+                    failed_run.error_message = str(exc)
+                    db.commit()
+            raise
+        with self.session_factory() as db:
+            current = db.get(BackgroundJob, job.id)
+            if current and current.payload_json.get("rerun_requested"):
+                if current.website_property_id is None:
+                    raise ValueError("Category Rule job is missing site_id.")
+                create_followup_evaluation(
+                    db,
+                    current.website_property_id,
+                    str(current.payload_json.get("latest_trigger_type", "manual_recalculate")),
+                    current.payload_json.get("latest_trigger_rule_id"),
+                )
+                db.commit()
+        return HandlerResult(result_json=result)
+
+
 class JobHandlerRegistry:
     def __init__(self, handlers: dict[str, JobHandler]):
         self.handlers = handlers
@@ -261,6 +321,7 @@ def build_handler_registry(
             JOB_TYPE_SCAN: ScanJobHandler(session_factory, store),
             JOB_TYPE_SOURCE_REFRESH: SourceRefreshJobHandler(session_factory),
             JOB_TYPE_SCAN_PROJECTION_BUILD: ScanProjectionJobHandler(session_factory),
+            JOB_TYPE_CATEGORY_RULE_EVALUATION: CategoryRuleEvaluationJobHandler(session_factory),
         }
     )
 
@@ -476,4 +537,15 @@ def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan) -> None:
     build = create_projection_build(db, scan.id)
     if build.status == "queued":
         background_jobs.enqueue_scan_projection_job(db, build.id, scan)
+    if scan.website_property_id is not None and db.scalar(
+        select(PageCategoryRule.id)
+        .where(
+            PageCategoryRule.website_property_id == scan.website_property_id,
+            PageCategoryRule.is_active.is_(True),
+        )
+        .limit(1)
+    ):
+        from app.services.category_rules import queue_evaluation
+
+        queue_evaluation(db, scan.website_property_id, "scan_completed")
     db.commit()

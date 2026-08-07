@@ -61,6 +61,10 @@ lease-guarded, cancellation-aware, batch-progress-reporting, and deduplicated pe
 interrupted projection job records build failure without changing the crawl's terminal result or
 the current ready projection. See [Scan projections](scan-projections.md).
 
+`category_rule_evaluation` is a Site-scoped durable job. Only one reconciliation executes per Site;
+queued triggers coalesce and changes during an active lease request one follow-up run. Evaluation
+and Scan projection jobs are independent and report progress in bounded Page batches.
+
 If a worker exits or the process is killed, expired running jobs are reconciled on worker startup.
 When the domain record already reached a terminal state, the job follows that terminal state.
 Otherwise the job and domain record move to `interrupted`.

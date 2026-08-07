@@ -51,6 +51,8 @@ tables are used.
 Mutable `SitePage` categories, owner, workflow status, notes, and other user annotations are never
 copied into a Scan projection. Site catalogs may compose ready Scan results with current Site
 metadata, but this PR does not create a mutable Site-wide projection subsystem.
+Category Rules, assignment supports, automatic exclusions, and Site display timezone are mutable
+Site metadata. Their changes neither rebuild projections nor alter projection versions or checksums.
 
 ## Build And Activation
 
