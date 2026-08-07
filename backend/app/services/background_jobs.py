@@ -25,6 +25,7 @@ from app.services.job_types import (
     JOB_STATUS_RUNNING,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
     JOB_TYPE_SCAN,
+    JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
     TERMINAL_JOB_STATUSES,
@@ -116,6 +117,25 @@ def enqueue_scan_projection_job(
     )
 
 
+def enqueue_scan_comparison_job(
+    db: Session,
+    build_id: int,
+    comparison_id: int,
+    site_id: int,
+    *,
+    priority: int = 120,
+) -> BackgroundJob:
+    return _enqueue_job(
+        db,
+        job_type=JOB_TYPE_SCAN_COMPARISON_BUILD,
+        dedupe_key=f"scan-comparison-build:{build_id}",
+        scan_comparison_id=comparison_id,
+        website_property_id=site_id,
+        priority=priority,
+        payload={"comparison_id": comparison_id, "comparison_build_id": build_id},
+    )
+
+
 def enqueue_category_rule_job(
     db: Session,
     run_id: int,
@@ -142,6 +162,7 @@ def _enqueue_job(
     payload: dict[str, Any],
     scan_id: int | None = None,
     source_refresh_id: int | None = None,
+    scan_comparison_id: int | None = None,
     website_property_id: int | None = None,
 ) -> BackgroundJob:
     existing = db.scalar(select(BackgroundJob).where(BackgroundJob.dedupe_key == dedupe_key))
@@ -156,6 +177,7 @@ def _enqueue_job(
         priority=priority,
         scan_id=scan_id,
         source_refresh_id=source_refresh_id,
+        scan_comparison_id=scan_comparison_id,
         website_property_id=website_property_id,
         dedupe_key=dedupe_key,
         payload_json=payload,
@@ -418,6 +440,18 @@ def active_job_for_source_refresh(db: Session, refresh_id: int) -> BackgroundJob
     )
 
 
+def active_job_for_comparison(db: Session, comparison_id: int) -> BackgroundJob | None:
+    return db.scalar(
+        select(BackgroundJob)
+        .where(
+            BackgroundJob.scan_comparison_id == comparison_id,
+            BackgroundJob.status.in_(ACTIVE_JOB_STATUSES),
+        )
+        .order_by(BackgroundJob.created_at.desc(), BackgroundJob.id.desc())
+        .limit(1)
+    )
+
+
 def register_worker(
     db: Session,
     *,
@@ -534,6 +568,21 @@ def recover_expired_jobs(
             job.finished_at = now
             job.error_type = "lease_expired"
             job.error_message = "Worker lease expired before completion."
+        elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
+            from app.services.scan_comparisons import mark_comparison_build_terminal
+
+            mark_comparison_build_terminal(
+                db,
+                int(job.payload_json.get("comparison_build_id", 0)),
+                "failed",
+                "lease_expired",
+                "Worker lease expired during comparison build.",
+            )
+            job = db.get(BackgroundJob, job.id) or job
+            job.status = JOB_STATUS_INTERRUPTED
+            job.finished_at = now
+            job.error_type = "lease_expired"
+            job.error_message = "Worker lease expired before completion."
         elif job.job_type == JOB_TYPE_CATEGORY_RULE_EVALUATION:
             from app.models import PageCategoryRuleRun
 
@@ -578,6 +627,18 @@ def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
             domain_status = JOB_STATUS_COMPLETED
         elif build.status in {"failed", "cancelled"}:
             domain_status = build.status
+    elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
+        from app.models import ScanComparisonBuild
+
+        comparison_build = db.get(
+            ScanComparisonBuild, int(job.payload_json.get("comparison_build_id", 0))
+        )
+        if comparison_build is None:
+            domain_status = JOB_STATUS_FAILED
+        elif comparison_build.status == "ready":
+            domain_status = JOB_STATUS_COMPLETED
+        elif comparison_build.status in {"failed", "cancelled"}:
+            domain_status = comparison_build.status
     elif job.job_type == JOB_TYPE_CATEGORY_RULE_EVALUATION:
         from app.models import PageCategoryRuleRun
 

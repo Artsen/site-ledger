@@ -12,6 +12,7 @@ class JobRead(BaseModel):
     priority: int
     scan_id: int | None
     source_refresh_id: int | None
+    scan_comparison_id: int | None
     website_property_id: int | None
     dedupe_key: str
     payload_json: dict[str, Any]
