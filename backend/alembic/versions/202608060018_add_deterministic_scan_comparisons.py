@@ -129,7 +129,11 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["baseline_scan_id"], ["scans.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
-            ["current_build_id"], ["scan_comparison_builds.id"], ondelete="SET NULL"
+            ["current_build_id"],
+            ["scan_comparison_builds.id"],
+            name="fk_scan_comparisons_current_build_id",
+            ondelete="SET NULL",
+            use_alter=True,
         ),
         sa.ForeignKeyConstraint(["target_scan_id"], ["scans.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(

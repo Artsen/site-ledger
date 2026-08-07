@@ -34,7 +34,13 @@ class ScanComparison(Base):
         ForeignKey("scans.id", ondelete="CASCADE"), index=True
     )
     current_build_id: Mapped[int | None] = mapped_column(
-        ForeignKey("scan_comparison_builds.id", ondelete="SET NULL"), unique=True
+        ForeignKey(
+            "scan_comparison_builds.id",
+            name="fk_scan_comparisons_current_build_id",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        unique=True,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
