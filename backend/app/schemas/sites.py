@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -19,6 +20,17 @@ def normalize_locale(value: str | None) -> str | None:
     return f"{language.lower()}-{region.upper()}"
 
 
+def normalize_timezone(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    value = value.strip()
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError("Time zone must be a valid IANA identifier.") from exc
+    return value
+
+
 class WebsitePropertyBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     base_url: str = Field(min_length=1, max_length=2048)
@@ -27,6 +39,7 @@ class WebsitePropertyBase(BaseModel):
     locale: str | None = Field(default=None, max_length=32)
     platform_key: str = "Other"
     ownership_key: str = "Unknown"
+    display_timezone: str | None = Field(default=None, max_length=255)
     scope_config: ScopeConfigPayload = Field(default_factory=ScopeConfigPayload)
     is_active: bool = True
 
@@ -50,6 +63,11 @@ class WebsitePropertyBase(BaseModel):
     def validate_locale(cls, value: str | None) -> str | None:
         return normalize_locale(value)
 
+    @field_validator("display_timezone")
+    @classmethod
+    def validate_display_timezone(cls, value: str | None) -> str | None:
+        return normalize_timezone(value)
+
 
 class WebsitePropertyCreate(WebsitePropertyBase):
     pass
@@ -63,6 +81,7 @@ class WebsitePropertyUpdate(BaseModel):
     locale: str | None = Field(default=None, max_length=32)
     platform_key: str | None = None
     ownership_key: str | None = None
+    display_timezone: str | None = Field(default=None, max_length=255)
     scope_config: ScopeConfigPayload | None = None
     is_active: bool | None = None
 
@@ -92,12 +111,18 @@ class WebsitePropertyUpdate(BaseModel):
     def validate_locale(cls, value: str | None) -> str | None:
         return normalize_locale(value)
 
+    @field_validator("display_timezone")
+    @classmethod
+    def validate_display_timezone(cls, value: str | None) -> str | None:
+        return normalize_timezone(value)
+
 
 class ScanSummary(BaseModel):
     id: int
     website_property_id: int | None = None
     website_property_name: str | None = None
     website_property_base_url: str | None = None
+    website_property_display_timezone: str | None = None
     starting_url: str
     status: str
     scope_config: dict[str, Any]
@@ -123,6 +148,7 @@ class WebsitePropertyRead(BaseModel):
     locale: str | None
     platform_key: str
     ownership_key: str
+    display_timezone: str | None
     scope_config: dict[str, Any]
     is_active: bool
     created_at: datetime
@@ -146,6 +172,7 @@ class WebsitePropertyListItem(BaseModel):
     locale: str | None
     platform_key: str
     ownership_key: str
+    display_timezone: str | None
     scope_config: dict[str, Any]
     is_active: bool
     created_at: datetime

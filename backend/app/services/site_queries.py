@@ -70,11 +70,7 @@ def list_sites(
     order_col = sort_map[sort]
     order = order_col.desc() if direction == "desc" else order_col.asc()
     id_order = WebsiteProperty.id.desc() if direction == "desc" else WebsiteProperty.id.asc()
-    rows = db.execute(
-        query.order_by(order, id_order)
-        .limit(limit)
-        .offset(offset)
-    ).all()
+    rows = db.execute(query.order_by(order, id_order).limit(limit).offset(offset)).all()
     return WebsitePropertyList(
         items=[
             WebsitePropertyListItem(
@@ -87,6 +83,7 @@ def list_sites(
                 locale=site.locale,
                 platform_key=site.platform_key,
                 ownership_key=site.ownership_key,
+                display_timezone=site.display_timezone,
                 scope_config=site.scope_config,
                 is_active=site.is_active,
                 created_at=site.created_at,
@@ -140,6 +137,7 @@ def get_site_detail(db: Session, site_id: int) -> WebsitePropertyRead | None:
         locale=site.locale,
         platform_key=site.platform_key,
         ownership_key=site.ownership_key,
+        display_timezone=site.display_timezone,
         scope_config=site.scope_config,
         is_active=site.is_active,
         created_at=site.created_at,
@@ -233,6 +231,7 @@ def _scan_summary(scan: Scan) -> ScanSummary:
         website_property_id=scan.website_property_id,
         website_property_name=scan.website_property_name,
         website_property_base_url=scan.website_property_base_url,
+        website_property_display_timezone=scan.website_property_display_timezone,
         starting_url=scan.starting_url,
         status=scan.status,
         scope_config=scan.scope_config,
