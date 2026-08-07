@@ -22,6 +22,8 @@ observations from separate scans without erasing the evidence captured by each s
 - Preserves persistent Pages and scan-specific observation history.
 - Inventories observed and HTML-referenced non-HTML Resources without storing Resource bodies.
 - Provides Site-scoped Page workspaces with categories, owner labels, workflow status, and notes.
+- Applies deterministic automatic Page Category Rules with manual provenance and exclusions.
+- Displays Site-scoped timestamps in an optional IANA timezone without changing stored evidence.
 - Classifies individual link occurrences by source-DOM role with explicit rule provenance.
 - Stores exact HTML responses as compressed, content-addressed evidence.
 - Records page metadata, redirect chains, errors, and inbound/outgoing link provenance.
@@ -55,6 +57,8 @@ See [Resource Inventory](docs/resource-inventory.md) for classification, provena
 boundaries.
 See [Scan projections](docs/scan-projections.md) for terminal-result indexing, fallback, and rebuild
 behavior.
+See [Page Category Rules](docs/page-category-rules.md) and
+[Site display timezones](docs/site-timezones.md) for mutable Site organization and presentation.
 
 ## Architecture Overview
 
@@ -119,6 +123,7 @@ python -m app.worker
 
 Historical terminal Scans can prepare optimized results with
 `python -m app.scan_projections build-missing --limit 25` from `backend`.
+Category Rule performance can be measured with `python -m app.category_rule_benchmark`.
 
 Run the frontend in a third terminal:
 

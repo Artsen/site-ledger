@@ -51,6 +51,8 @@ Implemented capabilities include:
 - URL Inventory and scan-seed provenance.
 - Persistent Pages and Page observation history.
 - Site-scoped Page workspaces, categories, owner labels, workflow status, and plain-text notes.
+- Deterministic Page Category Rules, assignment support provenance, and automatic exclusions.
+- Optional IANA Site display timezone with UTC evidence semantics.
 - Deterministic occurrence-specific link roles and classification provenance.
 - Conditional HTTP revalidation and parsed-result reuse.
 - Stored HTML evidence and parsed metadata.
@@ -95,6 +97,8 @@ behavior. Keep storage behind the existing content-store abstraction.
   metadata. services.projection_queries owns projection-backed Page, Resource, and graph reads.
 - services.page_queries owns persistent Page catalogs and observation history.
 - services.site_pages, services.page_categories, and services.notes own Site-scoped Page workflow.
+- services.category_rules and services.category_rule_evaluator own automatic Category provenance,
+  preview, reconciliation, and evaluation history.
 - crawler.link_roles owns pure deterministic link-role classification.
 - services.cache_policy and services.parse_artifacts own conservative reuse.
 - services.graph_config owns graph capabilities and limits.
@@ -117,6 +121,7 @@ Do not rename these models or their tables for branding:
 - HtmlParseArtifact
 - Scan
 - BackgroundJob
+- PageCategoryRule
 - ScanProjectionBuild
 - ScanProjectionState
 - UrlSource

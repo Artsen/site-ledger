@@ -140,7 +140,10 @@ error state.
 
 services.page_queries provides Site-scoped Page catalogs based on SitePage and left-joined
 observation history. services.site_pages, services.page_categories, and services.notes own manual
-organization and exactly-one-target notes. An explicit
+organization and exactly-one-target notes. `services.category_rules` owns support-aware automatic
+Category reconciliation; `services.category_rule_evaluator` is the shared deterministic matching
+implementation. Site display timezone is presentation configuration and UTC instants remain
+canonical. An explicit
 all-sites observation mode can inspect the same normalized Page identity outside the selected Site.
 
 Parse artifacts are identified by content blob, parser version, parser configuration, and final URL
