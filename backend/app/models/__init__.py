@@ -6,6 +6,14 @@ from app.models.category_rules import (
     PageCategoryRuleRevision,
     PageCategoryRuleRun,
 )
+from app.models.comparisons import (
+    ScanComparison,
+    ScanComparisonBuild,
+    ScanComparisonLinkResult,
+    ScanComparisonPageResult,
+    ScanComparisonResourceResult,
+    ScanComparisonSummary,
+)
 from app.models.projections import (
     ScanLinkProjection,
     ScanPageProjection,
@@ -73,6 +81,12 @@ __all__ = [
     "ResourceReferenceOccurrence",
     "ResourceSnapshot",
     "Scan",
+    "ScanComparison",
+    "ScanComparisonBuild",
+    "ScanComparisonLinkResult",
+    "ScanComparisonPageResult",
+    "ScanComparisonResourceResult",
+    "ScanComparisonSummary",
     "ScanLinkProjection",
     "ScanPageProjection",
     "ScanProjectionBuild",
