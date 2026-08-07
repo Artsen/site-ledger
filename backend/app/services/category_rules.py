@@ -60,7 +60,17 @@ def list_rules(
     search: str | None = None,
     category_id: int | None = None,
     active_state: Literal["active", "disabled", "all"] = "all",
-    sort: Literal["name", "updated_at", "last_evaluated_at", "match_count"] = "updated_at",
+    sort: Literal[
+        "active",
+        "name",
+        "category",
+        "mode",
+        "condition_count",
+        "match_count",
+        "excluded_count",
+        "updated_at",
+        "last_evaluated_at",
+    ] = "updated_at",
     direction: Literal["asc", "desc"] = "desc",
     limit: int = 50,
     offset: int = 0,
@@ -79,11 +89,22 @@ def list_rules(
     if active_state != "all":
         query = query.where(PageCategoryRule.is_active.is_(active_state == "active"))
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    condition_count = (
+        select(func.count(PageCategoryRuleCondition.id))
+        .where(PageCategoryRuleCondition.rule_id == PageCategoryRule.id)
+        .correlate(PageCategoryRule)
+        .scalar_subquery()
+    )
     sort_column = {
+        "active": PageCategoryRule.is_active,
         "name": PageCategoryRule.name,
+        "category": PageCategory.name,
+        "mode": PageCategoryRule.match_mode,
+        "condition_count": condition_count,
         "updated_at": PageCategoryRule.updated_at,
         "last_evaluated_at": PageCategoryRule.last_evaluated_at,
         "match_count": PageCategoryRule.current_match_count,
+        "excluded_count": PageCategoryRule.current_excluded_count,
     }[sort]
     order = sort_column.desc() if direction == "desc" else sort_column.asc()
     ids = [
@@ -616,7 +637,20 @@ def list_runs(
     trigger: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
-    sort: Literal["created_at", "started_at", "finished_at", "status"] = "created_at",
+    sort: Literal[
+        "trigger",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "status",
+        "page_count",
+        "rule_count",
+        "match_count",
+        "supports_delta",
+        "assignments_delta",
+        "excluded_count",
+        "evaluator",
+    ] = "created_at",
     direction: Literal["asc", "desc"] = "desc",
     limit: int = 50,
     offset: int = 0,
@@ -634,10 +668,20 @@ def list_runs(
         query = query.where(PageCategoryRuleRun.created_at <= date_to)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     sort_column = {
+        "trigger": PageCategoryRuleRun.trigger_type,
         "created_at": PageCategoryRuleRun.created_at,
         "started_at": PageCategoryRuleRun.started_at,
         "finished_at": PageCategoryRuleRun.finished_at,
         "status": PageCategoryRuleRun.status,
+        "page_count": PageCategoryRuleRun.page_count,
+        "rule_count": PageCategoryRuleRun.rule_count,
+        "match_count": PageCategoryRuleRun.match_count,
+        "supports_delta": PageCategoryRuleRun.rule_supports_added
+        - PageCategoryRuleRun.rule_supports_removed,
+        "assignments_delta": PageCategoryRuleRun.effective_assignments_added
+        - PageCategoryRuleRun.effective_assignments_removed,
+        "excluded_count": PageCategoryRuleRun.exclusions_suppressing_matches,
+        "evaluator": PageCategoryRuleRun.evaluator_version,
     }[sort]
     order = sort_column.desc() if direction == "desc" else sort_column.asc()
     id_order = (

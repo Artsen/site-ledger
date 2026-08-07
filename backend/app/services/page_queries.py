@@ -44,7 +44,14 @@ def list_site_pages(
     has_notes: bool | None = None,
     min_observations: int | None = None,
     sort: Literal[
-        "url", "observations", "first_observed", "latest_observed", "owner", "workflow"
+        "url",
+        "observations",
+        "first_observed",
+        "latest_observed",
+        "owner",
+        "workflow",
+        "categories",
+        "notes",
     ] = "url",
     direction: Literal["asc", "desc"] = "asc",
     limit: int = 50,
@@ -67,6 +74,18 @@ def list_site_pages(
         min_observations=min_observations,
     )
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    category_count = (
+        select(func.count(PageCategoryAssignment.id))
+        .where(PageCategoryAssignment.site_page_id == SitePage.id)
+        .correlate(SitePage)
+        .scalar_subquery()
+    )
+    note_count = (
+        select(func.count(Note.id))
+        .where(Note.site_page_id == SitePage.id)
+        .correlate(SitePage)
+        .scalar_subquery()
+    )
     sort_map: dict[str, Any] = {
         "url": WebResource.normalized_url,
         "observations": base.selected_columns.observation_count,
@@ -74,6 +93,8 @@ def list_site_pages(
         "latest_observed": base.selected_columns.latest_observed_at,
         "owner": SitePage.owner_label,
         "workflow": SitePage.workflow_status,
+        "categories": category_count,
+        "notes": note_count,
     }
     order = sort_map[sort].desc() if direction == "desc" else sort_map[sort].asc()
     rows = db.execute(base.order_by(order, SitePage.id).limit(limit).offset(offset)).all()

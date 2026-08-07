@@ -34,6 +34,8 @@ ResourceSort = Literal[
     "declared_size",
     "occurrence_count",
     "source_page_count",
+    "observed",
+    "in_scope_count",
     "first_discovered",
     "latest_discovered",
 ]
@@ -639,6 +641,8 @@ def _execute_inventory(
         "declared_size": query.selected_columns.declared_size,
         "occurrence_count": query.selected_columns.occurrence_count,
         "source_page_count": query.selected_columns.source_page_count,
+        "observed": query.selected_columns.observed_count,
+        "in_scope_count": query.selected_columns.in_scope_count,
         "first_discovered": query.selected_columns.first_discovered,
         "latest_discovered": query.selected_columns.latest_discovered,
     }

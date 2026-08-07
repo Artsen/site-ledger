@@ -139,7 +139,14 @@ def list_scan_history(
     status: str | None,
     website_property_id: int | None = None,
     sort: Literal[
-        "created_at", "started_at", "finished_at", "status", "starting_url"
+        "created_at",
+        "started_at",
+        "finished_at",
+        "status",
+        "starting_url",
+        "duration",
+        "discovered_count",
+        "stop_reason",
     ] = "created_at",
     direction: Literal["asc", "desc"] = "desc",
     limit: int = 50,
@@ -159,6 +166,10 @@ def list_scan_history(
         "finished_at": Scan.finished_at,
         "status": Scan.status,
         "starting_url": Scan.starting_url,
+        "duration": func.julianday(func.coalesce(Scan.finished_at, Scan.started_at))
+        - func.julianday(Scan.started_at),
+        "discovered_count": Scan.discovered_count,
+        "stop_reason": Scan.stop_reason,
     }
     order_col = sort_map[sort]
     order = order_col.desc() if direction == "desc" else order_col.asc()
@@ -178,7 +189,17 @@ def list_scan_pages_routed(
     min_depth: int | None,
     max_depth: int | None,
     error_state: Literal["any", "with_errors", "without_errors"],
-    sort: Literal["requested_url", "status", "title", "depth", "duration", "rendered_state"],
+    sort: Literal[
+        "requested_url",
+        "status",
+        "title",
+        "depth",
+        "content_type",
+        "duration",
+        "inbound",
+        "rendered_state",
+        "error",
+    ],
     direction: Literal["asc", "desc"],
     limit: int,
     offset: int,
@@ -253,7 +274,17 @@ def list_scan_pages_dynamic(
     min_depth: int | None,
     max_depth: int | None,
     error_state: Literal["any", "with_errors", "without_errors"],
-    sort: Literal["requested_url", "status", "title", "depth", "duration", "rendered_state"],
+    sort: Literal[
+        "requested_url",
+        "status",
+        "title",
+        "depth",
+        "content_type",
+        "duration",
+        "inbound",
+        "rendered_state",
+        "error",
+    ],
     direction: Literal["asc", "desc"],
     limit: int,
     offset: int,
@@ -324,8 +355,11 @@ def list_scan_pages_dynamic(
         "status": ResourceSnapshot.http_status,
         "title": ResourceSnapshot.page_title,
         "depth": ResourceSnapshot.crawl_depth,
+        "content_type": ResourceSnapshot.content_type,
         "duration": ResourceSnapshot.response_time_ms,
+        "inbound": func.coalesce(inbound.c.inbound_occurrence_count, 0),
         "rendered_state": func.coalesce(RenderedObservation.capture_state, "not_requested"),
+        "error": ResourceSnapshot.error_type,
     }
     order_col = sort_map[sort]
     order = order_col.desc() if direction == "desc" else order_col.asc()
@@ -373,7 +407,17 @@ def list_snapshot_inbound_links(
     source_status: int | None,
     rel: str | None,
     link_role: str | None = None,
-    sort: Literal["source_url", "anchor_text", "scope_decision", "source_status"] = "source_url",
+    sort: Literal[
+        "source_url",
+        "source_status",
+        "source_depth",
+        "anchor_text",
+        "link_role",
+        "raw_href",
+        "rel",
+        "scope_decision",
+        "discovered_at",
+    ] = "source_url",
     direction: Literal["asc", "desc"] = "asc",
     limit: int = 50,
     offset: int = 0,
@@ -405,6 +449,11 @@ def list_snapshot_inbound_links(
         "anchor_text": ResourceOccurrence.anchor_text,
         "scope_decision": ResourceOccurrence.scope_decision,
         "source_status": source_snapshot.http_status,
+        "source_depth": source_snapshot.crawl_depth,
+        "link_role": ResourceOccurrence.link_role,
+        "raw_href": ResourceOccurrence.raw_href,
+        "rel": ResourceOccurrence.rel,
+        "discovered_at": ResourceOccurrence.discovered_at,
     }
     rows = db.execute(
         base.order_by(

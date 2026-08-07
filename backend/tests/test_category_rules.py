@@ -29,6 +29,8 @@ from app.services.category_rule_evaluator import compile_conditions, resource_ma
 from app.services.category_rules import (
     category_provenance,
     create_rule,
+    list_rules,
+    list_runs,
     preview_rule,
     reconcile_site,
     remove_automatic_exclusion,
@@ -264,6 +266,51 @@ def test_expired_rule_job_marks_run_interrupted(db_session: Session) -> None:
     assert recover_expired_jobs(db_session) == 1
     assert run.status == "interrupted"
     assert run.error_type == "lease_expired"
+
+
+def test_rule_and_history_tables_support_every_displayed_sort(db_session: Session) -> None:
+    site, _ = _site_with_pages(db_session, ["/docs/a"])
+    category = create_category(db_session, site.id, PageCategoryCreate(name="Docs"))
+    assert category is not None
+    create_rule(
+        db_session,
+        site.id,
+        CategoryRuleCreate(
+            name="Docs",
+            category_id=category.id,
+            conditions=[
+                CategoryRuleConditionPayload(target="path", operator="starts_with", value="/docs/")
+            ],
+        ),
+    )
+    rule_sorts = (
+        "active",
+        "name",
+        "category",
+        "mode",
+        "condition_count",
+        "match_count",
+        "excluded_count",
+        "last_evaluated_at",
+    )
+    history_sorts = (
+        "trigger",
+        "status",
+        "started_at",
+        "page_count",
+        "rule_count",
+        "match_count",
+        "supports_delta",
+        "assignments_delta",
+        "excluded_count",
+        "evaluator",
+    )
+    for sort in rule_sorts:
+        result = list_rules(db_session, site.id, sort=sort, direction="asc")  # type: ignore[arg-type]
+        assert result is not None and result.total == 1
+    for sort in history_sorts:
+        result = list_runs(db_session, site.id, sort=sort, direction="desc")  # type: ignore[arg-type]
+        assert result is not None and result.total == 1
 
 
 def _site_with_pages(db: Session, paths: list[str]) -> tuple[WebsiteProperty, list[SitePage]]:

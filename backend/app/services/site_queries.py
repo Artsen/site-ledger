@@ -21,7 +21,16 @@ def list_sites(
     platform_key: str | None,
     ownership_key: str | None,
     active_state: Literal["active", "inactive", "all"],
-    sort: Literal["name", "base_url", "created_at", "updated_at", "latest_scan_at"],
+    sort: Literal[
+        "name",
+        "base_url",
+        "classification",
+        "state",
+        "created_at",
+        "updated_at",
+        "latest_scan_at",
+        "scan_count",
+    ],
     direction: Literal["asc", "desc"],
     limit: int,
     offset: int,
@@ -63,9 +72,12 @@ def list_sites(
     sort_map = {
         "name": WebsiteProperty.name,
         "base_url": WebsiteProperty.base_url,
+        "classification": WebsiteProperty.group_key,
+        "state": WebsiteProperty.is_active,
         "created_at": WebsiteProperty.created_at,
         "updated_at": WebsiteProperty.updated_at,
         "latest_scan_at": latest.c.created_at,
+        "scan_count": func.coalesce(stats.c.scan_count, 0),
     }
     order_col = sort_map[sort]
     order = order_col.desc() if direction == "desc" else order_col.asc()
