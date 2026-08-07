@@ -24,6 +24,7 @@ from app.models import (
     WebResource,
 )
 from app.schemas.scans import ScanDeletePreview, ScanDeleteResult
+from app.services.scan_projections import delete_scan_projection_data
 from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
 
@@ -159,6 +160,7 @@ def delete_scan(
     rendered_ids = select(RenderedObservation.id).where(
         RenderedObservation.snapshot_id.in_(snapshot_ids)
     )
+    delete_scan_projection_data(db, scan.id)
     db.execute(
         delete(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id.in_(snapshot_ids))
     )

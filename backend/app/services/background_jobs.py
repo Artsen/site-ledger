@@ -24,6 +24,7 @@ from app.services.job_types import (
     JOB_STATUS_QUEUED,
     JOB_STATUS_RUNNING,
     JOB_TYPE_SCAN,
+    JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
     TERMINAL_JOB_STATUSES,
     ensure_transition,
@@ -93,6 +94,24 @@ def enqueue_source_refresh_job(
         website_property_id=source.website_property_id if source else None,
         priority=priority,
         payload=payload_json,
+    )
+
+
+def enqueue_scan_projection_job(
+    db: Session,
+    build_id: int,
+    scan: Scan,
+    *,
+    priority: int = 110,
+) -> BackgroundJob:
+    return _enqueue_job(
+        db,
+        job_type=JOB_TYPE_SCAN_PROJECTION_BUILD,
+        dedupe_key=f"scan-projection-build:{build_id}",
+        scan_id=scan.id,
+        website_property_id=scan.website_property_id,
+        priority=priority,
+        payload={"scan_id": scan.id, "projection_build_id": build_id},
     )
 
 
@@ -481,7 +500,23 @@ def recover_expired_jobs(
         job.finished_at = now
         job.error_type = "lease_expired"
         job.error_message = "Worker lease expired before completion."
-        if job.scan_id:
+        if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
+            from app.services.scan_projections import mark_projection_build_terminal
+
+            mark_projection_build_terminal(
+                db,
+                int(job.payload_json.get("projection_build_id", 0)),
+                "failed",
+                "lease_expired",
+                "Worker lease expired during projection build.",
+            )
+            job = db.get(BackgroundJob, job.id) or job
+            ensure_transition(job.status, JOB_STATUS_INTERRUPTED)
+            job.status = JOB_STATUS_INTERRUPTED
+            job.finished_at = now
+            job.error_type = "lease_expired"
+            job.error_message = "Worker lease expired before completion."
+        elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan and scan.status not in TERMINAL_JOB_STATUSES:
                 scan.status = "interrupted"
@@ -506,7 +541,17 @@ def recover_expired_jobs(
 
 def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
     domain_status: str | None = None
-    if job.scan_id:
+    if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
+        from app.models import ScanProjectionBuild
+
+        build = db.get(ScanProjectionBuild, int(job.payload_json.get("projection_build_id", 0)))
+        if build is None:
+            domain_status = JOB_STATUS_FAILED
+        elif build.status == "ready":
+            domain_status = JOB_STATUS_COMPLETED
+        elif build.status in {"failed", "cancelled"}:
+            domain_status = build.status
+    elif job.scan_id:
         scan = db.get(Scan, job.scan_id)
         domain_status = scan.status if scan else JOB_STATUS_FAILED
     elif job.source_refresh_id:

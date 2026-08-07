@@ -1,6 +1,6 @@
 from typing import Literal
 
-JobType = Literal["scan", "source_refresh"]
+JobType = Literal["scan", "source_refresh", "scan_projection_build"]
 JobStatus = Literal[
     "queued",
     "running",
@@ -13,10 +13,12 @@ JobStatus = Literal[
 
 JOB_TYPE_SCAN: JobType = "scan"
 JOB_TYPE_SOURCE_REFRESH: JobType = "source_refresh"
+JOB_TYPE_SCAN_PROJECTION_BUILD: JobType = "scan_projection_build"
 
 JOB_TYPE_LABELS: dict[JobType, str] = {
     JOB_TYPE_SCAN: "Scan",
     JOB_TYPE_SOURCE_REFRESH: "Source refresh",
+    JOB_TYPE_SCAN_PROJECTION_BUILD: "Scan results index",
 }
 
 JOB_STATUS_QUEUED: JobStatus = "queued"
