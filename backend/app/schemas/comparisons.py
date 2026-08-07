@@ -211,6 +211,20 @@ class ComparisonLinkList(BaseModel):
 class ScanComparisonOverview(BaseModel):
     comparison: ScanComparisonRead
     summary: dict[str, Any] | None
+    active_job: "ScanComparisonJobProgress | None" = None
+
+
+class ScanComparisonJobProgress(BaseModel):
+    id: int
+    status: str
+    current_operation: str | None
+    progress_current: int | None
+    progress_total: int | None
+    progress_unit: str | None
+    started_at: datetime | None
+    heartbeat_at: datetime | None
+
+    model_config = {"from_attributes": True}
 
 
 class OccurrenceDiffRead(BaseModel):

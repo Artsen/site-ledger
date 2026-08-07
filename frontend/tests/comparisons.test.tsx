@@ -107,6 +107,18 @@ describe("Scan comparison workspace", () => {
     expect(screen.getByRole("tab", { name: /Pages/ })).toBeInTheDocument();
   });
 
+  it("shows live comparison job progress", async () => {
+    api.listComparisons.mockResolvedValue({ items: [{ ...comparison, active_build: { ...build, id: 10, status: "building" } }], total: 1, limit: 100, offset: 0 });
+    api.getComparisonStatus.mockResolvedValue({
+      comparison: { ...comparison, active_build: { ...build, id: 10, status: "building" } },
+      summary: null,
+      active_job: { id: 12, status: "running", current_operation: "comparing_pages", progress_current: 50, progress_total: 200, progress_unit: "pages", started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString() },
+    });
+    renderPanel("/sites/1?tab=comparisons&comparison_id=7");
+    expect(await screen.findByText(/50 of 200 pages \(25%\)/)).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Comparison build progress" })).toHaveAttribute("aria-valuenow", "25");
+  });
+
   it("uses shared sortable headings and neutral absence wording", async () => {
     api.listComparisons.mockResolvedValue({ items: [comparison], total: 1, limit: 100, offset: 0 });
     renderPanel("/sites/1?tab=comparisons&comparison_id=7&comparison_tab=pages");

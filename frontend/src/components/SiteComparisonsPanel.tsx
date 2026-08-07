@@ -15,14 +15,14 @@ import {
   listSiteScans,
   rebuildComparison,
 } from "../api/client";
-import type { ComparisonLink, ComparisonPage, ComparisonResource, ComparisonScan, ScanComparisonBuild } from "../types/comparisons";
+import type { ComparisonLink, ComparisonPage, ComparisonResource, ComparisonScan, ScanComparisonBuild, ScanComparisonJobProgress } from "../types/comparisons";
 import type { Site } from "../types/scans";
 import {
   comparisonIsBuilding,
   comparisonStatusRefetchInterval,
   immutableComparisonQueryOptions,
 } from "../utils/comparisonQueryOptions";
-import { formatDate, formatStatus } from "../utils/format";
+import { formatDate, formatDuration, formatStatus } from "../utils/format";
 import { useUrlPagination } from "../utils/useUrlPagination";
 import { Button } from "./ui/Button";
 import { EmptyState } from "./ui/EmptyState";
@@ -137,6 +137,7 @@ function ComparisonWorkspace({ site, comparisonId }: { site: Site; comparisonId:
           ...ready.data.comparison,
           active_build: status.data?.comparison.active_build ?? null,
         },
+        active_job: status.data?.active_job ?? null,
       }
     : status.data;
   const rebuild = useMutation({
@@ -173,7 +174,7 @@ function ComparisonWorkspace({ site, comparisonId }: { site: Site; comparisonId:
           <Button type="button" variant="danger" loading={remove.isPending} disabled={building} onClick={() => { if (window.confirm("Delete this derived comparison? Scan evidence will remain.")) remove.mutate(); }}>Delete</Button>
         </div>
       </header>
-      {active ? <BuildState build={active} /> : null}
+      {active ? <BuildState build={active} job={data.active_job ?? null} /> : null}
       {rebuild.error || cancel.error || remove.error ? <ErrorBanner error={rebuild.error ?? cancel.error ?? remove.error} title="Comparison action failed" /> : null}
       {data.comparison.current_build ? (
         <>
@@ -188,9 +189,20 @@ function ComparisonWorkspace({ site, comparisonId }: { site: Site; comparisonId:
   );
 }
 
-function BuildState({ build }: { build: ScanComparisonBuild }) {
-  const total = build.validation_json ? build.page_result_count + build.resource_result_count + build.link_result_count : 0;
-  return <div className="border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm"><strong>{build.status === "waiting_for_projections" ? "Preparing Scan results" : "Building comparison"}</strong><span className="ml-2 text-stone-600">{formatStatus(build.status)}{total ? ` - ${total.toLocaleString()} results staged` : ""}</span>{build.error_message ? <p className="mt-1 text-red-700">{build.error_message}</p> : null}</div>;
+function BuildState({ build, job }: { build: ScanComparisonBuild; job: ScanComparisonJobProgress | null }) {
+  const current = job?.progress_current;
+  const total = job?.progress_total;
+  const percent = current != null && total ? Math.min(100, Math.round((current / total) * 100)) : null;
+  const operation = job?.current_operation ? formatStatus(job.current_operation) : formatStatus(build.status);
+  return <div className="border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm">
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+      <strong>{build.status === "waiting_for_projections" ? "Preparing Scan results" : "Building comparison"}</strong>
+      {job?.started_at ? <span className="text-xs tabular-nums text-stone-600">Elapsed {formatDuration(job.started_at)}</span> : null}
+    </div>
+    <p className="mt-1 text-stone-700">{operation}{current != null && total != null ? ` - ${current.toLocaleString()} of ${total.toLocaleString()} ${job?.progress_unit ?? "items"}${percent != null ? ` (${percent}%)` : ""}` : ""}</p>
+    {percent != null ? <div className="mt-2 h-1.5 overflow-hidden bg-amber-200" role="progressbar" aria-label="Comparison build progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><div className="h-full bg-amber-600 transition-[width]" style={{ width: `${percent}%` }} /></div> : null}
+    {build.error_message ? <p className="mt-1 text-red-700">{build.error_message}</p> : null}
+  </div>;
 }
 
 function ComparisonOverview({ data, site }: { data: import("../types/comparisons").ScanComparisonOverview; site: Site }) {

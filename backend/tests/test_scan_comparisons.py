@@ -1,5 +1,6 @@
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session
 
 from app.models import (
     BackgroundJob,
@@ -107,6 +108,31 @@ def test_build_compares_pages_resources_links_and_is_deterministic(db_session) -
     assert rebuilt.comparison_checksum_sha256 == first_checksum
     assert current_comparison_build(db_session, comparison.id).id == rebuilt.id
     assert db_session.get(ScanComparisonBuild, ready.id).status == "superseded"
+
+
+def test_build_releases_sqlite_write_lock_before_progress_callbacks(db_session) -> None:
+    site, baseline, target, _ = _fixture(db_session)
+    _prepare(db_session, baseline, target)
+    comparison = create_comparison(db_session, site.id, baseline.id, target.id)
+    build = create_comparison_build(db_session, comparison.id)
+    db_session.commit()
+    phases: list[str] = []
+
+    def update_progress(phase: str, _current: int, _total: int) -> None:
+        phases.append(phase)
+        with Session(db_session.get_bind()) as progress_db:
+            progress_db.execute(
+                update(WebsiteProperty)
+                .where(WebsiteProperty.id == site.id)
+                .values(name=site.name)
+            )
+            progress_db.commit()
+
+    ready = execute_comparison_build(db_session, build.id, progress=update_progress)
+
+    assert ready.status == "ready"
+    assert "comparing_pages" in phases
+    assert phases[-1] == "activating"
 
 
 def test_failed_or_cancelled_rebuild_preserves_ready_build(db_session, monkeypatch) -> None:

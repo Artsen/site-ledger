@@ -17,6 +17,7 @@ from app.schemas.comparisons import (
     PageChangeHistoryList,
     ScanComparisonBuildRead,
     ScanComparisonCreate,
+    ScanComparisonJobProgress,
     ScanComparisonList,
     ScanComparisonOverview,
     SourceDiffRead,
@@ -113,6 +114,8 @@ def get_comparison_status(
     result = get_comparison_overview(db, site_id, comparison_id)
     if result is None:
         raise HTTPException(404, "Comparison not found")
+    job = active_job_for_comparison(db, comparison_id)
+    result.active_job = ScanComparisonJobProgress.model_validate(job) if job else None
     return result
 
 

@@ -21,7 +21,13 @@ export type ScanComparison = {
   current_build: ScanComparisonBuild | null; active_build: ScanComparisonBuild | null;
 };
 
-export type ScanComparisonOverview = { comparison: ScanComparison; summary: { pages: Record<string, number>; resources: Record<string, number>; links: Record<string, number>; scan: Record<string, unknown> } | null };
+export type ScanComparisonJobProgress = {
+  id: number; status: string; current_operation: string | null;
+  progress_current: number | null; progress_total: number | null; progress_unit: string | null;
+  started_at: string | null; heartbeat_at: string | null;
+};
+
+export type ScanComparisonOverview = { comparison: ScanComparison; summary: { pages: Record<string, number>; resources: Record<string, number>; links: Record<string, number>; scan: Record<string, unknown> } | null; active_job?: ScanComparisonJobProgress | null };
 export type ScanComparisonList = { items: ScanComparison[]; total: number; limit: number; offset: number };
 
 export type ComparisonPage = {

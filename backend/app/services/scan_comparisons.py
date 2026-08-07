@@ -196,6 +196,7 @@ def execute_comparison_build(
         build.target_seed_fingerprint = coverage["target_seed_fingerprint"]
         build.coverage_state = coverage["coverage_state"]
         build.warnings_json = coverage["warnings"]
+        db.commit()
         _report(progress, "analyzing_coverage", 1, 1)
 
         page_rows = _page_rows(db, baseline, target, baseline_projection, target_projection)
@@ -241,6 +242,7 @@ def execute_comparison_build(
             link_rows,
         )
         db.execute(insert(ScanComparisonSummary), [summary])
+        db.commit()
         _report(progress, "calculating_summary", 1, 1)
         validation = _validate_build(db, build.id, page_rows, resource_rows, link_rows)
         checksum = _comparison_checksum(coverage, page_rows, resource_rows, link_rows, summary)
@@ -1070,7 +1072,7 @@ def _replace_page_rows(db: Session, build_id: int, rows: list[dict[str, Any]]) -
             insert(ScanComparisonPageResult),
             [{"comparison_build_id": build_id, **row} for row in chunk],
         )
-    db.flush()
+    db.commit()
 
 
 def _insert_batches(
@@ -1086,8 +1088,8 @@ def _insert_batches(
     for number, chunk in enumerate(_chunks(rows), start=1):
         _check_cancelled(should_cancel)
         db.execute(insert(model), [{"comparison_build_id": build_id, **row} for row in chunk])
+        db.commit()
         _report(progress, phase, min(number * COMPARISON_BATCH_SIZE, total), total)
-    db.flush()
 
 
 def _clear_staged_rows(db: Session, build_id: int) -> None:
