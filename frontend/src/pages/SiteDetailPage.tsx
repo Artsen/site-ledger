@@ -17,6 +17,7 @@ import {
   createPageCategory,
   createSiteNote,
   deletePageCategory,
+  getPageCategoryDeletionPreview,
   deleteSite,
   deleteSource,
   discoverRobots,
@@ -34,6 +35,7 @@ import {
   updateSite,
 } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
+import { CategoryRuleHistoryPanel, CategoryRulesPanel } from "../components/CategoryRulesPanel";
 import { ResourceInventoryView } from "../components/ResourceInventoryView";
 import {
   PageCategoryBadges,
@@ -595,6 +597,15 @@ function SitePagesTable({
 }
 
 function CategoriesTab({ site }: { site: Site }) {
+  const [view, setView] = useState<"categories" | "rules" | "history">("categories");
+  const categories = useQuery({
+    queryKey: ["page-categories", String(site.id)],
+    queryFn: () => listPageCategories(String(site.id), "?active_state=all&limit=200"),
+  });
+  return <div className="space-y-4"><div className="flex gap-1 border-b border-stone-200" role="tablist">{(["categories", "rules", "history"] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={view === item} onClick={() => setView(item)} className={`border-b-2 px-3 py-2 text-sm font-medium ${view === item ? "border-stone-900 text-stone-900" : "border-transparent text-stone-500"}`}>{item === "history" ? "Evaluation History" : formatStatus(item)}</button>)}</div>{view === "categories" ? <CategoryListPanel site={site} /> : null}{view === "rules" ? categories.isLoading ? <LoadingBlock label="Loading categories..." /> : categories.error ? <ErrorBanner error={categories.error} title="Could not load categories" /> : <CategoryRulesPanel siteId={String(site.id)} categories={categories.data?.items ?? []} timeZone={site.display_timezone} /> : null}{view === "history" ? <CategoryRuleHistoryPanel siteId={String(site.id)} timeZone={site.display_timezone} /> : null}</div>;
+}
+
+function CategoryListPanel({ site }: { site: Site }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [color, setColor] = useState("stone");
@@ -726,7 +737,14 @@ function CategoryRow({
     onSuccess: refresh,
   });
   const remove = useMutation({
-    mutationFn: () => deletePageCategory(siteId, category.id),
+    mutationFn: async () => {
+      const preview = await getPageCategoryDeletionPreview(siteId, category.id);
+      const confirmed = window.confirm(
+        `Delete ${category.name}? This removes ${preview.assignment_count} effective assignments, ${preview.manual_support_count} manual supports, ${preview.rule_support_count} Rule supports, ${preview.rule_count} Rules, and ${preview.exclusion_count} exclusions. Pages, Scans, notes, and projections are retained.`,
+      );
+      if (!confirmed) throw new Error("Deletion cancelled");
+      return deletePageCategory(siteId, category.id);
+    },
     onSuccess: refresh,
   });
   return (
@@ -756,7 +774,7 @@ function CategoryRow({
         </label>
         <div className="flex flex-wrap items-end gap-2">
           <span className="self-center text-sm">
-            {plural(category.assignment_count, "assignment")}
+            {plural(category.assignment_count, "assignment")} ({category.manual_assignment_count} manual, {category.automatic_assignment_count} automatic, {plural(category.rule_count, "Rule")}, {plural(category.exclusion_count, "exclusion")})
           </span>
           <Button type="submit" loading={save.isPending}>
             Save
@@ -767,20 +785,13 @@ function CategoryRow({
           <Button
             type="button"
             variant="danger"
-            onClick={() => {
-              if (
-                window.confirm(
-                  `Delete ${category.name}? This removes ${category.assignment_count} assignments but does not delete Pages or notes.`,
-                )
-              )
-                remove.mutate();
-            }}
+            onClick={() => remove.mutate()}
           >
             Delete
           </Button>
         </div>
       </form>
-      {save.error || archive.error || remove.error ? (
+      {save.error || archive.error || (remove.error && remove.error.message !== "Deletion cancelled") ? (
         <ErrorBanner
           error={save.error ?? archive.error ?? remove.error}
           title="Category action failed"
@@ -825,8 +836,8 @@ function OverviewTab({ site }: { site: Site }) {
                 label: "Ownership",
                 value: classificationLabel(site.ownership_key),
               },
-              { label: "Created", value: formatDate(site.created_at) },
-              { label: "Updated", value: formatDate(site.updated_at) },
+              { label: "Created", value: formatDate(site.created_at, { timeZone: site.display_timezone, showTimeZone: true }) },
+              { label: "Updated", value: formatDate(site.updated_at, { timeZone: site.display_timezone, showTimeZone: true }) },
             ]}
           />
         </section>
@@ -878,7 +889,7 @@ function ScansTab({
               >
                 <StatusBadge status={scan.status} />
                 <span className="mt-1 block text-xs text-stone-500">
-                  {formatDate(scan.created_at)} - {scan.discovered_count}{" "}
+                  {formatDate(scan.created_at, { timeZone: site.display_timezone, showTimeZone: true })} - {scan.discovered_count}{" "}
                   discovered - {scan.failed_count} failed
                 </span>
               </Link>

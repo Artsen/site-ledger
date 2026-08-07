@@ -4,12 +4,15 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import {
   createPageNote,
+  addPageCategoryExclusion,
+  getPageCategoryProvenance,
   getInboundLinks,
   getOutgoingLinks,
   getSitePage,
   listPageCategories,
   listPageNotes,
   listPageObservations,
+  removePageCategoryExclusion,
   updatePageMetadata,
 } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
@@ -155,6 +158,20 @@ export function PersistentPageDetailPage() {
 
 function OverviewTab({ detail }: { detail: PersistentPageDetail }) {
   const [editing, setEditing] = useState(false);
+  const queryClient = useQueryClient();
+  const provenance = useQuery({
+    queryKey: ["page-category-provenance", String(detail.site_id), String(detail.page.resource_id)],
+    queryFn: () => getPageCategoryProvenance(String(detail.site_id), String(detail.page.resource_id)),
+  });
+  const exclusion = useMutation({
+    mutationFn: (item: { categoryId: number; excluded: boolean }) => item.excluded
+      ? removePageCategoryExclusion(String(detail.site_id), String(detail.page.resource_id), item.categoryId)
+      : addPageCategoryExclusion(String(detail.site_id), String(detail.page.resource_id), item.categoryId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["page-category-provenance", String(detail.site_id), String(detail.page.resource_id)] });
+      await queryClient.invalidateQueries({ queryKey: ["site-page", String(detail.site_id), String(detail.page.resource_id)] });
+    },
+  });
   return (
     <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
       <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
@@ -241,6 +258,12 @@ function OverviewTab({ detail }: { detail: PersistentPageDetail }) {
                   <PageCategoryBadges categories={detail.page.categories} />
                 ),
               },
+              {
+                label: "Category provenance",
+                value: provenance.isLoading ? "Loading..." : provenance.data?.items.length ? (
+                  <div className="space-y-2">{provenance.data.items.map((item) => <div key={item.category_id} className="text-sm"><div className="font-medium">{item.category_name}</div><div className="text-xs text-stone-500">{item.effective_reason}{item.matching_rules.length ? `: ${item.matching_rules.map((rule) => rule.name).join(", ")}` : ""}</div>{item.matching_rules.length || item.automatic_exclusion ? <button type="button" className="mt-1 text-xs underline" onClick={() => exclusion.mutate({ categoryId: item.category_id, excluded: item.automatic_exclusion })}>{item.automatic_exclusion ? "Allow automatic Category" : "Exclude automatic Category"}</button> : null}</div>)}</div>
+                ) : "No Category support",
+              },
               { label: "Notes", value: String(detail.page.note_count) },
               {
                 label: "First associated with Site",
@@ -272,11 +295,16 @@ function OrganizationEditor({
     queryKey: ["page-categories", siteId],
     queryFn: () => listPageCategories(siteId, "?active_state=all&limit=200"),
   });
+  const provenance = useQuery({
+    queryKey: ["page-category-provenance", siteId, resourceId],
+    queryFn: () => getPageCategoryProvenance(siteId, resourceId),
+  });
   const [owner, setOwner] = useState(detail.page.owner_label ?? "");
   const [workflow, setWorkflow] = useState(detail.page.workflow_status);
-  const [categoryIds, setCategoryIds] = useState(
-    detail.page.categories.map((category) => category.id),
-  );
+  const [categoryIds, setCategoryIds] = useState<number[]>([]);
+  useEffect(() => {
+    if (provenance.data) setCategoryIds(provenance.data.items.filter((item) => item.manually_assigned).map((item) => item.category_id));
+  }, [provenance.data]);
   const save = useMutation({
     mutationFn: () =>
       updatePageMetadata(siteId, resourceId, {
@@ -289,6 +317,7 @@ function OrganizationEditor({
         queryKey: ["site-page", siteId, resourceId],
       });
       await queryClient.invalidateQueries({ queryKey: ["site-pages", siteId] });
+      await queryClient.invalidateQueries({ queryKey: ["page-category-provenance", siteId, resourceId] });
       close();
     },
   });
@@ -347,7 +376,7 @@ function OrganizationEditor({
                     )
                   }
                 />
-                {category.name}
+                {category.name}{provenance.data?.items.some((item) => item.category_id === category.id && item.matching_rules.length) ? " (also assigned by Rule)" : ""}
                 {!category.is_active ? " (Archived)" : ""}
               </label>
             ))}
@@ -359,7 +388,7 @@ function OrganizationEditor({
           title="Could not update organization"
         />
       ) : null}
-      <Button type="submit" loading={save.isPending}>
+      <Button type="submit" loading={save.isPending} disabled={provenance.isLoading}>
         Save organization
       </Button>
     </form>

@@ -148,7 +148,7 @@ export function ScanDetailPage() {
           <h1 className="truncate text-xl font-semibold text-stone-950">{scan.data.starting_url}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <StatusBadge status={scan.data.status} />
-            <span className="text-sm text-stone-600">Created {formatDate(scan.data.created_at)}</span>
+            <span className="text-sm text-stone-600">Created {formatDate(scan.data.created_at, { timeZone: scan.data.website_property_display_timezone, showTimeZone: true })}</span>
             {scan.isFetching ? <span className="text-xs text-stone-500" aria-live="polite">Refreshing</span> : null}
           </div>
         </div>
@@ -339,8 +339,8 @@ function Overview({
                 { label: "Current operation", value: job.current_operation ?? job.progress_unit ?? "Not reported" },
                 { label: "Worker", value: job.worker_id ?? (workerHealth?.queued_work_has_worker === false ? "Waiting for worker" : "Not claimed yet") }
               ] : []),
-              { label: "Started", value: formatDate(scan.started_at) },
-              { label: "Finished", value: formatDate(scan.finished_at) },
+              { label: "Started", value: formatDate(scan.started_at, { timeZone: scan.website_property_display_timezone, showTimeZone: true }) },
+              { label: "Finished", value: formatDate(scan.finished_at, { timeZone: scan.website_property_display_timezone, showTimeZone: true }) },
               { label: "Duration", value: formatDuration(scan.started_at, scan.finished_at ?? undefined) },
               { label: "Stop reason", value: scan.stop_reason ?? (active ? "Running" : "Not recorded") },
               { label: "HTTP error responses", value: httpErrors },

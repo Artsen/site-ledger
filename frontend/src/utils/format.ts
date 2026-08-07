@@ -21,21 +21,51 @@ export function statusTone(status: string | null | undefined): "neutral" | "succ
   return "neutral";
 }
 
-export function formatDate(value: string | null | undefined) {
+export type DateFormatOptions = {
+  timeZone?: string | null;
+  showTimeZone?: boolean;
+  locale?: string;
+};
+
+function parseInstant(value: string) {
+  const unambiguous = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+    ? `${value}Z`
+    : value;
+  return new Date(unambiguous);
+}
+
+export function formatDate(value: string | null | undefined, options: DateFormatOptions = {}) {
   if (!value) return "Not available";
-  const date = new Date(value);
+  const date = parseInstant(value);
   if (Number.isNaN(date.getTime())) return "Not available";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(options.locale, {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+    ...(options.showTimeZone ? { timeZoneName: "short" as const } : {})
+  }).format(date);
+}
+
+export function formatDateTime(value: string | null | undefined, options: DateFormatOptions = {}) {
+  return formatDate(value, options);
+}
+
+export function formatFullDate(value: string | null | undefined, options: DateFormatOptions = {}) {
+  if (!value) return "Not available";
+  const date = parseInstant(value);
+  if (Number.isNaN(date.getTime())) return "Not available";
+  return new Intl.DateTimeFormat(options.locale, {
+    year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit",
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+    ...(options.showTimeZone ? { timeZoneName: "short" as const } : {})
   }).format(date);
 }
 
 export function formatRelativeDate(value: string | null | undefined) {
   if (!value) return "No date";
-  const date = new Date(value);
+  const date = parseInstant(value);
   if (Number.isNaN(date.getTime())) return "No date";
   const seconds = Math.round((date.getTime() - Date.now()) / 1000);
   const abs = Math.abs(seconds);
