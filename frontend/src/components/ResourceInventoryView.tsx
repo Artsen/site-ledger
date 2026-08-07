@@ -3,9 +3,10 @@ import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { getScanResourceSummary, getSiteResourceSummary, listScanResources, listSiteResources } from "../api/client";
-import type { ResourceInventoryItem } from "../types/scans";
+import type { ResourceInventoryItem, ScanProjectionStatus } from "../types/scans";
 import { formatBytes, formatDate, plural } from "../utils/format";
 import { useUrlPagination } from "../utils/useUrlPagination";
+import { scanResultQueryOptions } from "../utils/scanQueryOptions";
 import { Button } from "./ui/Button";
 import { EmptyState } from "./ui/EmptyState";
 import { ErrorBanner } from "./ui/ErrorBanner";
@@ -16,18 +17,22 @@ import { inputClass } from "./ui/styles";
 
 const resourceKinds = ["image", "document", "stylesheet", "script", "font", "video", "audio", "archive", "feed", "manifest", "structured_data", "other", "unknown"];
 
-export function ResourceInventoryView({ scope, id }: { scope: "scan" | "site"; id: string }) {
+export function ResourceInventoryView({ scope, id, scanStatus, projectionStatus }: { scope: "scan" | "site"; id: string; scanStatus?: string; projectionStatus?: ScanProjectionStatus }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const pagination = useUrlPagination({ prefix: "resources" });
   const query = buildResourceQuery(searchParams, pagination.limit, pagination.offset);
+  const resultOptions = scope === "scan" ? scanResultQueryOptions(scanStatus, projectionStatus) : {};
+  const projectionKey = projectionStatus?.current_build?.id ?? projectionStatus?.projection_status ?? "dynamic";
   const resources = useQuery({
-    queryKey: [`${scope}-resources`, id, query],
+    queryKey: [`${scope}-resources`, id, projectionKey, query],
     queryFn: () => scope === "scan" ? listScanResources(id, query) : listSiteResources(id, query),
-    placeholderData: (previous) => previous
+    placeholderData: (previous) => previous,
+    ...resultOptions
   });
   const summary = useQuery({
-    queryKey: [`${scope}-resource-summary`, id],
-    queryFn: () => scope === "scan" ? getScanResourceSummary(id) : getSiteResourceSummary(id)
+    queryKey: [`${scope}-resource-summary`, id, projectionKey],
+    queryFn: () => scope === "scan" ? getScanResourceSummary(id) : getSiteResourceSummary(id),
+    ...resultOptions
   });
   useEffect(() => pagination.ensureValid(resources.data?.total), [pagination, resources.data?.total]);
   const controls = <PaginatedTableControls total={resources.data?.total ?? 0} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="Resource" isLoading={resources.isFetching && !resources.isLoading} />;
@@ -35,6 +40,7 @@ export function ResourceInventoryView({ scope, id }: { scope: "scan" | "site"; i
 
   if (resources.error || summary.error) return <ErrorBanner error={resources.error ?? summary.error} title="Could not load Resources" />;
   return <div className="space-y-4">
+    {scope === "scan" && projectionStatus?.projection_source === "dynamic" && projectionStatus.projection_status !== "not_terminal" ? <p className="text-sm text-stone-600" role="status">Preparing optimized results. Current evidence remains available.</p> : null}
     <ResourceSummary summary={summary.data} loading={summary.isLoading} />
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">

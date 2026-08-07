@@ -1,4 +1,4 @@
-import type { LinkOccurrence, Scan } from "./scans";
+import type { LinkOccurrence, ProjectionMetadata, Scan } from "./scans";
 
 export type GraphNodeKind = "page" | "discovered";
 
@@ -72,6 +72,7 @@ export type GraphResponse = {
   nodes: GraphNode[];
   edges: GraphEdge[];
   effective_filters: Record<string, string | number | boolean | null>;
+  projection?: ProjectionMetadata | null;
 };
 
 export type GraphCapabilities = {

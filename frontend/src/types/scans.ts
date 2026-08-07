@@ -42,6 +42,52 @@ export type Scan = {
   fatal_error_message: string | null;
 };
 
+export type ProjectionMetadata = {
+  projection_source: "materialized" | "dynamic";
+  projection_version: string;
+  projection_build_id: number | null;
+  projection_status: string;
+};
+
+export type ScanProjectionBuild = {
+  id: number;
+  scan_id: number;
+  projection_version: string;
+  algorithm_identity: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  failed_at: string | null;
+  error_type: string | null;
+  error_message: string | null;
+  page_count: number;
+  resource_count: number;
+  link_edge_count: number;
+  graph_node_count: number;
+  graph_edge_count: number;
+  rendered_page_count: number;
+  source_snapshot_count: number;
+  source_link_occurrence_count: number;
+  source_resource_reference_count: number;
+  build_duration_ms: number | null;
+  checksum_sha256: string | null;
+  validation_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ScanProjectionStatus = {
+  scan_id: number;
+  scan_status: string;
+  expected_version: string;
+  projection_source: "materialized" | "dynamic";
+  projection_status: string;
+  current_build: ScanProjectionBuild | null;
+  active_build: ScanProjectionBuild | null;
+  latest_build: ScanProjectionBuild | null;
+  can_build: boolean;
+  can_rebuild: boolean;
+};
+
 export type Site = {
   id: number;
   name: string;
@@ -413,8 +459,8 @@ export type ResourceInventoryItem = {
   scan_count: number;
 };
 
-export type ResourceInventoryList = { items: ResourceInventoryItem[]; total: number; limit: number; offset: number };
-export type ResourceSummary = { unique_resources: number; observed_resources: number; discovered_only_resources: number; total_occurrences: number; kind_counts: Record<string, number> };
+export type ResourceInventoryList = { items: ResourceInventoryItem[]; total: number; limit: number; offset: number; projection?: ProjectionMetadata | null };
+export type ResourceSummary = { unique_resources: number; observed_resources: number; discovered_only_resources: number; total_occurrences: number; kind_counts: Record<string, number>; projection?: ProjectionMetadata | null };
 export type ResourceDetail = { resource: ResourceInventoryItem; requested_url: string | null; response_body_state: string | null; inspected_prefix_byte_count: number };
 export type ResourceOccurrence = {
   occurrence_id: number;
@@ -449,6 +495,7 @@ export type PageList = {
   total: number;
   limit: number;
   offset: number;
+  projection?: ProjectionMetadata | null;
 };
 
 export type Snapshot = {

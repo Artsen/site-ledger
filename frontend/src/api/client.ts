@@ -1,4 +1,4 @@
-import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, StaticFetchAttempt, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
+import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanProjectionBuild, ScanProjectionStatus, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, StaticFetchAttempt, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
 import type { RenderedObservationIndexList, ResourceDetail, ResourceHistoryList, ResourceInventoryList, ResourceOccurrenceList, ResourceSummary } from "../types/scans";
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
@@ -132,6 +132,9 @@ export const getScan = (id: string) => request<Scan>(`/api/scans/${id}`);
 export const cancelScan = (id: string) => request<Scan>(`/api/scans/${id}/cancel`, { method: "POST" });
 export const getScanDeletePreview = (id: string) => request<ScanDeletePreview>(`/api/scans/${id}/delete-preview`);
 export const deleteScan = (id: string) => request<ScanDeleteResult>(`/api/scans/${id}`, { method: "DELETE" });
+export const getScanProjectionStatus = (id: string) => request<ScanProjectionStatus>(`/api/scans/${id}/projection`);
+export const buildScanProjection = (id: string) => request<ScanProjectionBuild>(`/api/scans/${id}/projection/build`, { method: "POST" });
+export const rebuildScanProjection = (id: string) => request<ScanProjectionBuild>(`/api/scans/${id}/projection/rebuild`, { method: "POST" });
 export const listPages = (scanId: string, query = "") => request<PageList>(`/api/scans/${scanId}/pages${query}`);
 export const listScanResources = (scanId: string, query = "") => request<ResourceInventoryList>(`/api/scans/${scanId}/resources${query}`);
 export const getScanResourceSummary = (scanId: string) => request<ResourceSummary>(`/api/scans/${scanId}/resources/summary`);

@@ -11,15 +11,16 @@ import { LoadingBlock } from "../../components/ui/Loading";
 import { PaginatedTableControls } from "../../components/ui/PaginatedTableControls";
 import { inputClass } from "../../components/ui/styles";
 import type { GraphCapabilities, GraphDisplaySettings, GraphEdge } from "../../types/graph";
-import type { Scan } from "../../types/scans";
+import type { Scan, ScanProjectionStatus } from "../../types/scans";
 import { formatDate, formatStatus, isTerminalStatus, plural } from "../../utils/format";
 import { finalValidOffset } from "../../utils/pagination";
+import { scanResultQueryOptions } from "../../utils/scanQueryOptions";
 import type { GraphRendererHandle } from "./GraphRendererTypes";
 import { adaptGraphData, type RendererEdge, type RendererNode } from "./graphDataAdapter";
 
 const TwoDimensionalGraphRenderer = lazy(() => import("./TwoDimensionalGraphRenderer").then((module) => ({ default: module.TwoDimensionalGraphRenderer })));
 const ThreeDimensionalGraphRenderer = lazy(() => import("./ThreeDimensionalGraphRenderer").then((module) => ({ default: module.ThreeDimensionalGraphRenderer })));
-export function ScanGraphView({ scan }: { scan: Scan }) {
+export function ScanGraphView({ scan, projectionStatus }: { scan: Scan; projectionStatus?: ScanProjectionStatus }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchText, setSearchText] = useState("");
   const [rendererError, setRendererError] = useState<Error | null>(null);
@@ -33,10 +34,12 @@ export function ScanGraphView({ scan }: { scan: Scan }) {
   const graphQuery = useMemo(() => capabilities.data ? buildGraphQuery(searchParams, capabilities.data) : "", [capabilities.data, searchParams]);
   const selectedNodeId = searchParams.get("selected_node");
   const selectedEdgeId = searchParams.get("selected_edge");
+  const projectionKey = projectionStatus?.current_build?.id ?? projectionStatus?.projection_status ?? "dynamic";
   const graph = useQuery({
-    queryKey: ["scan-graph", scan.id, graphQuery],
+    queryKey: ["scan-graph", scan.id, projectionKey, graphQuery],
     queryFn: () => getScanGraph(String(scan.id), graphQuery),
     enabled: Boolean(capabilities.data),
+    ...scanResultQueryOptions(scan.status, projectionStatus),
     refetchInterval: !isTerminalStatus(scan.status) && searchParams.get("graph_auto_refresh") === "summary" ? 5000 : false,
     placeholderData: (previous) => previous
   });
