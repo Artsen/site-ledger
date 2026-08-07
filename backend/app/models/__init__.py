@@ -1,3 +1,11 @@
+from app.models.projections import (
+    ScanLinkProjection,
+    ScanPageProjection,
+    ScanProjectionBuild,
+    ScanProjectionState,
+    ScanResourceProjection,
+    ScanSummaryProjection,
+)
 from app.models.rendered import (
     ArtifactBlob,
     RenderedArtifact,
@@ -51,6 +59,12 @@ __all__ = [
     "ResourceReferenceOccurrence",
     "ResourceSnapshot",
     "Scan",
+    "ScanLinkProjection",
+    "ScanPageProjection",
+    "ScanProjectionBuild",
+    "ScanProjectionState",
+    "ScanResourceProjection",
+    "ScanSummaryProjection",
     "ScanSeed",
     "ScanSeedOrigin",
     "SitePage",
