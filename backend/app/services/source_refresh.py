@@ -28,6 +28,7 @@ from app.parsers.compression import (
 from app.parsers.robots import parse_sitemap_directives
 from app.parsers.sitemap import SitemapParseError, parse_sitemap_xml
 from app.services.source_management import upsert_source_entry
+from app.storage.ai_document_store import LocalAiDocumentStore
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ async def execute_source_refresh(
     transport: httpx.AsyncBaseTransport | None = None,
     should_cancel: Callable[[], bool] | None = None,
     progress_callback: Callable[[SourceRefresh], None] | None = None,
+    ai_document_store: LocalAiDocumentStore | None = None,
 ) -> SourceRefresh | None:
     refresh = db.get(SourceRefresh, refresh_id)
     if refresh is None:
@@ -111,6 +113,17 @@ async def execute_source_refresh(
         elif source.source_type == "manual":
             refresh.status = "completed"
             refresh.finished_at = datetime.now(UTC)
+        elif source.source_type == "ai_document":
+            from app.services.ai_document_sources import execute_ai_document_refresh
+
+            await execute_ai_document_refresh(
+                db,
+                refresh,
+                transport=transport,
+                should_cancel=should_cancel,
+                progress_callback=progress_callback,
+                store=ai_document_store,
+            )
         else:
             raise ValueError(f"Unsupported source type: {source.source_type}")
     except SourceRefreshCancelled:

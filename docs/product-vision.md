@@ -18,6 +18,7 @@ The current application implements:
 - Saved Sites with reusable scope and open-ended group, platform, and ownership labels.
 - Scoped static HTML scans executed as durable background jobs.
 - Sitemap, robots-discovered sitemap, and manual URL Sources.
+- AI Document Sources with nested indexes, retained text evidence, and refresh history.
 - Current URL Inventory with source and scan-seed provenance.
 - Persistent Pages across saved-site scans.
 - Page observation history.
@@ -59,7 +60,7 @@ Site edits do not rewrite historical behavior.
 
 ### Source And Inventory
 
-A Source is a sitemap, robots-discovered sitemap, or manual URL source. Inventory is the current set
+A Source is a sitemap, robots-discovered sitemap, manual URL source, or AI Document Source. Inventory is the current set
 of URL candidates declared by Sources. An inventory entry is not a Page observation until a scan
 fetches it.
 

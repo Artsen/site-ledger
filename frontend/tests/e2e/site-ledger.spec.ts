@@ -321,6 +321,64 @@ test("saved-Site observations link to their exact Page workspace while ad hoc ob
   await expect(page.getByRole("link", { name: /Open Page workspace/ })).toHaveCount(0);
 });
 
+test("AI Document Sources preserve nested evidence, provenance, history, and safe deletion", async ({ page }) => {
+  test.setTimeout(90_000);
+  await mockApi(page);
+  let sourceAdded = false;
+  const aiSource = { id: 7, website_property_id: 3, site_name: "Example Site", name: "llms.txt", entry_url: "https://example.com/llms.txt", discovery_mode: "bounded_discovery", is_active: true, settings: { request_timeout_seconds: 10, max_attempts: 2, max_nesting_depth: 5, max_index_documents: 100, max_total_documents: 1000, max_references_per_document: 10000, max_individual_document_bytes: 5000000, max_total_retained_bytes: 100000000, max_total_network_bytes: 250000000, follow_external_documents: false, save_declared_documents: true }, last_refresh_status: "completed_with_errors", last_successful_refresh_at: "2026-08-06T12:00:00Z", current_entry_count: 1, latest_refresh_id: 11, latest_source_refresh_id: 20, document_count: 3, reference_count: 5, warning_count: 1, retained_bytes: 2048 };
+  const savedDocument = { id: 21, source_id: 7, refresh_id: 11, resource_id: 40, requested_url: "https://example.com/llms.txt", final_url: "https://example.com/llms.txt", parent_depth_min: 0, document_role: "root_index", document_kind: "llms_index", classification_rule: "filename_llms_txt", fetch_state: "saved", http_status: 200, normalized_mime_type: "text/plain", encoding: "utf-8", response_headers: {}, redirect_chain: [], fetched_at: "2026-08-06T12:00:00Z", response_time_ms: 20, network_bytes_transferred: 2048, raw_sha256: "a".repeat(64), parsed_title: "Example docs", parsed_summary: "Summary", parse_state: "parsed", parse_version: "ai-document-parser-v1", parse_warnings_json: [], warning_count: 0, change_state: "changed", error_type: null, error_message: null, raw_byte_size: 2048, stored_byte_size: 700, parent_count: 2 };
+  const markdownDocument = { ...savedDocument, id: 23, resource_id: 43, requested_url: "https://example.com/guide.md", final_url: "https://example.com/guide.md", parent_depth_min: 1, document_role: "declared_document", document_kind: "markdown_document", classification_rule: "mime_markdown", parsed_title: "Guide" };
+
+  await page.route("**/api/sites/3/sources?*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: sourceAdded ? [{ id: 7, website_property_id: 3, parent_source_id: null, root_source_id: null, source_type: "ai_document", name: "llms.txt", source_url: "https://example.com/llms.txt", normalized_source_url: "https://example.com/llms.txt", is_active: true, discovery_mode: "bounded_discovery", settings_json: aiSource.settings, last_refresh_status: "completed", last_refresh_started_at: null, last_refresh_finished_at: null, last_successful_refresh_at: null, last_http_status: 200, last_error_type: null, last_error_message: null, created_at: "2026-08-06T12:00:00Z", updated_at: "2026-08-06T12:00:00Z", current_entry_count: 1 }] : [], total: sourceAdded ? 1 : 0, limit: 100, offset: 0 }) }));
+  await page.route("**/api/sites/3/ai-document-sources/discover", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ candidates: [{ url: "https://example.com/llms.txt", discovery_method: "conventional_root", relation: "llms-txt", status: "found", http_status: 200, message: null, already_configured: false }, { url: "https://example.com/docs/llms.txt", discovery_method: "http_link_header", relation: "llms-txt", status: "found", http_status: 200, message: null, already_configured: false }] }) }));
+  await page.route("**/api/sites/3/ai-document-sources", async (route) => { sourceAdded = true; await route.fulfill({ contentType: "application/json", body: JSON.stringify(aiSource) }); });
+  await page.route("**/api/sites/3/sources/7/refresh", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: 20, status: "queued" }) }));
+  await page.route("**/api/ai-document-sources/7", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(aiSource) }));
+  await page.route("**/api/ai-document-sources/7/refreshes/11/tree", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ snapshot: savedDocument, parent_count: 2, cycle: false }, { snapshot: { ...savedDocument, id: 22, requested_url: "https://example.com/docs/llms.txt", final_url: "https://example.com/docs/llms.txt", parent_depth_min: 1, document_kind: "llms_index", document_role: "nested_index", parent_count: 1 }, parent_count: 1, cycle: true }] }) }));
+  await page.route("**/api/ai-document-sources/7/refreshes/11/documents?*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [markdownDocument], total: 1, limit: 50, offset: 0 }) }));
+  await page.route("**/api/ai-document-sources/7/refreshes/11/references?*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ id: 1, parent_snapshot_id: 21, target_resource_id: 41, child_snapshot_id: null, position: 0, section_title: "Optional", label: "Guide", description: "Read it", raw_url: "/guide", resolved_url: "https://example.com/guide", normalized_target_url: "https://example.com/guide", optional: true, inferred_role: "declared_document", inferred_kind: "html_page_reference", classification_rule: "parent_reference", in_scope: true, scope_decision: "crawlable", exclusion_reason: null, discovery_depth: 1, forms_cycle: false, inventory_entry_id: 8 }, { id: 2, parent_snapshot_id: 21, target_resource_id: 42, child_snapshot_id: null, position: 1, section_title: "External", label: "Outside", description: null, raw_url: "https://outside.example/doc", resolved_url: "https://outside.example/doc", normalized_target_url: "https://outside.example/doc", optional: false, inferred_role: "declared_document", inferred_kind: "external_reference", classification_rule: "parent_reference", in_scope: false, scope_decision: "external", exclusion_reason: "outside scope", discovery_depth: 1, forms_cycle: false, inventory_entry_id: null }], total: 2, limit: 50, offset: 0 }) }));
+  await page.route("**/api/ai-document-sources/7/refreshes/11/validation", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify([{ id: 1, snapshot_id: 22, reference_id: 2, severity: "warning", code: "circular_index_reference", message: "Circular index reference", data_json: {} }]) }));
+  await page.route("**/api/ai-document-sources/7/refreshes?*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [0, 1].map((index) => ({ id: 11 - index, source_refresh_id: 20 - index, status: "completed", configuration_json: aiSource.settings, root_candidate_count: 1, document_discovered_count: 3, document_fetched_count: 3, document_saved_count: 3, document_unchanged_count: index ? 0 : 2, document_changed_count: index ? 3 : 1, document_failed_count: 0, document_skipped_count: 0, reference_count: 5, cycle_count: 1, total_network_bytes: 3000, total_retained_bytes: 2048, stop_reason: null, fatal_error_message: null, created_at: `2026-08-0${6 - index}T12:00:00Z` })), total: 2, limit: 50, offset: 0 }) }));
+  await page.route("**/api/ai-document-snapshots/23", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(markdownDocument) }));
+  await page.route("**/api/ai-document-snapshots/23/content", async (route) => route.fulfill({ contentType: "text/plain", body: "# Guide\n\nExact retained content." }));
+  await page.route("**/api/ai-document-sources/7/deletion-preview", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ refresh_count: 2, snapshot_count: 6, reference_count: 10, current_inventory_origin_count: 1, unique_blob_count: 3, shared_blob_count: 1, exclusive_blob_count: 2, reclaimable_storage_bytes: 1400 }) }));
+  await page.route("**/api/ai-document-sources/7", async (route) => { if (route.request().method() === "DELETE") { sourceAdded = false; await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted_source_id: 7 }) }); } else await route.fallback(); });
+
+  await page.goto("/sites/3?tab=sources");
+  await page.getByRole("button", { name: "Discover AI Document Sources" }).click();
+  await expect(page.getByText("https://example.com/llms.txt")).toBeVisible();
+  await expect(page.getByText("https://example.com/docs/llms.txt")).toBeVisible();
+  await page.getByText("https://example.com/docs/llms.txt").locator("xpath=ancestor::label").getByRole("checkbox").uncheck();
+  await page.getByRole("button", { name: "Add selected Sources" }).click();
+  await page.getByRole("link", { name: "Open Source" }).click();
+  await expect(page.getByRole("heading", { name: "llms.txt" })).toBeVisible();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await page.getByRole("tab", { name: "Tree" }).click();
+  await expect(page.getByText("https://example.com/docs/llms.txt")).toBeVisible();
+  await expect(page.getByText("2 parents")).toBeVisible();
+  await expect(page.getByText("Cycle")).toBeVisible();
+  await page.getByRole("tab", { name: "Files" }).click();
+  await page.getByLabel("Document kind").selectOption("markdown_document");
+  await page.getByRole("link", { name: "Open", exact: true }).click();
+  await page.getByRole("button", { name: "Load saved content" }).click();
+  await expect(page.getByText(/Exact retained content/)).toBeVisible();
+  await page.getByRole("button", { name: "Copy content" }).click();
+  await page.goto("/ai-document-sources/7?tab=declared");
+  await expect(page.getByText("Current origin")).toBeVisible();
+  await expect(page.getByText("Reference only")).toBeVisible();
+  await page.getByRole("tab", { name: "Validation" }).click();
+  await expect(page.getByText(/llms-full.txt is optional/)).toBeVisible();
+  await page.getByRole("tab", { name: "History" }).click();
+  await expect(page.getByText("Showing 1-2 of 2 refreshes").first()).toBeVisible();
+  await expect(page.getByText("2").first()).toBeVisible();
+  await page.getByRole("tab", { name: "Settings" }).click();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Preview and delete" }).click();
+  await expect(page).toHaveURL(/\/sites\/3\?tab=sources/);
+  await page.goto("/scans/1");
+  await expect(page.getByRole("tab", { name: /Pages/i })).toBeVisible();
+});
+
 async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
   let siteActive = true;

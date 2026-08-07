@@ -17,6 +17,7 @@ observations from separate scans without erasing the evidence captured by each s
 - Runs bounded static HTML scans through durable background jobs.
 - Optionally attaches bounded Chromium-rendered observations to eligible static snapshots.
 - Accepts sitemap, robots-discovered sitemap, and manual URL Sources.
+- Discovers and retains nested AI Document Sources with exact refresh evidence.
 - Maintains a current URL Inventory with source provenance.
 - Preserves persistent Pages and scan-specific observation history.
 - Inventories observed and HTML-referenced non-HTML Resources without storing Resource bodies.
@@ -41,7 +42,7 @@ findings.
 - **Resource:** A non-HTML representation observed directly or referenced by retained HTML.
 - **Observation:** A scan-specific ResourceSnapshot of a Page or non-HTML Resource.
 - **Scan:** One bounded collection run that produces observations.
-- **Source:** A sitemap, robots-discovered sitemap, or manual URL source.
+- **Source:** A sitemap, robots-discovered sitemap, manual URL source, or AI Document Source.
 - **Inventory:** Current URL candidates declared by Sources. Inventory entries are inputs, not
   observations.
 - **Graph:** A scan-specific representation of observed Pages and links.
@@ -197,6 +198,7 @@ storage, graph queries, background jobs, Page history, and reuse are covered by 
 - [Page workspaces](docs/page-workspaces.md)
 - [Browser-rendered observations](docs/browser-rendered-observations.md)
 - [Resource Inventory](docs/resource-inventory.md)
+- [AI Document Sources](docs/ai-document-sources.md)
 
 ## Current Limitations
 

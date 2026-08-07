@@ -26,7 +26,7 @@ Python app package.
 - **Page:** A persistent normalized URL identity represented by WebResource.
 - **Observation:** One scan-specific ResourceSnapshot of a Page.
 - **Scan:** One bounded collection run that produces observations.
-- **Source:** A sitemap, robots-discovered sitemap, or manual URL source.
+- **Source:** A sitemap, robots-discovered sitemap, manual URL source, or AI Document Source.
 - **Inventory:** Current URL candidates declared by Sources.
 - **Graph:** A scan-specific representation of observed Pages and stored links.
 - **Activity:** Durable background execution and worker status.
@@ -45,6 +45,7 @@ Implemented capabilities include:
 - Static HTML scans.
 - Durable background jobs.
 - Sitemap, robots-discovered sitemap, and manual URL Sources.
+- Nested AI Document Sources with immutable refresh, reference, and exact text evidence.
 - URL Inventory and scan-seed provenance.
 - Persistent Pages and Page observation history.
 - Site-scoped Page workspaces, categories, owner labels, workflow status, and plain-text notes.
@@ -85,6 +86,8 @@ behavior. Keep storage behind the existing content-store abstraction.
 - services.job_handlers adapts jobs to domain execution.
 - services.site_* owns saved-Site behavior and queries.
 - services.source_* owns Sources, refresh, and Inventory.
+- parsers.ai_documents and storage.ai_document_store own deterministic AI index parsing and exact
+  AI-document evidence; this evidence never uses ResourceSnapshot or Resource Inventory bodies.
 - services.scan_* owns scan inputs, queries, and deletion.
 - services.page_queries owns persistent Page catalogs and observation history.
 - services.site_pages, services.page_categories, and services.notes own Site-scoped Page workflow.

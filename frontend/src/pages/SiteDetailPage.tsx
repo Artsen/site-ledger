@@ -13,12 +13,14 @@ import {
   bulkPageMetadata,
   cancelSourceRefresh,
   createSource,
+  createAiDocumentSource,
   createPageCategory,
   createSiteNote,
   deletePageCategory,
   deleteSite,
   deleteSource,
   discoverRobots,
+  discoverAiDocumentSources,
   getWorkerHealth,
   getSite,
   listInventory,
@@ -54,6 +56,7 @@ import type {
   Site,
   UrlSource,
 } from "../types/scans";
+import { defaultAiDocumentSettings } from "../types/aiDocuments";
 import {
   formatDate,
   formatStatus,
@@ -902,6 +905,8 @@ function SourcesTab({ site }: { site: Site }) {
   const queryClient = useQueryClient();
   const [sitemapUrl, setSitemapUrl] = useState("");
   const [manualUrls, setManualUrls] = useState("");
+  const [aiSourceUrl, setAiSourceUrl] = useState("");
+  const [selectedAiCandidates, setSelectedAiCandidates] = useState<string[]>([]);
   const sources = useQuery({
     queryKey: ["sources", String(site.id)],
     queryFn: () => listSources(String(site.id), "?active_state=all&limit=100"),
@@ -970,6 +975,35 @@ function SourcesTab({ site }: { site: Site }) {
       });
     },
   });
+  const aiDiscovery = useMutation({
+    mutationFn: () => discoverAiDocumentSources(String(site.id)),
+    onSuccess: (result) =>
+      setSelectedAiCandidates(
+        result.candidates
+          .filter((candidate) => candidate.status === "found" && !candidate.already_configured)
+          .map((candidate) => candidate.url),
+      ),
+  });
+  const addAiSources = useMutation({
+    mutationFn: async (urls: string[]) =>
+      Promise.all(
+        urls.map((url) =>
+          createAiDocumentSource(String(site.id), {
+            entry_url: url,
+            name: new URL(url).pathname.split("/").filter(Boolean).join(" / ") || "AI documents",
+            discovery_mode:
+              aiDiscovery.data?.candidates.find((candidate) => candidate.url === url)
+                ?.discovery_method ?? "configured",
+            settings: defaultAiDocumentSettings(),
+          }),
+        ),
+      ),
+    onSuccess: async () => {
+      setAiSourceUrl("");
+      setSelectedAiCandidates([]);
+      await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
+    },
+  });
   const cancelRefresh = useMutation({
     mutationFn: (job: Job) =>
       cancelSourceRefresh(String(job.source_refresh_id)),
@@ -1026,6 +1060,15 @@ function SourcesTab({ site }: { site: Site }) {
           title="Source request failed"
         />
       ) : null}
+      <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div><h2 className="text-base font-semibold">AI Document Sources</h2><p className="mt-1 text-sm text-stone-600">Discover conventional llms.txt entry points and advertised nested indexes, or add a scoped URL directly.</p></div>
+          <Button type="button" loading={aiDiscovery.isPending} onClick={() => aiDiscovery.mutate()}>Discover AI Document Sources</Button>
+        </div>
+        {aiDiscovery.data ? <div className="mt-4 rounded-md border border-stone-200"><div className="border-b border-stone-200 px-3 py-2 text-sm font-medium">Discovery candidates</div>{aiDiscovery.data.candidates.map((candidate) => <label key={`${candidate.discovery_method}-${candidate.url}`} className="flex items-start gap-3 border-b border-stone-100 px-3 py-3 last:border-0"><input type="checkbox" className="mt-1" disabled={candidate.status !== "found" || candidate.already_configured} checked={selectedAiCandidates.includes(candidate.url)} onChange={(event) => setSelectedAiCandidates((current) => event.target.checked ? [...current, candidate.url] : current.filter((url) => url !== candidate.url))} /><span className="min-w-0"><span className="block break-all font-mono text-xs">{candidate.url}</span><span className="mt-1 block text-xs text-stone-500">{formatStatus(candidate.discovery_method)} - {formatStatus(candidate.status)}{candidate.already_configured ? " - already configured" : ""}</span></span></label>)}<div className="p-3"><Button type="button" loading={addAiSources.isPending} disabled={!selectedAiCandidates.length} onClick={() => addAiSources.mutate(selectedAiCandidates)}>Add selected Sources</Button></div></div> : null}
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row"><input aria-label="AI Document Source URL" value={aiSourceUrl} onChange={(event) => setAiSourceUrl(event.target.value)} placeholder="https://www.example.com/docs/llms.txt" className="min-w-0 flex-1 rounded-md border border-stone-300 px-3 py-2 font-mono text-sm" /><Button type="button" loading={addAiSources.isPending} disabled={!aiSourceUrl.trim()} onClick={() => addAiSources.mutate([aiSourceUrl.trim()])}>Add AI Document Source</Button></div>
+        {aiDiscovery.error || addAiSources.error ? <div className="mt-3"><ErrorBanner error={aiDiscovery.error ?? addAiSources.error} title="AI Document Source request failed" /></div> : null}
+      </section>
       {sourceJobs.data?.items.some(
         (job) => job.presentation_status === "waiting_for_worker",
       ) ? (
@@ -1183,6 +1226,7 @@ function SourceTable({
                 <td className="px-3 py-2">{source.current_entry_count}</td>
                 <td className="px-3 py-2">
                   <div className="flex gap-2">
+                    {source.source_type === "ai_document" ? <Link className="underline" to={`/ai-document-sources/${source.id}`}>Open Source</Link> : null}
                     <button
                       type="button"
                       className="underline disabled:text-stone-400"

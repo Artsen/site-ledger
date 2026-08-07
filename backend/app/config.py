@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///../data/scanner.db"
     html_storage_root: Path = Path("../data/html")
+    ai_document_storage_root: Path = Path("../data/ai-documents")
     rendered_artifact_storage_root: Path = Path("../data/rendered")
     crawler_user_agent: str = "WebsiteScanner/0.1"
     cors_origins: list[str] = Field(

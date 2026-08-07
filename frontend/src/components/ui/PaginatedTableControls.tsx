@@ -35,5 +35,6 @@ export function PaginatedTableControls({ total, limit, offset, onPageChange, onP
 function pluralize(label: string) {
   if (label.endsWith("y")) return `${label.slice(0, -1)}ies`;
   if (label.endsWith("s")) return label;
+  if (/(?:ch|sh|x|z)$/.test(label)) return `${label}es`;
   return `${label}s`;
 }

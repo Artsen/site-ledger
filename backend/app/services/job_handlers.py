@@ -24,6 +24,7 @@ from app.services.job_types import (
 )
 from app.services.scan_execution import ScanExecutionCoordinator
 from app.services.source_refresh import execute_source_refresh
+from app.storage.ai_document_store import LocalAiDocumentStore
 from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
 
@@ -177,6 +178,7 @@ class SourceRefreshJobHandler:
                         "child_sources": active_refresh.child_source_count,
                     },
                 ),
+                ai_document_store=LocalAiDocumentStore(get_settings().ai_document_storage_root),
             )
             if refresh is None:
                 raise ValueError("Source refresh not found.")

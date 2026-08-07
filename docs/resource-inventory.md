@@ -4,6 +4,11 @@ Resource Inventory records non-HTML files that a Scan observed directly or that 
 referenced. It is distinct from the URL-source Inventory: Sources describe candidate inputs, while
 Resources describe representation evidence and references found during a Scan.
 
+AI Document Source bodies are dedicated Source evidence, not Resource Inventory bodies. Fetching
+Markdown, text, JSON, YAML, OpenAPI, AsyncAPI, or llms corpus documents during a Source refresh does
+not create a `ResourceSnapshot`, an observed Resource, a Page graph edge, or a Scan count. See
+[AI Document Sources](ai-document-sources.md).
+
 ## Page And Resource Model
 
 `WebResource` remains the global identity for one normalized URL. A URL is not given a second

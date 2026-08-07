@@ -95,12 +95,42 @@ def delete_site(db: Session, site_id: int) -> int | None:
             )
         )
     )
+    from app.models import AiDocumentReference, AiDocumentRefresh, AiDocumentSnapshot, SourceRefresh
+
+    ai_refresh_ids = (
+        select(AiDocumentRefresh.id)
+        .join(SourceRefresh)
+        .where(SourceRefresh.url_source.has(website_property_id=site.id))
+    )
+    ai_resource_ids = list(
+        db.scalars(
+            select(AiDocumentSnapshot.resource_id).where(
+                AiDocumentSnapshot.refresh_id.in_(ai_refresh_ids)
+            )
+        )
+    ) + list(
+        db.scalars(
+            select(AiDocumentReference.target_resource_id)
+            .join(
+                AiDocumentSnapshot,
+                AiDocumentSnapshot.id == AiDocumentReference.parent_snapshot_id,
+            )
+            .where(
+                AiDocumentSnapshot.refresh_id.in_(ai_refresh_ids),
+                AiDocumentReference.target_resource_id.is_not(None),
+            )
+        )
+    )
     site_page_resource_ids = list(
         db.scalars(select(SitePage.resource_id).where(SitePage.website_property_id == site.id))
     )
     db.delete(site)
     db.flush()
-    resource_ids = set(item for item in source_resource_ids if item) | set(site_page_resource_ids)
+    resource_ids = (
+        set(item for item in source_resource_ids if item)
+        | set(site_page_resource_ids)
+        | set(item for item in ai_resource_ids if item)
+    )
     _delete_unreferenced_resources_after_site_delete(db, list(resource_ids))
     db.commit()
     return site_id
@@ -161,6 +191,8 @@ def _delete_unreferenced_resources_after_site_delete(db: Session, resource_ids: 
     if not resource_ids:
         return
     from app.models import (
+        AiDocumentReference,
+        AiDocumentSnapshot,
         ResourceOccurrence,
         ResourceSnapshot,
         ScanSeed,
@@ -178,6 +210,10 @@ def _delete_unreferenced_resources_after_site_delete(db: Session, resource_ids: 
             + _reference_count(db, UrlSourceEntry, UrlSourceEntry.resource_id, resource_id)
             + _reference_count(db, ScanSeed, ScanSeed.resource_id, resource_id)
             + _reference_count(db, SitePage, SitePage.resource_id, resource_id)
+            + _reference_count(db, AiDocumentSnapshot, AiDocumentSnapshot.resource_id, resource_id)
+            + _reference_count(
+                db, AiDocumentReference, AiDocumentReference.target_resource_id, resource_id
+            )
         )
         if has_reference == 0:
             resource = db.get(WebResource, resource_id)

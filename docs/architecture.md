@@ -37,6 +37,8 @@ current implementations.
   parse output.
 - Scan stores one bounded collection run and its copied effective scope.
 - UrlSource, SourceRefresh, and UrlSourceEntry store URL-source configuration and Inventory.
+- AiDocumentRefresh, AiDocumentSnapshot, AiDocumentReference, and AiDocumentBlob preserve immutable
+  AI Document Source evidence without creating Scan observations.
 - ScanSeed and ScanSeedOrigin preserve explicit scan-input provenance.
 - BackgroundJob, JobEvent, and WorkerInstance store durable Activity state.
 
@@ -93,7 +95,7 @@ Inactive Sites remain inspectable but cannot start new scans.
 ## URL Sources And Inventory
 
 UrlSource is a Site child, not a crawler plugin. Supported sources are direct sitemaps, robots.txt
-discovery, sitemap-index children, and manual URL batches.
+discovery, sitemap-index children, manual URL batches, and nested AI Document Sources.
 
 Source refreshes use the same SafeHttpFetcher boundary as crawling. XML parsing disables networked
 DTD/entity loading, and gzip decompression is bounded. Out-of-scope or invalid entries remain
@@ -102,6 +104,11 @@ reviewable but are not crawlable resources.
 Source Inventory is input data, not scan output. When selected for a scan, source entries are copied
 into ScanSeed and ScanSeedOrigin records. Later refresh or deletion does not rewrite a scan's input
 provenance.
+
+AI Document refreshes reuse Source jobs, safe fetching, Site scope, `WebResource`, and current
+Inventory origins. Dedicated compressed blobs preserve exact accepted text. They never create
+`ResourceSnapshot` rows, affect Scan counters, trigger rendering, or add graph edges. See
+[AI Document Sources](ai-document-sources.md).
 
 ## Durable Background Activity
 
