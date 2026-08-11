@@ -12,6 +12,11 @@ from lxml import html
 
 VOLATILE_SENTINEL = "__SITE_LEDGER_VOLATILE__"
 INCAPSULA_RULE_ID = "incapsula_script_src_cb_v1"
+DOCUMENT_CONTENT_EXTRACTOR_VERSION = "document-content-v2"
+
+_DEFAULT_DOCUMENT_PROFILE = "default_web_document"
+_WEB_CONTENT_NOT_FOUND_PROFILE = "web_content_not_found_v1"
+_OPERATIONAL_DIAGNOSTIC_SENTINEL = "__SITE_LEDGER_OPERATIONAL_DIAGNOSTIC__"
 
 _SCRIPT_TAG = re.compile(r"<script\b[^>]*>", re.IGNORECASE | re.DOTALL)
 _META_TAG = re.compile(r"<meta\b[^>]*>", re.IGNORECASE | re.DOTALL)
@@ -29,9 +34,7 @@ _ATTRIBUTE_BYTES = re.compile(
     rb"(?P<name>[A-Za-z_:][\w:.-]*)\s*=\s*(?P<quote>['\"])(?P<value>.*?)(?P=quote)",
     re.DOTALL,
 )
-_CB_PARAMETER_BYTES = re.compile(
-    rb"(?P<prefix>[?&](?:amp;)?cb=)(?P<value>[^&#]*)", re.IGNORECASE
-)
+_CB_PARAMETER_BYTES = re.compile(rb"(?P<prefix>[?&](?:amp;)?cb=)(?P<value>[^&#]*)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -226,10 +229,96 @@ def _document_content_hash(source: str) -> str | None:
     )
     for element in elements:
         element.drop_tree()
+    profile = _identify_document_profile(document)
+    if profile == _WEB_CONTENT_NOT_FOUND_PROFILE:
+        _replace_web_content_not_found_diagnostics(document)
     body = document.find("body")
     root = body if body is not None else document
     text = " ".join(" ".join(cast(Iterable[str], root.itertext())).split())
     return _text_hash(html_stdlib.unescape(text))
+
+
+def _identify_document_profile(document: html.HtmlElement) -> str:
+    root_children = _element_children(document)
+    titles = document.xpath("/html/head/title")
+    bodies = document.xpath("/html/body")
+    if (
+        document.tag.casefold() != "html"
+        or document.attrib
+        or [child.tag.casefold() for child in root_children] != ["head", "body"]
+        or len(titles) != 1
+        or len(bodies) != 1
+    ):
+        return _DEFAULT_DOCUMENT_PROFILE
+    head = root_children[0]
+    title = cast(html.HtmlElement, titles[0])
+    if (
+        head.attrib
+        or [child.tag.casefold() for child in _element_children(head)] != ["title"]
+        or title.attrib
+        or len(title)
+        or _element_text(title) != "WebContentNotFound"
+    ):
+        return _DEFAULT_DOCUMENT_PROFILE
+
+    body = cast(html.HtmlElement, bodies[0])
+    children = _element_children(body)
+    if (
+        body.attrib
+        or [child.tag.casefold() for child in children] != ["h1", "p", "ul"]
+        or not _inter_element_text_is_whitespace(body)
+    ):
+        return _DEFAULT_DOCUMENT_PROFILE
+    heading, paragraph, error_list = children
+    if (
+        heading.attrib
+        or len(heading)
+        or _element_text(heading) != ("The requested content does not exist.")
+    ):
+        return _DEFAULT_DOCUMENT_PROFILE
+    if paragraph.attrib or _element_text(paragraph) or len(paragraph) or error_list.attrib:
+        return _DEFAULT_DOCUMENT_PROFILE
+
+    fields = _element_children(error_list)
+    if (
+        len(fields) != 4
+        or not _inter_element_text_is_whitespace(error_list)
+        or any(child.tag.casefold() != "li" or child.attrib or len(child) for child in fields)
+    ):
+        return _DEFAULT_DOCUMENT_PROFILE
+    values = [_element_text(field) for field in fields]
+    if values[:2] != ["HttpStatusCode: 404", "ErrorCode: WebContentNotFound"]:
+        return _DEFAULT_DOCUMENT_PROFILE
+    if not _diagnostic_value(values[2], "RequestId") or not _diagnostic_value(
+        values[3], "TimeStamp"
+    ):
+        return _DEFAULT_DOCUMENT_PROFILE
+    return _WEB_CONTENT_NOT_FOUND_PROFILE
+
+
+def _replace_web_content_not_found_diagnostics(document: html.HtmlElement) -> None:
+    fields = cast(list[html.HtmlElement], document.xpath("/html/body/ul/li"))
+    for field, label in zip(fields[2:], ("RequestId", "TimeStamp"), strict=True):
+        field.text = f"{label} : {_OPERATIONAL_DIAGNOSTIC_SENTINEL}"
+
+
+def _element_text(element: html.HtmlElement) -> str:
+    return " ".join(" ".join(cast(Iterable[str], element.itertext())).split())
+
+
+def _element_children(element: html.HtmlElement) -> list[html.HtmlElement]:
+    return [child for child in element if isinstance(child.tag, str)]
+
+
+def _inter_element_text_is_whitespace(element: html.HtmlElement) -> bool:
+    return not (element.text or "").strip() and all(
+        not (child.tail or "").strip() for child in element
+    )
+
+
+def _diagnostic_value(text: str, label: str) -> str | None:
+    match = re.fullmatch(rf"{re.escape(label)}\s*:\s*(\S.*)", text)
+    return match.group(1) if match else None
 
 
 def _attribute_value(tag: str, name: str) -> str | None:

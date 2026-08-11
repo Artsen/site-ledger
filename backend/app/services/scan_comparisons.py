@@ -35,6 +35,7 @@ from app.services.scan_projections import (
     current_projection_build,
 )
 from app.services.source_comparison import (
+    DOCUMENT_CONTENT_EXTRACTOR_VERSION,
     SourceAnalysis,
     analyze_source,
     source_difference_categories,
@@ -43,7 +44,8 @@ from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
 SCAN_COMPARISON_VERSION = "scan-comparison-v2"
 SCAN_COMPARISON_ALGORITHM = (
-    "scan-comparison-v2|source-signals-v1|incapsula-cb-v1|page-v2|resource-v1|"
+    "scan-comparison-v2|source-signals-v1|"
+    f"{DOCUMENT_CONTENT_EXTRACTOR_VERSION}|incapsula-cb-v1|page-v2|resource-v1|"
     "link-v1|scan-projection-v1"
 )
 ACTIVE_COMPARISON_BUILD_STATUSES = {"queued", "waiting_for_projections", "building"}

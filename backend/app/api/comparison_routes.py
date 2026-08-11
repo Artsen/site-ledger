@@ -422,10 +422,18 @@ def get_page_change_history(
     site_id: int,
     resource_id: int,
     db: DbSession,
+    request: Request,
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> PageChangeHistoryList:
-    result = page_change_history(db, site_id, resource_id, limit=limit, offset=offset)
+    result = page_change_history(
+        db,
+        site_id,
+        resource_id,
+        store=request.app.state.content_store,
+        limit=limit,
+        offset=offset,
+    )
     if result is None:
         raise HTTPException(404, "Page not found")
     return result

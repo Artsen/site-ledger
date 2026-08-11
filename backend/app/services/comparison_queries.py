@@ -7,7 +7,7 @@ from collections import Counter
 from typing import Any
 
 from sqlalchemy import Select, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     ContentBlob,
@@ -42,7 +42,7 @@ from app.schemas.comparisons import (
     SourceDiffRead,
 )
 from app.services.scan_comparisons import current_comparison_build
-from app.services.source_comparison import normalize_volatile_source
+from app.services.source_comparison import SourceAnalysis, analyze_source, normalize_volatile_source
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
 SOURCE_DIFF_MAX_INPUT_BYTES = 1024 * 1024
@@ -551,6 +551,7 @@ def page_change_history(
     site_id: int,
     resource_id: int,
     *,
+    store: LocalContentStore | None = None,
     limit: int,
     offset: int,
 ) -> PageChangeHistoryList | None:
@@ -570,6 +571,7 @@ def page_change_history(
     scan_positions = {scan.id: position for position, scan in enumerate(scans)}
     rows = db.execute(
         select(ResourceSnapshot, Scan, RenderedObservation.capture_state)
+        .options(joinedload(ResourceSnapshot.blob))
         .join(Scan, Scan.id == ResourceSnapshot.scan_id)
         .outerjoin(RenderedObservation, RenderedObservation.snapshot_id == ResourceSnapshot.id)
         .where(
@@ -586,12 +588,15 @@ def page_change_history(
     ).all()
     items: list[PageChangeHistoryItem] = []
     previous: tuple[ResourceSnapshot, Scan, str | None] | None = None
+    source_cache: dict[int, SourceAnalysis | None] = {}
     for snapshot, scan, rendered_state in rows:
         flags = _history_flags(
             previous[0] if previous else None,
             snapshot,
             previous[2] if previous else None,
             rendered_state,
+            store,
+            source_cache,
         )
         intervening = 0
         if previous:
@@ -748,17 +753,49 @@ def _history_flags(
     after: ResourceSnapshot,
     before_rendered: str | None,
     after_rendered: str | None,
+    store: LocalContentStore | None,
+    source_cache: dict[int, SourceAnalysis | None],
 ) -> list[str]:
     if before is None:
         return []
     fields = {
-        "content": (before.raw_html_sha256, after.raw_html_sha256),
         "head_metadata": (before.head_sha256, after.head_sha256),
         "http_status": (before.http_status, after.http_status),
         "redirect": (before.final_url, after.final_url),
         "rendered_summary": (before_rendered, after_rendered),
     }
-    return [name for name, values in fields.items() if values[0] != values[1]]
+    flags = [name for name, values in fields.items() if values[0] != values[1]]
+    if before.raw_html_sha256 != after.raw_html_sha256:
+        before_source = _history_source_analysis(before, store, source_cache)
+        after_source = _history_source_analysis(after, store, source_cache)
+        if (
+            before_source is not None
+            and after_source is not None
+            and before_source.document_content_hash == after_source.document_content_hash
+        ):
+            flags.insert(0, "source")
+        else:
+            flags.insert(0, "content")
+    return flags
+
+
+def _history_source_analysis(
+    snapshot: ResourceSnapshot,
+    store: LocalContentStore | None,
+    cache: dict[int, SourceAnalysis | None],
+) -> SourceAnalysis | None:
+    if snapshot.blob is None or store is None:
+        return None
+    if snapshot.blob.id not in cache:
+        try:
+            content = store.get(snapshot.blob)
+        except BlobNotFoundError:
+            cache[snapshot.blob.id] = None
+        else:
+            cache[snapshot.blob.id] = analyze_source(
+                content, snapshot.blob.encoding or snapshot.encoding
+            )
+    return cache[snapshot.blob.id]
 
 
 def _history_label(flags: list[str], first: bool) -> str:
@@ -770,6 +807,7 @@ def _history_label(flags: list[str], first: bool) -> str:
         return "Multiple tracked changes"
     labels = {
         "content": "Content changed",
+        "source": "Technical/source change",
         "head_metadata": "Head metadata changed",
         "http_status": "HTTP status changed",
         "redirect": "Redirect changed",
