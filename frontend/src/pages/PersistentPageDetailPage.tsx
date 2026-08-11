@@ -13,10 +13,13 @@ import {
   listPageNotes,
   listPageObservations,
   getPageChangeHistory,
+  getPageStructuredContent,
+  preparePageStructuredContent,
   removePageCategoryExclusion,
   updatePageMetadata,
 } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
+import { StructuredContentView } from "../components/StructuredContentView";
 import {
   LinkRoleBadge,
   PageCategoryBadges,
@@ -133,6 +136,7 @@ export function PersistentPageDetailPage() {
           { id: "overview", label: "Overview" },
           { id: "scans", label: "Scans", count: value.observation_count },
           { id: "history", label: "Change History" },
+          { id: "content", label: "Content" },
           { id: "links", label: "Links" },
           { id: "browser", label: "Browser evidence" },
           { id: "notes", label: "Notes", count: value.note_count },
@@ -146,6 +150,7 @@ export function PersistentPageDetailPage() {
           <ScansTab siteId={siteId} resourceId={resourceId} />
         ) : null}
         {tab === "history" ? <ChangeHistoryTab siteId={siteId} resourceId={resourceId} /> : null}
+        {tab === "content" ? <StructuredContentView queryKey={["page-structured-content", siteId, resourceId]} load={() => getPageStructuredContent(siteId, resourceId)} prepare={() => preparePageStructuredContent(siteId, resourceId)} /> : null}
         {tab === "links" ? <LinksTab detail={page.data} /> : null}
         {tab === "browser" ? <BrowserEvidenceTab siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "notes" ? (

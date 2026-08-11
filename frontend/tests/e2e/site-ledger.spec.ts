@@ -227,6 +227,36 @@ test("persistent Page workspace supports organization, evidence, links, and note
   await expect(page).toHaveURL(/notes_search=pricing/);
 });
 
+test("structured content is inspectable on exact observations and persistent Pages", async ({
+  page,
+}) => {
+  await mockApi(page);
+  const content = structuredContentFixture();
+  await page.route("**/api/snapshots/9/structured-content?*", async (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(content) }),
+  );
+  await page.route("**/api/sites/3/pages/2/structured-content?*", async (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(content) }),
+  );
+
+  await page.goto("/scans/1/pages/9?tab=content");
+  await expect(page.getByRole("heading", { name: "Structured Page content" })).toBeVisible();
+  await expect(page.getByText("Page title", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: /Details/ }).click();
+  await expect(page.getByText(/window\.structuredExecuted/)).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { structuredExecuted?: boolean }).structuredExecuted,
+    ),
+  ).toBeUndefined();
+  await page.getByRole("button", { name: "Collapse Page title" }).click();
+  await expect(page.getByRole("button", { name: /Details/ })).toHaveCount(0);
+
+  await page.goto("/sites/3/pages/2?tab=content");
+  await expect(page.getByText("Scan 1, observation 9")).toBeVisible();
+  await expect(page.getByText("structured-content-v1 / default-v1")).toBeVisible();
+});
+
 test("numbered pagination stays URL-backed and isolated between Scan tabs", async ({ page }) => {
   await mockApi(page);
   await page.route("**/api/scans/1/pages**", async (route) => {
@@ -1548,6 +1578,29 @@ function resourceItem(overrides: Record<string, unknown>) {
     occurrence_count: 1, source_page_count: 1, anchor_occurrence_count: 0, embedded_occurrence_count: 1,
     in_scope_occurrence_count: 1, out_of_scope_occurrence_count: 0, first_discovered_at: "2026-08-06T01:00:00Z",
     latest_discovered_at: "2026-08-06T01:00:00Z", observation_count: 0, scan_count: 1, ...overrides
+  };
+}
+
+function structuredContentFixture() {
+  const section = (id: number, parentId: number | null, position: number, level: number, heading: string, directText: string) => ({
+    id, position, parent_section_id: parentId, kind: "heading", heading_level: level,
+    heading_text: heading, heading_dom_path: `html > body > main > h${level}`,
+    region_key: "main", region_dom_path: "html > body > main", direct_text: directText,
+    direct_text_sha256: "d".repeat(64), section_sha256: "e".repeat(64), subtree_sha256: "f".repeat(64),
+    direct_word_count: directText.split(" ").length, direct_character_count: directText.length,
+    subtree_word_count: directText.split(" ").length, subtree_character_count: directText.length,
+    child_count: id === 10 ? 1 : 0, descendant_count: id === 10 ? 1 : 0,
+    block_count: 1, has_direct_content: true,
+  });
+  return {
+    status: "ready", reason: null,
+    provenance: { snapshot_id: 9, scan_id: 1, site_id: 3, content_blob_id: 7, raw_html_sha256: "a".repeat(64), requested_url: "https://example.com/pricing", final_url: "https://example.com/pricing", fetched_at: "2026-08-06T01:00:00Z", retrieval_method: "full_fetch", reused_from_snapshot_id: null },
+    artifact: { id: 5, extractor_version: "structured-content-v1", extractor_config_version: "default-v1", extraction_state: "ready", document_profile: "headed", section_count: 2, heading_count: 2, heading_counts: { h1: 1, h2: 1, h3: 0, h4: 0, h5: 0, h6: 0 }, document_word_count: 8, document_character_count: 80, document_text_sha256: "b".repeat(64), outline_sha256: "c".repeat(64), is_truncated: false, truncation_reasons: [], created_at: "2026-08-06T01:00:01Z" },
+    items: [
+      section(10, null, 0, 1, "Page title", "Page introduction"),
+      section(11, 10, 1, 2, "Details", "<script>window.structuredExecuted = true</script> Visible text"),
+    ],
+    total: 2, limit: 2000, offset: 0,
   };
 }
 

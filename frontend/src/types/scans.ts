@@ -596,6 +596,68 @@ export type PersistentPageDetail = {
   site_name: string;
 };
 
+export type StructuredContentSection = {
+  id: number;
+  position: number;
+  parent_section_id: number | null;
+  kind: "heading" | "preamble" | "unheaded";
+  heading_level: number | null;
+  heading_text: string | null;
+  heading_dom_path: string | null;
+  region_key: string;
+  region_dom_path: string | null;
+  direct_text: string;
+  direct_text_sha256: string;
+  section_sha256: string;
+  subtree_sha256: string;
+  direct_word_count: number;
+  direct_character_count: number;
+  subtree_word_count: number;
+  subtree_character_count: number;
+  child_count: number;
+  descendant_count: number;
+  block_count: number;
+  has_direct_content: boolean;
+};
+
+export type StructuredContent = {
+  status: "ready" | "partial" | "unavailable" | "not_prepared" | "not_applicable";
+  reason: string | null;
+  provenance: {
+    snapshot_id: number;
+    scan_id: number;
+    site_id: number | null;
+    content_blob_id: number;
+    raw_html_sha256: string | null;
+    requested_url: string;
+    final_url: string | null;
+    fetched_at: string | null;
+    retrieval_method: string | null;
+    reused_from_snapshot_id: number | null;
+  } | null;
+  artifact: {
+    id: number;
+    extractor_version: string;
+    extractor_config_version: string;
+    extraction_state: string;
+    document_profile: string;
+    section_count: number;
+    heading_count: number;
+    heading_counts: Record<string, number>;
+    document_word_count: number;
+    document_character_count: number;
+    document_text_sha256: string;
+    outline_sha256: string;
+    is_truncated: boolean;
+    truncation_reasons: string[];
+    created_at: string;
+  } | null;
+  items: StructuredContentSection[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export type PageObservation = {
   snapshot_id: number;
   scan_id: number;
