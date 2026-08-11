@@ -303,16 +303,18 @@ Run relevant checks before completion:
 
 ~~~powershell
 cd backend
-pytest
-ruff check .
-ruff format --check .
-mypy app
-alembic upgrade head
-alembic check
+uv sync --extra dev --locked
+uv run --extra dev --locked pytest
+uv run --extra dev --locked ruff check .
+uv run --extra dev --locked ruff format --check .
+uv run --extra dev --locked mypy app
+uv run --extra dev --locked alembic upgrade head
+uv run --extra dev --locked alembic check
 ~~~
 
 ~~~powershell
 cd frontend
+npm ci
 npm run lint
 npm run typecheck
 npm run test
@@ -321,6 +323,18 @@ npm run e2e
 ~~~
 
 Do not disable checks or weaken tests to force passing results.
+
+## Reproducible Tooling
+
+- `backend/pyproject.toml` declares compatible direct requirements; `backend/uv.lock` is the
+  authoritative resolved environment for development and CI. Update both intentionally when a
+  direct requirement changes, and use `uv run` for repository automation.
+- `frontend/package.json` declares requirements; `frontend/package-lock.json` plus `npm ci` is the
+  authoritative frontend environment. New dependencies require the corresponding lock update.
+- GitHub Actions enforces the stable `Backend`, `Frontend`, and `Playwright` checks on pull requests
+  to `main` and pushes to `main`.
+- CI must use disposable databases and storage, require no production data or secrets, and avoid
+  public-network crawl evidence. Benchmarks remain manual diagnostics.
 
 ## Working Rules
 

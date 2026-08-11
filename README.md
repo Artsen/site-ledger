@@ -81,26 +81,27 @@ Detailed boundaries are documented in [Architecture](docs/architecture.md).
 
 ## Local Setup
 
-The tested setup uses Windows PowerShell and Node.js 20.19.0 or newer.
+The reproducible contributor setup uses Python 3.11, uv 0.12.3, Node.js 20.19.0, and the npm
+10.8.2 distributed with that Node release. Install uv once with
+`python -m pip install --user uv==0.12.3`. The backend lock is authoritative for resolved Python
+dependencies, and `npm ci` installs the exact frontend lock.
 
 ~~~powershell
 git clone https://github.com/Artsen/site-ledger.git
 cd site-ledger
 
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-python -m playwright install chromium
-python -m app.browser_check
-alembic upgrade head
+uv sync --extra dev --locked
+uv run playwright install chromium
+uv run python -m app.browser_check
+uv run alembic upgrade head
 ~~~
 
 Install the frontend dependencies in a separate terminal:
 
 ~~~powershell
 cd frontend
-npm install
+npm ci
 ~~~
 
 Runtime databases, static HTML, rendered DOM, and screenshots are written under data/ and ignored
@@ -112,23 +113,22 @@ Run the API:
 
 ~~~powershell
 cd backend
-.\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ~~~
 
 Run the worker in a second terminal:
 
 ~~~powershell
 cd backend
-.\.venv\Scripts\Activate.ps1
-python -m app.worker
+uv run python -m app.worker
 ~~~
 
 Historical terminal Scans can prepare optimized results with
-`python -m app.scan_projections build-missing --limit 25` from `backend`.
+`uv run python -m app.scan_projections build-missing --limit 25` from `backend`.
 Historical HTML can prepare structured Page content with
-`python -m app.structured_content build-missing --site-id 1 --limit 500` from `backend`.
-Category Rule performance can be measured with `python -m app.category_rule_benchmark`.
+`uv run python -m app.structured_content build-missing --site-id 1 --limit 500` from `backend`.
+Category Rule performance can be measured with
+`uv run python -m app.category_rule_benchmark`.
 
 Run the frontend in a third terminal:
 
@@ -179,20 +179,21 @@ Backend:
 
 ~~~powershell
 cd backend
-pytest
-ruff check .
-ruff format --check .
-mypy app
-alembic upgrade head
-alembic check
-python -m app.static_benchmark
-python -m app.render_benchmark
+uv lock --check
+uv sync --extra dev --locked
+uv run --extra dev --locked pytest
+uv run --extra dev --locked ruff check .
+uv run --extra dev --locked ruff format --check .
+uv run --extra dev --locked mypy app
+uv run --extra dev --locked alembic upgrade head
+uv run --extra dev --locked alembic check
 ~~~
 
 Frontend:
 
 ~~~powershell
 cd frontend
+npm ci
 npm run lint
 npm run typecheck
 npm run test
@@ -201,8 +202,27 @@ npm run e2e
 npm audit --omit=dev
 ~~~
 
-The Playwright workflow uses mocked API responses. Deterministic crawler behavior, redirect safety,
-storage, graph queries, background jobs, Page history, and reuse are covered by backend tests.
+GitHub Actions runs independent `Backend`, `Frontend`, and `Playwright` checks for pull requests to
+`main` and pushes to `main`. The production npm audit blocks on high or critical findings; the full
+dependency-tree audit is reported without blocking while the remaining Vite/Vitest advisories
+require major upgrades. The two current production advisories are moderate React Router findings.
+Python dependency vulnerability scanning is not yet automated.
+
+The Playwright workflow uses mocked API responses. The future real API/worker/fixture-site golden
+path is not part of the current suite. Deterministic crawler behavior, redirect safety, storage,
+graph queries, background jobs, Page history, and reuse are covered by backend tests. Benchmarks
+remain manual diagnostics rather than hosted-runner gates; run them explicitly through `uv run`,
+for example `uv run python -m app.static_benchmark`.
+
+## Updating Dependencies
+
+For backend requirements, edit `backend/pyproject.toml`, run `uv lock`, then verify with
+`uv sync --extra dev --locked` and the backend checks above. Commit `pyproject.toml` and `uv.lock`
+together when both change; do not edit resolved lock entries manually.
+
+For frontend requirements, change `frontend/package.json` intentionally, update
+`frontend/package-lock.json` with npm, then run `npm ci` and the frontend checks above. Commit both
+files when the declared dependency set changes.
 
 ## Documentation
 
