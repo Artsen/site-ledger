@@ -37,6 +37,7 @@ import {
 import { NotesPanel } from "../components/NotesPanel";
 import { CategoryRuleHistoryPanel, CategoryRulesPanel } from "../components/CategoryRulesPanel";
 import { ResourceInventoryView } from "../components/ResourceInventoryView";
+import { SiteComparisonsPanel } from "../components/SiteComparisonsPanel";
 import {
   PageCategoryBadges,
   WorkflowStatusBadge,
@@ -190,6 +191,7 @@ export function SiteDetailPage() {
         {[
           "overview",
           "scans",
+          "comparisons",
           "pages",
           "resources",
           "categories",
@@ -209,6 +211,7 @@ export function SiteDetailPage() {
       </div>
       {tab === "overview" ? <OverviewTab site={site.data} /> : null}
       {tab === "scans" ? <ScansTab site={site.data} /> : null}
+      {tab === "comparisons" ? <SiteComparisonsPanel site={site.data} /> : null}
       {tab === "pages" ? <PagesTab site={site.data} /> : null}
       {tab === "resources" ? <div className="space-y-4"><p className="text-sm text-stone-600">Resources are non-HTML files and embedded references retained from Scans. URL Inventory remains the separate set of candidate Page URLs declared by Sources.</p><ResourceInventoryView scope="site" id={siteId} /></div> : null}
       {tab === "categories" ? <CategoriesTab site={site.data} /> : null}
@@ -1459,8 +1462,8 @@ function setTab(
   setSearchParams: ReturnType<typeof useSearchParams>[1],
   tab: string,
 ) {
-  setSearchParams((current) => {
-    const next = new URLSearchParams(current);
+  setSearchParams(() => {
+    const next = new URLSearchParams();
     next.set("tab", tab);
     return next;
   });

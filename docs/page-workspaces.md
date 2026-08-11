@@ -163,9 +163,11 @@ The Site Resources tab is separate from Pages and URL Inventory. Resources have 
 history and Used-by-Page provenance but do not inherit Page categories, owner, workflow, or notes.
 See [Resource Inventory](resource-inventory.md).
 
+The persistent Page workspace includes deterministic Change History across observed snapshots.
 The current workspace intentionally excludes saved views, findings, authenticated ownership,
 audit-log history, hierarchical or AI categories, user-defined link-role overrides, rich-text
-notes, Page presence comparison, and targeted Page reruns.
+notes, and targeted Page reruns. Directional Page presence comparison lives in the Site Comparison
+workspace; see [Deterministic Scan comparisons](scan-comparisons.md).
 
 Saved views, findings-driven workflow, and authenticated ownership remain future additions rather
 than concepts implied by the freeform owner label or category system in this release.

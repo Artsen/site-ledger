@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from sqlalchemy import delete, distinct, func, select
+from sqlalchemy import delete, distinct, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -17,6 +17,7 @@ from app.models import (
     ResourceReferenceOccurrence,
     ResourceSnapshot,
     Scan,
+    ScanComparison,
     ScanSeed,
     ScanSeedOrigin,
     SitePage,
@@ -38,6 +39,7 @@ class DeletionImpact:
     snapshots: int
     link_occurrences: int
     resource_reference_occurrences: int
+    comparisons: int
     discovered_resource_ids: list[int]
     resource_ids: list[int]
     observed_resource_ids: list[int]
@@ -80,6 +82,7 @@ def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None
             snapshots=0,
             link_occurrences=0,
             resource_reference_occurrences=0,
+            comparisons_affected=0,
             resources_observed=0,
             resources_discovered=0,
             unique_resources=0,
@@ -100,6 +103,7 @@ def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None
             snapshots=0,
             link_occurrences=0,
             resource_reference_occurrences=0,
+            comparisons_affected=0,
             resources_observed=0,
             resources_discovered=0,
             unique_resources=0,
@@ -120,6 +124,7 @@ def preview_scan_deletion(db: Session, scan_id: int) -> ScanDeletePreview | None
         snapshots=impact.snapshots,
         link_occurrences=impact.link_occurrences,
         resource_reference_occurrences=impact.resource_reference_occurrences,
+        comparisons_affected=impact.comparisons,
         resources_observed=len(impact.observed_resource_ids),
         resources_discovered=len(impact.discovered_resource_ids),
         unique_resources=len(impact.resource_ids),
@@ -160,6 +165,18 @@ def delete_scan(
     rendered_ids = select(RenderedObservation.id).where(
         RenderedObservation.snapshot_id.in_(snapshot_ids)
     )
+    comparison_ids = select(ScanComparison.id).where(
+        or_(
+            ScanComparison.baseline_scan_id == scan.id,
+            ScanComparison.target_scan_id == scan.id,
+        )
+    )
+    db.execute(
+        update(ScanComparison)
+        .where(ScanComparison.id.in_(comparison_ids))
+        .values(current_build_id=None)
+    )
+    db.execute(delete(ScanComparison).where(ScanComparison.id.in_(comparison_ids)))
     delete_scan_projection_data(db, scan.id)
     db.execute(
         delete(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id.in_(snapshot_ids))
@@ -245,6 +262,7 @@ def delete_scan(
         snapshots_deleted=impact.snapshots,
         link_occurrences_deleted=impact.link_occurrences,
         resource_reference_occurrences_deleted=impact.resource_reference_occurrences,
+        comparisons_deleted=impact.comparisons,
         resources_deleted=len(deleted_resource_ids),
         html_blob_records_deleted=len(impact.deletable_blobs),
         html_blob_files_deleted=files_deleted,
@@ -285,6 +303,17 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         db.scalar(
             select(func.count(ResourceReferenceOccurrence.id)).where(
                 ResourceReferenceOccurrence.source_snapshot_id.in_(snapshot_ids)
+            )
+        )
+        or 0
+    )
+    comparisons = (
+        db.scalar(
+            select(func.count(ScanComparison.id)).where(
+                or_(
+                    ScanComparison.baseline_scan_id == scan.id,
+                    ScanComparison.target_scan_id == scan.id,
+                )
             )
         )
         or 0
@@ -413,6 +442,7 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         snapshots=snapshots,
         link_occurrences=link_occurrences,
         resource_reference_occurrences=resource_reference_occurrences,
+        comparisons=comparisons,
         discovered_resource_ids=discovered_resource_ids,
         resource_ids=resource_ids,
         observed_resource_ids=observed_resource_ids,
@@ -428,11 +458,20 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
 
 
 def _has_active_scan_job(db: Session, scan_id: int) -> bool:
+    comparison_ids = select(ScanComparison.id).where(
+        or_(
+            ScanComparison.baseline_scan_id == scan_id,
+            ScanComparison.target_scan_id == scan_id,
+        )
+    )
     return (
         db.scalar(
             select(func.count(BackgroundJob.id)).where(
-                BackgroundJob.scan_id == scan_id,
                 BackgroundJob.status.in_(ACTIVE_JOB_STATUSES),
+                or_(
+                    BackgroundJob.scan_id == scan_id,
+                    BackgroundJob.scan_comparison_id.in_(comparison_ids),
+                ),
             )
         )
         or 0

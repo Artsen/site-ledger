@@ -93,6 +93,8 @@ behavior. Keep storage behind the existing content-store abstraction.
 - parsers.ai_documents and storage.ai_document_store own deterministic AI index parsing and exact
   AI-document evidence; this evidence never uses ResourceSnapshot or Resource Inventory bodies.
 - services.scan_* owns scan inputs, queries, and deletion.
+- services.source_comparison owns exact/normalized source analysis and versioned deterministic
+  document-content extraction; these layers must remain distinct.
 - services.scan_projections owns versioned builds, validation, atomic activation, and fallback
   metadata. services.projection_queries owns projection-backed Page, Resource, and graph reads.
 - services.page_queries owns persistent Page catalogs and observation history.
@@ -272,6 +274,8 @@ Do not disable checks or weaken tests to force passing results.
 - Keep `WebResource` as normalized URL identity; representation kind belongs to Scan evidence.
 - Do not treat successful non-HTML responses as crawl failures or store their response bodies.
 - Keep Graph topology Page-link based and rendered capture evidence separate from static parsing.
+- Keep deterministic Scan comparisons versioned above immutable Scan projections; never label crawl
+  absence as website removal.
 - Update README and focused documentation when behavior or architecture changes.
 - Never commit secrets, credentials, local databases, captured HTML, build output, or dependency
   caches.

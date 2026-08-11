@@ -66,6 +66,11 @@ services.resource_queries aggregates observed non-HTML snapshots, anchor-linked 
 embedded references with set-based SQL. Embedded references are not automatically fetched and
 non-HTML response bodies are not retained. See [Resource Inventory](resource-inventory.md).
 
+services.source_comparison owns exact and normalized source analysis plus versioned deterministic
+document-content extraction. Source normalization and document-content profiles are independent:
+template-aware exclusion from document identity never rewrites retained HTML or Meaningful source
+evidence.
+
 Terminal Scans enqueue a durable projection build after evidence commits. Active and missing-build
 reads remain dynamic; compatible ready builds route Page, Resource, summary, and graph reads through
 indexed projection tables. Activation is an atomic state-pointer update, and failed rebuilds leave
@@ -154,6 +159,10 @@ cache metadata, request representation, scope, and an available local blob. A su
 a new observation, records the actual retrieval status separately from the effective Page status,
 and recreates current-scan link occurrences.
 
+Persistent Page Change History and Scan comparison share the `document-content-v2` extractor. Its
+recognized operational profiles are structural and narrow; arbitrary timestamps, identifiers,
+error Pages, and ordinary visible text retain the default extraction behavior.
+
 See [Page history and reuse](page-history-and-reuse.md).
 See [Page workspaces](page-workspaces.md).
 
@@ -215,10 +224,13 @@ crawl behavior, or break operator configuration.
 
 ## Deferred Areas
 
-Resource-body storage, complete scan comparison, environment comparison,
+Resource-body storage, environment comparison,
 findings, accessibility and performance observations, analytics integrations, semantic analysis,
 investigation workflow, scheduling, notifications, authentication, and multi-user permissions are
 future direction.
+
+Versioned deterministic Scan comparison is implemented above prepared Scan projections. See
+[Deterministic Scan comparisons](scan-comparisons.md).
 
 Robots.txt enforcement and concurrent requests within one crawl also remain deferred. The current
 static crawler uses a sequential request loop with an optional delay.

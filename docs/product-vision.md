@@ -135,7 +135,8 @@ This layer is substantially implemented.
 Deterministic differences between observations or environments.
 
 This layer is only partially represented through Page history, content hashes, retrieval metadata,
-and exact reuse provenance. Site Ledger does not yet provide a complete scan comparison workflow.
+and exact reuse provenance. Site Ledger provides deterministic same-Site Scan comparison and Page
+Change History without interpreting those facts as Findings.
 
 ### Interpretation
 
@@ -152,7 +153,7 @@ permissions, and resolution workflow remain future direction.
 
 ## Roadmap
 
-Planned areas include Resource-body analysis, deterministic scan and environment comparisons,
+Planned areas include Resource-body analysis, environment comparisons,
 findings, accessibility and performance observations, analytics
 integrations, semantic analysis, and investigation workflow.
 
@@ -162,7 +163,8 @@ and workflow. Interpretation must remain traceable to the observations that supp
 ## Current Limitations
 
 - Browser rendering is bounded optional Page evidence, not browser-only crawling or Resource discovery.
-- Complete website and environment comparison is not implemented.
+- Cross-Site and environment comparison are not implemented. Same-Site Scan comparison is
+  documented in [Deterministic Scan comparisons](scan-comparisons.md).
 - Resource-body storage and analysis, findings, audits, analytics, semantic embeddings, and AI
   summaries are not implemented.
 - Authenticated and private-network crawling are not supported.

@@ -713,6 +713,9 @@ class BackgroundJob(Base):
     source_refresh_id: Mapped[int | None] = mapped_column(
         ForeignKey("source_refreshes.id", ondelete="CASCADE"), index=True
     )
+    scan_comparison_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scan_comparisons.id", ondelete="CASCADE"), index=True
+    )
     website_property_id: Mapped[int | None] = mapped_column(
         ForeignKey("website_properties.id", ondelete="SET NULL"), index=True
     )
@@ -756,9 +759,14 @@ class BackgroundJob(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "(scan_id IS NOT NULL AND source_refresh_id IS NULL) OR "
-            "(scan_id IS NULL AND source_refresh_id IS NOT NULL) OR "
-            "(scan_id IS NULL AND source_refresh_id IS NULL AND website_property_id IS NOT NULL "
+            "(scan_id IS NOT NULL AND source_refresh_id IS NULL "
+            "AND scan_comparison_id IS NULL) OR "
+            "(scan_id IS NULL AND source_refresh_id IS NOT NULL "
+            "AND scan_comparison_id IS NULL) OR "
+            "(scan_id IS NULL AND source_refresh_id IS NULL "
+            "AND scan_comparison_id IS NOT NULL AND job_type = 'scan_comparison_build') OR "
+            "(scan_id IS NULL AND source_refresh_id IS NULL AND scan_comparison_id IS NULL "
+            "AND website_property_id IS NOT NULL "
             "AND job_type = 'category_rule_evaluation')",
             name="ck_background_job_one_subject",
         ),

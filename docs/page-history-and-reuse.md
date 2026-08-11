@@ -76,3 +76,14 @@ page state.
 
 If compatibility is uncertain, the crawler falls back to a full GET or records a structured crawler
 error through the existing safe fetch path.
+
+Effective reused content/head hashes participate in deterministic comparison exactly like hashes
+from a full response. Persistent Page Change History compares the previous observed snapshot and
+preserves intervening Scan gaps. When retained HTML is available, history uses the same versioned
+document-content extractor as Scan comparison. A raw source change with equal extracted document
+content is reported as a technical/source change; unavailable or undecodable evidence remains
+conservatively reported as content changed.
+
+The recognized `WebContentNotFound` operational profile excludes only structurally identified
+RequestId and TimeStamp values from document identity. Exact retained HTML and source evidence are
+unchanged. See [Deterministic Scan comparisons](scan-comparisons.md).

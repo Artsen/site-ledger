@@ -65,6 +65,11 @@ the current ready projection. See [Scan projections](scan-projections.md).
 queued triggers coalesce and changes during an active lease request one follow-up run. Evaluation
 and Scan projection jobs are independent and report progress in bounded Page batches.
 
+The scan comparison build job waits for compatible prepared results, stages materialized
+differences, validates and checksums them, and atomically activates a ready build. Failed,
+cancelled, or interrupted rebuilds preserve the prior current result. See
+[Deterministic Scan comparisons](scan-comparisons.md).
+
 If a worker exits or the process is killed, expired running jobs are reconciled on worker startup.
 When the domain record already reached a terminal state, the job follows that terminal state.
 Otherwise the job and domain record move to `interrupted`.

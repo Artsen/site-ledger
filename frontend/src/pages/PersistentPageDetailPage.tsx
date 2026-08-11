@@ -12,6 +12,7 @@ import {
   listPageCategories,
   listPageNotes,
   listPageObservations,
+  getPageChangeHistory,
   removePageCategoryExclusion,
   updatePageMetadata,
 } from "../api/client";
@@ -36,6 +37,8 @@ import type {
   PageObservation,
   PersistentPageDetail,
 } from "../types/scans";
+import type { PageChangeHistory } from "../types/comparisons";
+import { immutableComparisonQueryOptions } from "../utils/comparisonQueryOptions";
 import { formatDate, formatStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
@@ -129,6 +132,7 @@ export function PersistentPageDetailPage() {
         tabs={[
           { id: "overview", label: "Overview" },
           { id: "scans", label: "Scans", count: value.observation_count },
+          { id: "history", label: "Change History" },
           { id: "links", label: "Links" },
           { id: "browser", label: "Browser evidence" },
           { id: "notes", label: "Notes", count: value.note_count },
@@ -141,6 +145,7 @@ export function PersistentPageDetailPage() {
         {tab === "scans" ? (
           <ScansTab siteId={siteId} resourceId={resourceId} />
         ) : null}
+        {tab === "history" ? <ChangeHistoryTab siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "links" ? <LinksTab detail={page.data} /> : null}
         {tab === "browser" ? <BrowserEvidenceTab siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "notes" ? (
@@ -156,6 +161,27 @@ export function PersistentPageDetailPage() {
       </div>
     </PageFrame>
   );
+}
+
+function ChangeHistoryTab({ siteId, resourceId }: { siteId: string; resourceId: string }) {
+  const pagination = useUrlPagination({ prefix: "change_history" });
+  const history = useQuery({
+    queryKey: ["page-change-history", siteId, resourceId, pagination.limit, pagination.offset],
+    queryFn: () => getPageChangeHistory(siteId, resourceId, `?limit=${pagination.limit}&offset=${pagination.offset}`),
+    ...immutableComparisonQueryOptions,
+  });
+  useEffect(() => pagination.ensureValid(history.data?.total), [history.data?.total, pagination]);
+  const controls = history.data ? <PaginatedTableControls total={history.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="Page observation" /> : null;
+  if (history.isLoading) return <LoadingBlock label="Loading Page Change History..." />;
+  if (history.error) return <ErrorBanner error={history.error} title="Could not load Page Change History" />;
+  if (!history.data?.items.length) return <EmptyState title="No change history" message="This Page has no retained Site observations." />;
+  return <section className="space-y-4"><p className="text-sm text-stone-600">Each entry compares to the previous successful Page observation. Intervening Scan gaps remain explicit.</p>{controls}<ChangeHistoryTable items={history.data.items} />{controls}</section>;
+}
+
+function ChangeHistoryTable({ items }: { items: PageChangeHistory["items"] }) {
+  const values = { scan: (item: PageChangeHistory["items"][number]) => item.scan_id, observed: (item: PageChangeHistory["items"][number]) => item.observed_at, status: (item: PageChangeHistory["items"][number]) => item.http_status ?? item.fetch_state, change: (item: PageChangeHistory["items"][number]) => item.change_label, gaps: (item: PageChangeHistory["items"][number]) => item.intervening_scan_count };
+  const { sortedItems, sort, changeSort } = useTableSort(items, values);
+  return <div className="overflow-x-auto border-y border-stone-200"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{[["scan", "Scan"], ["observed", "Observed"], ["status", "HTTP / fetch"], ["change", "Change from previous"], ["gaps", "Intervening Scans"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}<th className="px-3 py-2">Evidence</th></tr></thead><tbody>{sortedItems.map((item) => <tr key={item.snapshot_id} className="border-t border-stone-100 align-top"><td className="px-3 py-2 font-medium">Scan {item.scan_id}<span className="block text-xs text-stone-500">{formatStatus(item.scan_status)}</span></td><td className="px-3 py-2">{formatDate(item.observed_at)}</td><td className="px-3 py-2">{item.http_status ?? formatStatus(item.fetch_state)}</td><td className="px-3 py-2"><strong>{item.change_label}</strong>{item.changed_flags.length ? <span className="block text-xs text-stone-500">{item.changed_flags.map(formatStatus).join(", ")}</span> : null}</td><td className="px-3 py-2 tabular-nums">{item.intervening_scan_count}{item.intervening_unsuccessful_observation_count ? <span className="block text-xs text-amber-700">{item.intervening_unsuccessful_observation_count} without a successful Page observation</span> : null}</td><td className="px-3 py-2"><Link className="underline" to={`/scans/${item.scan_id}/pages/${item.snapshot_id}`}>Observation {item.snapshot_id}</Link></td></tr>)}</tbody></table></div>;
 }
 
 function OverviewTab({ detail }: { detail: PersistentPageDetail }) {

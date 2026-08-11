@@ -23,8 +23,14 @@ from app.services.job_types import (
     JOB_STATUS_FAILED,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
     JOB_TYPE_SCAN,
+    JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
+)
+from app.services.scan_comparisons import (
+    ComparisonBuildCancelled,
+    execute_comparison_build,
+    mark_comparison_build_terminal,
 )
 from app.services.scan_execution import ScanExecutionCoordinator
 from app.services.scan_projections import (
@@ -233,6 +239,14 @@ class ScanProjectionJobHandler:
                         unit="rows",
                     ),
                 )
+                from app.services.scan_comparisons import (
+                    queue_adjacent_comparison_for_scan,
+                    queue_waiting_comparisons_for_scan,
+                )
+
+                queue_waiting_comparisons_for_scan(db, build.scan_id)
+                queue_adjacent_comparison_for_scan(db, build.scan_id)
+                db.commit()
                 return HandlerResult(
                     result_json={
                         "scan_id": build.scan_id,
@@ -242,6 +256,42 @@ class ScanProjectionJobHandler:
                     }
                 )
         except ProjectionBuildCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
+
+class ScanComparisonJobHandler:
+    def __init__(self, session_factory: Callable[[], Session], store: LocalContentStore):
+        self.session_factory = session_factory
+        self.store = store
+
+    async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
+        build_id = int(job.payload_json.get("comparison_build_id", 0))
+        if not build_id:
+            raise ValueError("Comparison job is missing comparison_build_id.")
+        try:
+            with self.session_factory() as db:
+                build = execute_comparison_build(
+                    db,
+                    build_id,
+                    store=self.store,
+                    should_cancel=context.check_cancelled,
+                    progress=lambda phase, current, total: context.progress(
+                        phase=phase,
+                        current_operation=phase.replace("_", " ").title(),
+                        current=current,
+                        total=total,
+                        unit="rows",
+                    ),
+                )
+                return HandlerResult(
+                    result_json={
+                        "comparison_id": build.scan_comparison_id,
+                        "comparison_build_id": build.id,
+                        "comparison_version": build.comparison_version,
+                        "checksum_sha256": build.comparison_checksum_sha256,
+                    }
+                )
+        except ComparisonBuildCancelled as exc:
             raise JobCancelled(str(exc)) from exc
 
 
@@ -321,6 +371,7 @@ def build_handler_registry(
             JOB_TYPE_SCAN: ScanJobHandler(session_factory, store),
             JOB_TYPE_SOURCE_REFRESH: SourceRefreshJobHandler(session_factory),
             JOB_TYPE_SCAN_PROJECTION_BUILD: ScanProjectionJobHandler(session_factory),
+            JOB_TYPE_SCAN_COMPARISON_BUILD: ScanComparisonJobHandler(session_factory, store),
             JOB_TYPE_CATEGORY_RULE_EVALUATION: CategoryRuleEvaluationJobHandler(session_factory),
         }
     )
@@ -434,6 +485,14 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 "cancelled",
                 "Projection build cancelled by user.",
             )
+        elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
+            mark_comparison_build_terminal(
+                db,
+                int(job.payload_json.get("comparison_build_id", 0)),
+                "cancelled",
+                "cancelled",
+                "Comparison build cancelled by user.",
+            )
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -467,6 +526,14 @@ def _mark_domain_interrupted(
                 reason,
                 "Worker interrupted during projection build.",
             )
+        elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
+            mark_comparison_build_terminal(
+                db,
+                int(job.payload_json.get("comparison_build_id", 0)),
+                "failed",
+                reason,
+                "Worker interrupted during comparison build.",
+            )
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -499,6 +566,14 @@ def _mark_domain_failed(
             mark_projection_build_terminal(
                 db,
                 int(job.payload_json.get("projection_build_id", 0)),
+                "failed",
+                type(exc).__name__,
+                str(exc),
+            )
+        elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
+            mark_comparison_build_terminal(
+                db,
+                int(job.payload_json.get("comparison_build_id", 0)),
                 "failed",
                 type(exc).__name__,
                 str(exc),

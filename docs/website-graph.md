@@ -147,6 +147,6 @@ Page-link based; rendered DOM and browser-network evidence are also excluded. Se
 
 Future semantic layouts may add Page text extraction, embeddings, projection coordinates, topic
 clusters, or similarity edges without changing current topology semantics. Future exploded page
-section graphs can add section node kinds and containment edges. Future scan comparison can decorate
-nodes and edges as added, removed, changed, or status-changed. None of those persistence models or
-algorithms are currently implemented.
+section graphs can add section node kinds and containment edges. Deterministic Scan comparison
+materializes link-edge changes by stable source/target WebResource identity, but does not decorate
+the graph renderer in this release. See [Deterministic Scan comparisons](scan-comparisons.md).

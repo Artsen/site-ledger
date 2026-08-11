@@ -403,6 +403,7 @@ class ScanDeletePreview(BaseModel):
     snapshots: int
     link_occurrences: int
     resource_reference_occurrences: int = 0
+    comparisons_affected: int = 0
     resources_observed: int = 0
     resources_discovered: int = 0
     unique_resources: int
@@ -428,6 +429,7 @@ class ScanDeleteResult(BaseModel):
     snapshots_deleted: int
     link_occurrences_deleted: int
     resource_reference_occurrences_deleted: int = 0
+    comparisons_deleted: int = 0
     resources_deleted: int
     html_blob_records_deleted: int
     html_blob_files_deleted: int

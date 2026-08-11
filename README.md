@@ -211,6 +211,7 @@ storage, graph queries, background jobs, Page history, and reuse are covered by 
 - [Browser-rendered observations](docs/browser-rendered-observations.md)
 - [Resource Inventory](docs/resource-inventory.md)
 - [AI Document Sources](docs/ai-document-sources.md)
+- [Deterministic Scan comparisons](docs/scan-comparisons.md)
 
 ## Current Limitations
 
@@ -226,7 +227,7 @@ storage, graph queries, background jobs, Page history, and reuse are covered by 
 
 ## Roadmap
 
-Future direction is designed to support browser-rendered observations, screenshots, asset
-inventories, deterministic scan and environment comparisons, findings, accessibility and
+Future direction is designed to support screenshots, richer asset
+inventories, environment comparisons, findings, accessibility and
 performance observations, analytics integrations, semantic analysis, and investigation workflow.
 These capabilities are planned areas, not current product claims.

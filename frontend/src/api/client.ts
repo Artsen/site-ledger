@@ -4,6 +4,7 @@ import type { RenderedObservationIndexList, ResourceDetail, ResourceHistoryList,
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import type { AiDeletePreview, AiDiscoveryCandidate, AiDocumentReference, AiDocumentRefresh, AiDocumentSnapshot, AiDocumentSource, AiDocumentSettings, AiValidation, Paginated } from "../types/aiDocuments";
+import type { ComparisonLink, ComparisonPage, ComparisonResource, ComparisonResultList, OccurrenceDiff, PageChangeHistory, ScanComparisonBuild, ScanComparisonList, ScanComparisonOverview, SourceDiff } from "../types/comparisons";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -84,6 +85,22 @@ export const createSite = (payload: SitePayload) => request<Site>("/api/sites", 
 export const updateSite = (id: string, payload: Partial<SitePayload>) => request<Site>(`/api/sites/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 export const deleteSite = (id: string) => request<{ deleted_site_id: number }>(`/api/sites/${id}`, { method: "DELETE" });
 export const listSiteScans = (id: string, query = "") => request<SiteScans>(`/api/sites/${id}/scans${query}`);
+export const listComparisons = (siteId: string, query = "") => request<ScanComparisonList>(`/api/sites/${siteId}/comparisons${query}`);
+export const createComparison = (siteId: string, baselineScanId: number, targetScanId: number) => request<ScanComparisonOverview>(`/api/sites/${siteId}/comparisons`, { method: "POST", body: JSON.stringify({ baseline_scan_id: baselineScanId, target_scan_id: targetScanId }) });
+export const getComparison = (siteId: string, comparisonId: string) => request<ScanComparisonOverview>(`/api/sites/${siteId}/comparisons/${comparisonId}`);
+export const getComparisonStatus = (siteId: string, comparisonId: string) => request<ScanComparisonOverview>(`/api/sites/${siteId}/comparisons/${comparisonId}/status`);
+export const rebuildComparison = (siteId: string, comparisonId: string) => request<ScanComparisonBuild>(`/api/sites/${siteId}/comparisons/${comparisonId}/rebuild`, { method: "POST" });
+export const cancelComparison = (siteId: string, comparisonId: string) => request<ScanComparisonOverview>(`/api/sites/${siteId}/comparisons/${comparisonId}/cancel`, { method: "POST" });
+export const deleteComparison = (siteId: string, comparisonId: string) => request<{ deleted_comparison_id: number }>(`/api/sites/${siteId}/comparisons/${comparisonId}`, { method: "DELETE" });
+export const listComparisonPages = (siteId: string, comparisonId: string, query = "") => request<ComparisonResultList<ComparisonPage>>(`/api/sites/${siteId}/comparisons/${comparisonId}/pages${query}`);
+export const getComparisonPage = (siteId: string, comparisonId: string, resourceId: string) => request<ComparisonPage>(`/api/sites/${siteId}/comparisons/${comparisonId}/pages/${resourceId}`);
+export const getComparisonPageSourceDiff = (siteId: string, comparisonId: string, resourceId: string, mode: "exact" | "meaningful" = "exact") => request<SourceDiff>(`/api/sites/${siteId}/comparisons/${comparisonId}/pages/${resourceId}/source-diff?mode=${mode}`);
+export const listComparisonResources = (siteId: string, comparisonId: string, query = "") => request<ComparisonResultList<ComparisonResource>>(`/api/sites/${siteId}/comparisons/${comparisonId}/resources${query}`);
+export const getComparisonResource = (siteId: string, comparisonId: string, resourceId: string) => request<ComparisonResource>(`/api/sites/${siteId}/comparisons/${comparisonId}/resources/${resourceId}`);
+export const listComparisonLinks = (siteId: string, comparisonId: string, query = "") => request<ComparisonResultList<ComparisonLink>>(`/api/sites/${siteId}/comparisons/${comparisonId}/links${query}`);
+export const getComparisonLink = (siteId: string, comparisonId: string, sourceResourceId: string, targetResourceId: string) => request<ComparisonLink>(`/api/sites/${siteId}/comparisons/${comparisonId}/links/${sourceResourceId}/${targetResourceId}`);
+export const getComparisonLinkOccurrences = (siteId: string, comparisonId: string, sourceResourceId: string, targetResourceId: string, query = "") => request<OccurrenceDiff>(`/api/sites/${siteId}/comparisons/${comparisonId}/links/${sourceResourceId}/${targetResourceId}/occurrences${query}`);
+export const getPageChangeHistory = (siteId: string, resourceId: string, query = "") => request<PageChangeHistory>(`/api/sites/${siteId}/pages/${resourceId}/change-history${query}`);
 export const listSources = (siteId: string, query = "") => request<UrlSourceList>(`/api/sites/${siteId}/sources${query}`);
 export const createSource = (siteId: string, payload: Partial<UrlSource>) => request<UrlSource>(`/api/sites/${siteId}/sources`, { method: "POST", body: JSON.stringify(payload) });
 export const deleteSource = (siteId: string, sourceId: string) => request<{ deleted_source_id: number }>(`/api/sites/${siteId}/sources/${sourceId}`, { method: "DELETE" });

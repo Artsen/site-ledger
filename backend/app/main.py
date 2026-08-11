@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.ai_document_routes import router as ai_document_router
 from app.api.category_rule_routes import router as category_rule_router
+from app.api.comparison_routes import router as comparison_router
 from app.api.routes import router
 from app.config import get_settings
 from app.product import API_TITLE, API_VERSION, PRODUCT_DESCRIPTION
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(ai_document_router)
     app.include_router(category_rule_router)
+    app.include_router(comparison_router)
     return app
 
 
