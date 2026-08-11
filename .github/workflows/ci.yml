@@ -20,11 +20,6 @@ jobs:
     defaults:
       run:
         working-directory: backend
-    env:
-      SCANNER_DATABASE_URL: sqlite:///${{ runner.temp }}/site-ledger-ci.db
-      SCANNER_HTML_STORAGE_ROOT: ${{ runner.temp }}/site-ledger-html
-      SCANNER_AI_DOCUMENT_STORAGE_ROOT: ${{ runner.temp }}/site-ledger-ai-documents
-      SCANNER_RENDERED_ARTIFACT_STORAGE_ROOT: ${{ runner.temp }}/site-ledger-rendered
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +33,12 @@ jobs:
           version: "0.12.3"
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
+      - name: Configure disposable backend storage
+        run: |
+          echo "SCANNER_DATABASE_URL=sqlite:///$RUNNER_TEMP/site-ledger-ci.db" >> "$GITHUB_ENV"
+          echo "SCANNER_HTML_STORAGE_ROOT=$RUNNER_TEMP/site-ledger-html" >> "$GITHUB_ENV"
+          echo "SCANNER_AI_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/site-ledger-ai-documents" >> "$GITHUB_ENV"
+          echo "SCANNER_RENDERED_ARTIFACT_STORAGE_ROOT=$RUNNER_TEMP/site-ledger-rendered" >> "$GITHUB_ENV"
       - name: Verify backend lockfile
         run: uv lock --check
       - name: Sync backend dependencies
