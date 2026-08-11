@@ -522,7 +522,7 @@ async function mockComparisonApi(page: Page) {
     id: 9,
     scan_comparison_id: 7,
     comparison_version: "scan-comparison-v2",
-    algorithm_identity: "scan-comparison-v2|source-signals-v1|incapsula-cb-v1|page-v2|resource-v1|link-v1|scan-projection-v1",
+    algorithm_identity: "scan-comparison-v2|source-signals-v1|document-content-v2|incapsula-cb-v1|page-v2|resource-v1|link-v1|scan-projection-v1",
     status: "ready",
     baseline_projection_build_id: 4,
     target_projection_build_id: 5,

@@ -335,6 +335,77 @@ def test_source_diff_exact_retains_and_meaningful_suppresses_only_incapsula_cb(
     assert meaningful.diff_text == ""
 
 
+def test_web_content_not_found_diagnostics_remain_source_evidence(db_session, tmp_path) -> None:
+    site, baseline, target, resources = _fixture(db_session)
+    store = LocalContentStore(tmp_path / "content")
+    before = db_session.scalar(
+        select(ResourceSnapshot).where(
+            ResourceSnapshot.scan_id == baseline.id,
+            ResourceSnapshot.resource_id == resources[1].id,
+        )
+    )
+    after = db_session.scalar(
+        select(ResourceSnapshot).where(
+            ResourceSnapshot.scan_id == target.id,
+            ResourceSnapshot.resource_id == resources[1].id,
+        )
+    )
+    assert before is not None and after is not None
+    baseline_html = _web_content_not_found_html("request-a", "time-a")
+    target_html = _web_content_not_found_html("request-b", "time-b")
+    before_blob = store.put_html(db_session, baseline_html, "text/html", "utf-8")
+    after_blob = store.put_html(db_session, target_html, "text/html", "utf-8")
+    before.html_blob_id = before_blob.id
+    before.raw_html_sha256 = before_blob.sha256
+    after.html_blob_id = after_blob.id
+    after.raw_html_sha256 = after_blob.sha256
+    db_session.add(
+        SitePage(
+            website_property_id=site.id,
+            resource_id=resources[1].id,
+            workflow_status="unreviewed",
+        )
+    )
+    db_session.commit()
+    _prepare(db_session, baseline, target)
+    comparison = create_comparison(db_session, site.id, baseline.id, target.id)
+    build = create_comparison_build(db_session, comparison.id)
+    db_session.commit()
+    ready = execute_comparison_build(db_session, build.id, store=store)
+
+    page = db_session.scalar(
+        select(ScanComparisonPageResult).where(
+            ScanComparisonPageResult.comparison_build_id == ready.id,
+            ScanComparisonPageResult.resource_id == resources[1].id,
+        )
+    )
+    exact = page_source_diff(
+        db_session, store, site.id, comparison.id, resources[1].id, mode="exact"
+    )
+    meaningful = page_source_diff(
+        db_session, store, site.id, comparison.id, resources[1].id, mode="meaningful"
+    )
+    history = page_change_history(
+        db_session, site.id, resources[1].id, store=store, limit=50, offset=0
+    )
+
+    assert page is not None
+    assert page.exact_source_state == "changed"
+    assert page.normalized_source_state == "changed"
+    assert page.document_content_state == "same"
+    assert page.metadata_state == "same"
+    assert page.technical_state == "changed"
+    assert page.primary_change_class == "technical_change"
+    assert page.source_difference_categories_json == ["unclassified"]
+    assert exact is not None and "request-a" in exact.diff_text and "request-b" in exact.diff_text
+    assert meaningful is not None
+    assert "request-a" in meaningful.diff_text and "request-b" in meaningful.diff_text
+    assert "time-a" in meaningful.diff_text and "time-b" in meaningful.diff_text
+    assert history is not None
+    assert history.items[1].changed_flags == ["source"]
+    assert history.items[1].change_label == "Technical/source change"
+
+
 def test_page_change_history_tracks_observation_gaps(db_session) -> None:
     site, baseline, target, resources = _fixture(db_session)
     gap = Scan(
@@ -581,3 +652,13 @@ def _prepare(db_session, *scans: Scan) -> None:
         build = create_projection_build(db_session, scan.id)
         db_session.commit()
         execute_projection_build(db_session, build.id)
+
+
+def _web_content_not_found_html(request_id: str, timestamp: str) -> bytes:
+    return (
+        "<!DOCTYPE html><html><head><title>WebContentNotFound</title></head><body>"
+        "<h1>The requested content does not exist.</h1><p></p><ul>"
+        "<li>HttpStatusCode: 404</li><li>ErrorCode: WebContentNotFound</li>"
+        f"<li>RequestId : {request_id}</li><li>TimeStamp : {timestamp}</li>"
+        "</ul></body></html>"
+    ).encode()
