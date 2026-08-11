@@ -93,6 +93,8 @@ behavior. Keep storage behind the existing content-store abstraction.
 - parsers.ai_documents and storage.ai_document_store own deterministic AI index parsing and exact
   AI-document evidence; this evidence never uses ResourceSnapshot or Resource Inventory bodies.
 - services.scan_* owns scan inputs, queries, and deletion.
+- services.source_comparison owns exact/normalized source analysis and versioned deterministic
+  document-content extraction; these layers must remain distinct.
 - services.scan_projections owns versioned builds, validation, atomic activation, and fallback
   metadata. services.projection_queries owns projection-backed Page, Resource, and graph reads.
 - services.page_queries owns persistent Page catalogs and observation history.

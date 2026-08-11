@@ -47,6 +47,10 @@ a deterministic checksum. It pins both projection build IDs and copies each proj
 algorithm identity, checksum, and build timestamp. Projection FKs use SET NULL, so future
 projection garbage collection does not erase provenance.
 
+The comparison algorithm identity includes `document-content-v2`. Changing deterministic
+document-content extraction semantics requires a new extractor identity and a rebuild; it does not
+change `scan-projection-v1` or rewrite retained evidence.
+
 Page, Resource, Link, and summary rows are materialized by build. Their IDs can later be referenced
 by deterministic Findings, but this release creates no Finding records.
 
@@ -116,6 +120,20 @@ volatile rules. It is not a document-content hash. The built-in Incapsula rule r
 `cb` query value in a `script[src]` whose URL path is exactly `/_Incapsula_Resource`. It does not
 normalize other parameters, arbitrary `cb` values, WordPress `ver`, script IDs, numeric values, or
 generated-looking JSON.
+
+Document content is a separate deterministic visible-text representation. Its default profile
+removes non-visible script, style, noscript, template, and SVG elements, then hashes whitespace-
+collapsed visible text. A narrow `web_content_not_found_v1` profile recognizes only the retained
+operational response structure consisting of a `WebContentNotFound` title, the fixed missing-content
+heading, an empty paragraph, and four ordered list fields for HTTP 404, error code, RequestId, and
+TimeStamp. It replaces only the RequestId and TimeStamp values with stable diagnostic sentinels.
+The error identity, status, and message remain document content.
+
+This profile does not normalize source. Exact and Meaningful source diffs continue to show the
+diagnostic values, and normalized source remains changed. Ordinary Pages mentioning RequestId,
+TimeStamp, dates, IDs, numbers, hashes, or error text do not qualify unless the complete structural
+fingerprint matches. This is deterministic template-aware extraction, not semantic understanding
+or generic error-page suppression.
 
 Primary classification precedence is substantive document change, meaningful metadata change,
 technical change, normalization only, no tracked change, then indeterminate. Dependency, runtime,
