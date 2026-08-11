@@ -26,6 +26,7 @@ observations from separate scans without erasing the evidence captured by each s
 - Displays Site-scoped timestamps in an optional IANA timezone without changing stored evidence.
 - Classifies individual link occurrences by source-DOM role with explicit rule provenance.
 - Stores exact HTML responses as compressed, content-addressed evidence.
+- Extracts versioned deterministic Page outlines and direct source-text sections from retained HTML.
 - Records page metadata, redirect chains, errors, and inbound/outgoing link provenance.
 - Uses conditional HTTP revalidation and deterministic parsed-result reuse when safe.
 - Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
@@ -57,6 +58,8 @@ See [Resource Inventory](docs/resource-inventory.md) for classification, provena
 boundaries.
 See [Scan projections](docs/scan-projections.md) for terminal-result indexing, fallback, and rebuild
 behavior.
+See [Structured Page Content](docs/structured-page-content.md) for source-text extraction,
+historical preparation, and Content-tab semantics.
 See [Page Category Rules](docs/page-category-rules.md) and
 [Site display timezones](docs/site-timezones.md) for mutable Site organization and presentation.
 
@@ -123,6 +126,8 @@ python -m app.worker
 
 Historical terminal Scans can prepare optimized results with
 `python -m app.scan_projections build-missing --limit 25` from `backend`.
+Historical HTML can prepare structured Page content with
+`python -m app.structured_content build-missing --site-id 1 --limit 500` from `backend`.
 Category Rule performance can be measured with `python -m app.category_rule_benchmark`.
 
 Run the frontend in a third terminal:
@@ -208,6 +213,7 @@ storage, graph queries, background jobs, Page history, and reuse are covered by 
 - [Graph performance](docs/graph-performance.md)
 - [Page history and reuse](docs/page-history-and-reuse.md)
 - [Page workspaces](docs/page-workspaces.md)
+- [Structured Page Content](docs/structured-page-content.md)
 - [Browser-rendered observations](docs/browser-rendered-observations.md)
 - [Resource Inventory](docs/resource-inventory.md)
 - [AI Document Sources](docs/ai-document-sources.md)
