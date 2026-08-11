@@ -685,15 +685,9 @@ def list_runs(
     }[sort]
     order = sort_column.desc() if direction == "desc" else sort_column.asc()
     id_order = (
-        PageCategoryRuleRun.id.desc()
-        if direction == "desc"
-        else PageCategoryRuleRun.id.asc()
+        PageCategoryRuleRun.id.desc() if direction == "desc" else PageCategoryRuleRun.id.asc()
     )
-    items = list(
-        db.scalars(
-            query.order_by(order, id_order).limit(limit).offset(offset)
-        )
-    )
+    items = list(db.scalars(query.order_by(order, id_order).limit(limit).offset(offset)))
     return CategoryRuleRunList(
         items=[CategoryRuleRunRead.model_validate(item) for item in items],
         total=total,

@@ -48,9 +48,7 @@ def test_snapshot_context_excludes_ad_hoc_and_non_html_observations(db_session) 
     ad_hoc_scan = _scan(db_session, None)
     ad_hoc = _snapshot(db_session, ad_hoc_scan.id, resource.id, "text/html", "html_page")
     resource_scan = _scan(db_session, site.id)
-    document = _snapshot(
-        db_session, resource_scan.id, resource.id, "application/pdf", "document"
-    )
+    document = _snapshot(db_session, resource_scan.id, resource.id, "application/pdf", "document")
     db_session.add(SitePage(website_property_id=site.id, resource_id=resource.id))
     db_session.commit()
 

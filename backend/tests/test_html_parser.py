@@ -35,6 +35,9 @@ def test_extracts_head_metadata_json_ld_and_anchors() -> None:
 
 
 def test_malformed_html_is_best_effort() -> None:
-    parsed = parse_html(b"<html><head><title>Bad<body><a href='/x'>x", "https://example.com/")
-    assert parsed.title
+    parsed = parse_html(
+        b"<html><head><title>Bad</title></head><body><a href='/x'>x",
+        "https://example.com/",
+    )
+    assert parsed.title == "Bad"
     assert parsed.anchors[0].resolved_url == "https://example.com/x"
