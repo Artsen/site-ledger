@@ -29,6 +29,11 @@ link to the workspace only for HTML Page evidence with that exact association; o
 ad hoc Scans, missing legacy associations, and non-HTML Resources do not produce inferred links or
 create `SitePage` rows during reads.
 
+The Content tab selects the latest successful retained HTML observation for the Site and Page and
+shows its versioned structured source outline. The exact Scan observation also has a Content tab.
+Historical blobs remain explicitly Not prepared until built, and all extracted text is rendered as
+escaped plain text. See [Structured Page Content](structured-page-content.md).
+
 ## Workspace
 
 The persistent Page route provides URL-backed Overview, Scans, Links, and Notes tabs. Tabs load

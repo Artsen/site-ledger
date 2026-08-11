@@ -35,6 +35,8 @@ current implementations.
   RenderedArtifact, and bounded event rows preserve that evidence without changing static facts.
 - HtmlParseArtifact, HtmlParseAnchor, and HtmlParseResourceReference store reusable deterministic
   parse output.
+- HtmlStructuredContentArtifact and HtmlStructuredContentSection store versioned, ContentBlob-scoped
+  heading hierarchy and direct source text without link resolution.
 - Scan stores one bounded collection run and its copied effective scope.
 - UrlSource, SourceRefresh, and UrlSourceEntry store URL-source configuration and Inventory.
 - AiDocumentRefresh, AiDocumentSnapshot, AiDocumentReference, and AiDocumentBlob preserve immutable
@@ -55,6 +57,8 @@ Observation where the implementation names would be unnecessarily technical.
 - crawler.safe_fetch performs bounded HTTP GET requests and validates redirects.
 - crawler.html_parser extracts head metadata, anchors, and embedded Resource references from
   best-effort HTML.
+- crawler.structured_content extracts bounded source-derived outlines and sections independently
+  from comparison document identity.
 - crawler.static_crawler performs breadth-first traversal and persists partial results.
 - storage.content_store stores exact response bytes as gzip-compressed, content-addressed blobs.
 
@@ -70,6 +74,10 @@ services.source_comparison owns exact and normalized source analysis plus versio
 document-content extraction. Source normalization and document-content profiles are independent:
 template-aware exclusion from document identity never rewrites retained HTML or Meaningful source
 evidence.
+
+services.structured_content owns ContentBlob-scoped extraction, validation, reuse, rebuild, and
+historical preparation. It does not modify raw HTML, parse artifacts, Scan projections, or Scan
+comparison identities. See [Structured Page Content](structured-page-content.md).
 
 Terminal Scans enqueue a durable projection build after evidence commits. Active and missing-build
 reads remain dynamic; compatible ready builds route Page, Resource, summary, and graph reads through
@@ -125,8 +133,8 @@ Inventory origins. Dedicated compressed blobs preserve exact accepted text. They
 ## Durable Background Activity
 
 services.background_jobs owns queueing, claiming, leases, heartbeats, progress, cancellation, and
-worker health. A BackgroundJob has exactly one domain subject: a scan or a source refresh.
-website_property_id is filter metadata, not a polymorphic subject.
+worker health. Jobs have one constrained subject: a Scan, Source refresh, Scan comparison, or a
+supported Site-scoped operation such as Category Rule evaluation or structured-content preparation.
 
 services.job_handlers adapts claimed jobs to crawler and source-refresh services. Cancellation is
 cooperative. Workers recover expired leases on startup and reconcile terminal domain records before

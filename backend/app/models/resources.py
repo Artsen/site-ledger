@@ -171,6 +171,105 @@ class ContentBlob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     parse_artifacts: Mapped[list["HtmlParseArtifact"]] = relationship(back_populates="content_blob")
+    structured_content_artifacts: Mapped[list["HtmlStructuredContentArtifact"]] = relationship(
+        back_populates="content_blob", cascade="all, delete-orphan"
+    )
+
+
+class HtmlStructuredContentArtifact(Base):
+    __tablename__ = "html_structured_content_artifacts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    content_blob_id: Mapped[int] = mapped_column(
+        ForeignKey("content_blobs.id", ondelete="CASCADE"), index=True
+    )
+    extractor_version: Mapped[str] = mapped_column(String(64))
+    extractor_config_version: Mapped[str] = mapped_column(String(64))
+    extraction_state: Mapped[str] = mapped_column(String(32), index=True)
+    document_profile: Mapped[str] = mapped_column(String(32), index=True)
+    section_count: Mapped[int] = mapped_column(Integer, default=0)
+    heading_count: Mapped[int] = mapped_column(Integer, default=0)
+    heading_counts_json: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
+    document_word_count: Mapped[int] = mapped_column(Integer, default=0)
+    document_character_count: Mapped[int] = mapped_column(Integer, default=0)
+    document_text_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    outline_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    is_truncated: Mapped[bool] = mapped_column(default=False, index=True)
+    truncation_reasons_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    content_blob: Mapped[ContentBlob] = relationship(back_populates="structured_content_artifacts")
+    sections: Mapped[list["HtmlStructuredContentSection"]] = relationship(
+        back_populates="artifact",
+        cascade="all, delete-orphan",
+        order_by="HtmlStructuredContentSection.position",
+        foreign_keys="HtmlStructuredContentSection.artifact_id",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "content_blob_id",
+            "extractor_version",
+            "extractor_config_version",
+            name="uq_html_structured_content_artifact_identity",
+        ),
+        Index(
+            "ix_html_structured_content_artifacts_blob_state",
+            "content_blob_id",
+            "extraction_state",
+        ),
+    )
+
+
+class HtmlStructuredContentSection(Base):
+    __tablename__ = "html_structured_content_sections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    artifact_id: Mapped[int] = mapped_column(
+        ForeignKey("html_structured_content_artifacts.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    parent_section_id: Mapped[int | None] = mapped_column(
+        ForeignKey("html_structured_content_sections.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    heading_level: Mapped[int | None] = mapped_column(Integer)
+    heading_text: Mapped[str | None] = mapped_column(Text)
+    heading_dom_path: Mapped[str | None] = mapped_column(Text)
+    region_key: Mapped[str] = mapped_column(String(32), index=True)
+    region_dom_path: Mapped[str | None] = mapped_column(Text)
+    direct_text: Mapped[str] = mapped_column(Text, default="")
+    direct_text_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    section_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    subtree_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    direct_word_count: Mapped[int] = mapped_column(Integer, default=0)
+    direct_character_count: Mapped[int] = mapped_column(Integer, default=0)
+    subtree_word_count: Mapped[int] = mapped_column(Integer, default=0)
+    subtree_character_count: Mapped[int] = mapped_column(Integer, default=0)
+    child_count: Mapped[int] = mapped_column(Integer, default=0)
+    descendant_count: Mapped[int] = mapped_column(Integer, default=0)
+    block_count: Mapped[int] = mapped_column(Integer, default=0)
+    has_direct_content: Mapped[bool] = mapped_column(default=False)
+
+    artifact: Mapped[HtmlStructuredContentArtifact] = relationship(
+        back_populates="sections", foreign_keys=[artifact_id]
+    )
+    parent: Mapped["HtmlStructuredContentSection | None"] = relationship(
+        remote_side=[id], foreign_keys=[parent_section_id]
+    )
+
+    __table_args__ = (
+        UniqueConstraint("artifact_id", "position", name="uq_structured_section_position"),
+        CheckConstraint(
+            "heading_level IS NULL OR (heading_level >= 1 AND heading_level <= 6)",
+            name="ck_structured_section_heading_level",
+        ),
+        Index(
+            "ix_html_structured_content_sections_artifact_position",
+            "artifact_id",
+            "position",
+        ),
+    )
 
 
 class HtmlParseArtifact(Base):
@@ -767,7 +866,7 @@ class BackgroundJob(Base):
             "AND scan_comparison_id IS NOT NULL AND job_type = 'scan_comparison_build') OR "
             "(scan_id IS NULL AND source_refresh_id IS NULL AND scan_comparison_id IS NULL "
             "AND website_property_id IS NOT NULL "
-            "AND job_type = 'category_rule_evaluation')",
+            "AND job_type IN ('category_rule_evaluation', 'structured_content_build'))",
             name="ck_background_job_one_subject",
         ),
         Index(

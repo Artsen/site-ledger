@@ -1,4 +1,4 @@
-import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryDeletionPreview, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanProjectionBuild, ScanProjectionStatus, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, StaticFetchAttempt, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
+import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryDeletionPreview, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanProjectionBuild, ScanProjectionStatus, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, StaticFetchAttempt, StructuredContent, UrlSource, UrlSourceEntryList, UrlSourceList } from "../types/scans";
 import type { CategoryProvenance, CategoryRule, CategoryRuleCondition, CategoryRuleList, CategoryRulePreview, CategoryRuleRun, CategoryRuleRunList } from "../types/scans";
 import type { RenderedObservationIndexList, ResourceDetail, ResourceHistoryList, ResourceInventoryList, ResourceOccurrenceList, ResourceSummary } from "../types/scans";
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
@@ -126,6 +126,8 @@ export const getAiSourceDeletePreview = (sourceId: string) => request<AiDeletePr
 export const deleteAiDocumentSource = (sourceId: string) => request<{ deleted_source_id: number }>(`/api/ai-document-sources/${sourceId}`, { method: "DELETE" });
 export const listSitePages = (siteId: string, query = "") => request<PersistentPageList>(`/api/sites/${siteId}/pages${query}`);
 export const getSitePage = (siteId: string, resourceId: string) => request<PersistentPageDetail>(`/api/sites/${siteId}/pages/${resourceId}`);
+export const getPageStructuredContent = (siteId: string, resourceId: string) => request<StructuredContent>(`/api/sites/${siteId}/pages/${resourceId}/structured-content?limit=2000`);
+export const preparePageStructuredContent = (siteId: string, resourceId: string) => request<StructuredContent>(`/api/sites/${siteId}/pages/${resourceId}/structured-content/prepare?limit=2000`, { method: "POST" });
 export const listPageObservations = (siteId: string, resourceId: string, query = "") => request<PageObservationList>(`/api/sites/${siteId}/pages/${resourceId}/observations${query}`);
 export const updatePageMetadata = (siteId: string, resourceId: string, payload: { owner_label?: string | null; workflow_status?: string; category_ids?: number[] }) => request<PersistentPageDetail>(`/api/sites/${siteId}/pages/${resourceId}/metadata`, { method: "PATCH", body: JSON.stringify(payload) });
 export const listPageCategories = (siteId: string, query = "") => request<PageCategoryList>(`/api/sites/${siteId}/page-categories${query}`);
@@ -181,6 +183,8 @@ export const listSiteResourceHistory = (siteId: string, resourceId: string, quer
 export const listScanRenderedObservations = (scanId: string, query = "") => request<RenderedObservationIndexList>(`/api/scans/${scanId}/rendered-observations${query}`);
 export const listErrors = (scanId: string) => request<Snapshot[]>(`/api/scans/${scanId}/errors`);
 export const getSnapshot = (snapshotId: string) => request<Snapshot>(`/api/snapshots/${snapshotId}`);
+export const getSnapshotStructuredContent = (snapshotId: string) => request<StructuredContent>(`/api/snapshots/${snapshotId}/structured-content?limit=2000`);
+export const prepareSnapshotStructuredContent = (snapshotId: string) => request<StructuredContent>(`/api/snapshots/${snapshotId}/structured-content/prepare?limit=2000`, { method: "POST" });
 export const getStaticFetchAttempts = (snapshotId: string) => request<StaticFetchAttempt[]>(`/api/snapshots/${snapshotId}/static-fetch-attempts`);
 export const getLinks = (snapshotId: string) => request<LinkOccurrence[]>(`/api/snapshots/${snapshotId}/links`);
 export const getOutgoingLinks = (snapshotId: string, query = "") => request<OutgoingLinkList>(`/api/snapshots/${snapshotId}/outgoing-links${query}`);

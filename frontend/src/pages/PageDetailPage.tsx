@@ -2,8 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { getHtml, getInboundLinks, getLinks, getRenderedObservation, getSnapshot, getStaticFetchAttempts } from "../api/client";
+import { getHtml, getInboundLinks, getLinks, getRenderedObservation, getSnapshot, getSnapshotStructuredContent, getStaticFetchAttempts, prepareSnapshotStructuredContent } from "../api/client";
 import { RenderedObservationView } from "../components/RenderedObservationView";
+import { StructuredContentView } from "../components/StructuredContentView";
 import { LinkRoleBadge } from "../components/PageOrganization";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
@@ -45,6 +46,7 @@ export function PageDetailPage() {
     { id: "head", label: "Head" },
     { id: "links", label: "Outgoing links", count: links.data?.length },
     { id: "inbound", label: "Inbound links", count: inboundLinks.data?.summary.total_occurrences },
+    { id: "content", label: "Content" },
     { id: "html", label: "HTML" },
     ...(rendered.data ? [{ id: "rendered", label: "Rendered" }] : [])
   ];
@@ -82,6 +84,7 @@ export function PageDetailPage() {
         {tab === "head" ? <HeadView snapshot={snapshot.data} /> : null}
         {tab === "links" ? <LinksView links={links.data ?? []} loading={links.isLoading} error={links.error} /> : null}
         {tab === "inbound" ? <InboundLinksView inbound={inboundLinks.data} loading={inboundLinks.isLoading} error={inboundLinks.error} searchParams={searchParams} setSearchParams={setSearchParams} scanId={scanId} /> : null}
+        {tab === "content" ? <StructuredContentView queryKey={["snapshot-structured-content", snapshotId]} load={() => getSnapshotStructuredContent(snapshotId)} prepare={() => prepareSnapshotStructuredContent(snapshotId)} /> : null}
         {tab === "html" ? <HtmlView html={html.data ?? ""} loading={html.isLoading} error={html.error} /> : null}
         {tab === "rendered" && rendered.data ? <RenderedObservationView observation={rendered.data} /> : null}
       </div>

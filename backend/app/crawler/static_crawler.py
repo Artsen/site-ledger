@@ -40,6 +40,7 @@ from app.services.cache_policy import (
 from app.services.parse_artifacts import get_or_create_artifact
 from app.services.repositories import get_or_create_resource
 from app.services.site_pages import ensure_site_page
+from app.services.structured_content import get_or_create_structured_artifact
 from app.storage.content_store import LocalContentStore
 
 TRANSIENT_FETCH_ERRORS = {
@@ -326,9 +327,14 @@ class StaticPageCrawler:
                     revalidation_artifact_result = get_or_create_artifact(
                         self.db,
                         blob=candidate.snapshot.blob,
-                        content=self.store.get(candidate.snapshot.blob),
+                        store=self.store,
                         resolution_base_url=candidate.snapshot.final_url
                         or candidate.snapshot.requested_url,
+                    )
+                    get_or_create_structured_artifact(
+                        self.db,
+                        candidate.snapshot.blob,
+                        store=self.store,
                     )
                     revalidation_artifact = revalidation_artifact_result.artifact
                     anchors = revalidation_artifact_result.anchors
@@ -422,6 +428,12 @@ class StaticPageCrawler:
                 if blob
                 else None
             )
+            if blob is not None:
+                get_or_create_structured_artifact(
+                    self.db,
+                    blob,
+                    content=result.content,
+                )
             artifact = artifact_result.artifact if artifact_result else None
             anchors = artifact_result.anchors if artifact_result else []
             resource_references = artifact_result.resource_references if artifact_result else []

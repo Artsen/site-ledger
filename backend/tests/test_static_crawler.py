@@ -10,6 +10,7 @@ from app.crawler.static_crawler import StaticPageCrawler, _retry_after_ms
 from app.models import (
     ContentBlob,
     HtmlParseArtifact,
+    HtmlStructuredContentArtifact,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -647,6 +648,7 @@ async def test_repeat_scan_revalidates_and_reuses_parse_artifact(db_session, tmp
     )
     assert db_session.query(ContentBlob).count() == 1
     assert db_session.query(HtmlParseArtifact).count() == 1
+    assert db_session.query(HtmlStructuredContentArtifact).count() == 1
     assert requests[-1].headers["if-none-match"] == '"v1"'
 
 

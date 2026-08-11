@@ -28,6 +28,7 @@ from app.services.job_types import (
     JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
+    JOB_TYPE_STRUCTURED_CONTENT_BUILD,
     TERMINAL_JOB_STATUSES,
     ensure_transition,
 )
@@ -150,6 +151,38 @@ def enqueue_category_rule_job(
         website_property_id=site_id,
         priority=priority,
         payload={"run_id": run_id, "site_id": site_id, "rerun_requested": False},
+    )
+
+
+def enqueue_structured_content_job(
+    db: Session,
+    site_id: int,
+    *,
+    scan_id: int | None = None,
+    limit: int | None = None,
+    priority: int = 115,
+) -> BackgroundJob:
+    scope = f"scan-{scan_id}" if scan_id is not None else "site"
+    limit_key = str(limit) if limit is not None else "all"
+    active = list(
+        db.scalars(
+            select(BackgroundJob).where(
+                BackgroundJob.job_type == JOB_TYPE_STRUCTURED_CONTENT_BUILD,
+                BackgroundJob.website_property_id == site_id,
+                BackgroundJob.status.in_(ACTIVE_JOB_STATUSES),
+            )
+        )
+    )
+    for job in active:
+        if job.payload_json.get("scan_id") == scan_id and job.payload_json.get("limit") == limit:
+            return job
+    return _enqueue_job(
+        db,
+        job_type=JOB_TYPE_STRUCTURED_CONTENT_BUILD,
+        dedupe_key=f"structured-content:{site_id}:{scope}:{limit_key}:{datetime.now(UTC).isoformat()}",
+        website_property_id=site_id,
+        priority=priority,
+        payload={"site_id": site_id, "scan_id": scan_id, "limit": limit},
     )
 
 

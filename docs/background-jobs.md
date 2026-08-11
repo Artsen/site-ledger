@@ -1,7 +1,7 @@
 # Site Ledger Background Jobs
 
-Site Ledger executes scans, source refreshes, and terminal Scan projection builds through a
-database-backed job queue. API requests
+Site Ledger executes scans, source refreshes, terminal Scan projection and comparison builds, and
+supported Site-scoped preparation through a database-backed job queue. API requests
 persist work and return without holding an HTTP connection open for the collection run.
 
 ## Local Commands
@@ -32,9 +32,10 @@ python -m app.worker --recover-only
 
 ## Model
 
-`BackgroundJob` stores the durable unit of work. A job is tied to exactly one domain subject:
-`scan_id` for crawl/projection jobs or `source_refresh_id` for source refresh jobs. `website_property_id` is
-stored for filtering and display, but it is not the job subject.
+`BackgroundJob` stores the durable unit of work. A job has one constrained subject: `scan_id` for
+crawl/projection jobs, `source_refresh_id` for source refresh jobs, `scan_comparison_id` for
+comparison builds, or `website_property_id` for supported Site-scoped Category Rule and structured
+content operations.
 
 `JobEvent` stores coarse lifecycle events for debugging and user-visible history. It intentionally
 does not store every discovered URL or crawler detail; page snapshots, occurrences, scan seeds, and
@@ -64,6 +65,11 @@ the current ready projection. See [Scan projections](scan-projections.md).
 `category_rule_evaluation` is a Site-scoped durable job. Only one reconciliation executes per Site;
 queued triggers coalesce and changes during an active lease request one follow-up run. Evaluation
 and Scan projection jobs are independent and report progress in bounded Page batches.
+
+`structured_content_build` is a Site-scoped historical preparation job. It selects retained HTML
+ContentBlobs missing the current structured identity, commits bounded per-blob results, reports
+progress, cooperates with cancellation, and continues after individual blob failures. See
+[Structured Page Content](structured-page-content.md).
 
 The scan comparison build job waits for compatible prepared results, stages materialized
 differences, validates and checksums them, and atomically activates a ready build. Failed,

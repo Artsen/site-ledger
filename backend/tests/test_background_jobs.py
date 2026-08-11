@@ -14,6 +14,7 @@ from app.services.background_jobs import (
     enqueue_scan_job,
     enqueue_scan_projection_job,
     enqueue_source_refresh_job,
+    enqueue_structured_content_job,
     heartbeat_job,
     recover_expired_jobs,
     register_worker,
@@ -172,6 +173,29 @@ def test_source_refresh_enqueue(db_session: Session) -> None:
 
     assert job.source_refresh_id == refresh.id
     assert db_session.get(SourceRefresh, refresh.id).status == "queued"
+
+
+def test_structured_content_job_is_site_scoped_and_dedupes_while_active(
+    db_session: Session,
+) -> None:
+    site = create_site(
+        db_session,
+        WebsitePropertyCreate(
+            name="Structured content",
+            base_url="https://content.example.com/",
+            scope_config=ScopeConfigPayload(),
+        ),
+    )
+    first = enqueue_structured_content_job(db_session, site.id, limit=500)
+    duplicate = enqueue_structured_content_job(db_session, site.id, limit=500)
+    db_session.commit()
+
+    assert duplicate.id == first.id
+    assert first.job_type == "structured_content_build"
+    assert first.website_property_id == site.id
+    assert first.scan_id is None
+    assert first.source_refresh_id is None
+    assert first.scan_comparison_id is None
 
 
 def _scan(db: Session, starting_url: str) -> Scan:
