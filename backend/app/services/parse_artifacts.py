@@ -53,7 +53,8 @@ def get_or_create_artifact(
     db: Session,
     *,
     blob: ContentBlob,
-    content: bytes,
+    content: bytes | None = None,
+    store: LocalContentStore | None = None,
     resolution_base_url: str,
     force_parse: bool = False,
 ) -> ArtifactResult:
@@ -70,6 +71,10 @@ def get_or_create_artifact(
             parsed=False,
         )
 
+    if content is None:
+        if store is None:
+            raise ValueError("Content or a content store is required to parse HTML.")
+        content = store.get(blob)
     parsed = parse_html(content, resolution_base_url)
     if existing is not None:
         return ArtifactResult(

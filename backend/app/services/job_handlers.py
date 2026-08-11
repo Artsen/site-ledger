@@ -26,6 +26,7 @@ from app.services.job_types import (
     JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
+    JOB_TYPE_STRUCTURED_CONTENT_BUILD,
 )
 from app.services.scan_comparisons import (
     ComparisonBuildCancelled,
@@ -40,6 +41,7 @@ from app.services.scan_projections import (
     mark_projection_build_terminal,
 )
 from app.services.source_refresh import execute_source_refresh
+from app.services.structured_content import build_missing_structured_content
 from app.storage.ai_document_store import LocalAiDocumentStore
 from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
@@ -352,6 +354,42 @@ class CategoryRuleEvaluationJobHandler:
         return HandlerResult(result_json=result)
 
 
+class StructuredContentBuildJobHandler:
+    def __init__(self, session_factory: Callable[[], Session], store: LocalContentStore) -> None:
+        self.session_factory = session_factory
+        self.store = store
+
+    async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
+        site_id = int(job.payload_json.get("site_id", 0))
+        if not site_id:
+            raise ValueError("Structured content job is missing site_id.")
+        scan_id_value = job.payload_json.get("scan_id")
+        limit_value = job.payload_json.get("limit")
+        with self.session_factory() as db:
+            result = build_missing_structured_content(
+                db,
+                self.store,
+                site_id=site_id,
+                scan_id=int(scan_id_value) if scan_id_value is not None else None,
+                limit=int(limit_value) if limit_value is not None else None,
+                should_cancel=context.check_cancelled,
+                progress=lambda current, total, counters: context.progress(
+                    phase="preparing",
+                    current_operation="Preparing structured Page content",
+                    current=current,
+                    total=total,
+                    unit="ContentBlobs",
+                    counters=counters,
+                ),
+            )
+        if context.check_cancelled():
+            raise JobCancelled("Structured content preparation cancelled by user.")
+        return HandlerResult(
+            status=(JOB_STATUS_COMPLETED_WITH_ERRORS if result["failed"] else JOB_STATUS_COMPLETED),
+            result_json=result,
+        )
+
+
 class JobHandlerRegistry:
     def __init__(self, handlers: dict[str, JobHandler]):
         self.handlers = handlers
@@ -373,6 +411,9 @@ def build_handler_registry(
             JOB_TYPE_SCAN_PROJECTION_BUILD: ScanProjectionJobHandler(session_factory),
             JOB_TYPE_SCAN_COMPARISON_BUILD: ScanComparisonJobHandler(session_factory, store),
             JOB_TYPE_CATEGORY_RULE_EVALUATION: CategoryRuleEvaluationJobHandler(session_factory),
+            JOB_TYPE_STRUCTURED_CONTENT_BUILD: StructuredContentBuildJobHandler(
+                session_factory, store
+            ),
         }
     )
 
