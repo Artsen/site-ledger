@@ -49,6 +49,7 @@ SCAN_COMPARISON_ALGORITHM = (
     "link-v1|scan-projection-v1"
 )
 ACTIVE_COMPARISON_BUILD_STATUSES = {"queued", "waiting_for_projections", "building"}
+NORMAL_SCAN_STOP_REASONS = {"completed", "queue_empty", "queue_exhausted"}
 COMPARISON_BATCH_SIZE = 400
 T = TypeVar("T")
 
@@ -477,7 +478,7 @@ def _coverage(db: Session, baseline: Scan, target: Scan) -> dict[str, Any]:
     for side, scan in (("baseline", baseline), ("target", target)):
         if scan.status != "completed":
             warnings.add(f"{side}_{scan.status}")
-        if scan.stop_reason and scan.stop_reason not in {"completed", "queue_empty"}:
+        if scan.stop_reason and scan.stop_reason not in NORMAL_SCAN_STOP_REASONS:
             warnings.add(f"{side}_stop_reason:{scan.stop_reason}")
             if "limit" in scan.stop_reason or scan.stop_reason.startswith("max_"):
                 warnings.add(f"{side}_stopped_by_limit")
