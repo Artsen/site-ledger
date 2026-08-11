@@ -154,9 +154,7 @@ def test_terminal_scan_queues_projection_job_but_active_scan_does_not(db_session
 
     jobs = list(
         db_session.scalars(
-            select(BackgroundJob).where(
-                BackgroundJob.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD
-            )
+            select(BackgroundJob).where(BackgroundJob.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD)
         )
     )
     assert len(jobs) == 1

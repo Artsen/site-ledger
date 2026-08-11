@@ -7,6 +7,7 @@ Revises: 202608060014
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "202608060015"
@@ -39,10 +40,18 @@ def upgrade() -> None:
         *[
             sa.Column(name, sa.Integer(), nullable=False, server_default="0")
             for name in (
-                "root_candidate_count", "document_discovered_count", "document_fetched_count",
-                "document_saved_count", "document_unchanged_count", "document_changed_count",
-                "document_failed_count", "document_skipped_count", "reference_count", "cycle_count",
-                "total_network_bytes", "total_retained_bytes",
+                "root_candidate_count",
+                "document_discovered_count",
+                "document_fetched_count",
+                "document_saved_count",
+                "document_unchanged_count",
+                "document_changed_count",
+                "document_failed_count",
+                "document_skipped_count",
+                "reference_count",
+                "cycle_count",
+                "total_network_bytes",
+                "total_retained_bytes",
             )
         ],
         sa.Column("stop_reason", sa.String(128)),
@@ -53,7 +62,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["source_refresh_id"], ["source_refreshes.id"], ondelete="CASCADE"),
         sa.UniqueConstraint("source_refresh_id"),
     )
-    op.create_index("ix_ai_document_refreshes_source_refresh_id", "ai_document_refreshes", ["source_refresh_id"], unique=True)
+    op.create_index(
+        "ix_ai_document_refreshes_source_refresh_id",
+        "ai_document_refreshes",
+        ["source_refresh_id"],
+        unique=True,
+    )
     op.create_index("ix_ai_document_refreshes_status", "ai_document_refreshes", ["status"])
     op.create_table(
         "ai_document_snapshots",
@@ -93,12 +107,34 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["refresh_id"], ["ai_document_refreshes.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["resource_id"], ["web_resources.id"]),
-        sa.ForeignKeyConstraint(["retained_blob_id"], ["ai_document_blobs.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["retained_blob_id"], ["ai_document_blobs.id"], ondelete="RESTRICT"
+        ),
         sa.UniqueConstraint("refresh_id", "resource_id", name="uq_ai_snapshot_refresh_resource"),
     )
-    for column in ("refresh_id", "resource_id", "parent_depth_min", "document_role", "document_kind", "fetch_state", "http_status", "normalized_mime_type", "fetched_at", "retained_blob_id", "raw_sha256", "parse_state", "warning_count", "change_state", "error_type"):
+    for column in (
+        "refresh_id",
+        "resource_id",
+        "parent_depth_min",
+        "document_role",
+        "document_kind",
+        "fetch_state",
+        "http_status",
+        "normalized_mime_type",
+        "fetched_at",
+        "retained_blob_id",
+        "raw_sha256",
+        "parse_state",
+        "warning_count",
+        "change_state",
+        "error_type",
+    ):
         op.create_index(f"ix_ai_document_snapshots_{column}", "ai_document_snapshots", [column])
-    op.create_index("ix_ai_snapshot_refresh_kind_id", "ai_document_snapshots", ["refresh_id", "document_kind", "id"])
+    op.create_index(
+        "ix_ai_snapshot_refresh_kind_id",
+        "ai_document_snapshots",
+        ["refresh_id", "document_kind", "id"],
+    )
     op.create_table(
         "ai_document_references",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -106,9 +142,12 @@ def upgrade() -> None:
         sa.Column("target_resource_id", sa.Integer()),
         sa.Column("child_snapshot_id", sa.Integer()),
         sa.Column("position", sa.Integer(), nullable=False),
-        sa.Column("section_title", sa.Text()), sa.Column("label", sa.Text()),
-        sa.Column("description", sa.Text()), sa.Column("raw_url", sa.Text(), nullable=False),
-        sa.Column("resolved_url", sa.Text()), sa.Column("normalized_target_url", sa.Text()),
+        sa.Column("section_title", sa.Text()),
+        sa.Column("label", sa.Text()),
+        sa.Column("description", sa.Text()),
+        sa.Column("raw_url", sa.Text(), nullable=False),
+        sa.Column("resolved_url", sa.Text()),
+        sa.Column("normalized_target_url", sa.Text()),
         sa.Column("optional", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("inferred_role", sa.String(32), nullable=False),
         sa.Column("inferred_kind", sa.String(32), nullable=False),
@@ -122,29 +161,56 @@ def upgrade() -> None:
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
-        sa.ForeignKeyConstraint(["parent_snapshot_id"], ["ai_document_snapshots.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["parent_snapshot_id"], ["ai_document_snapshots.id"], ondelete="CASCADE"
+        ),
         sa.ForeignKeyConstraint(["target_resource_id"], ["web_resources.id"]),
-        sa.ForeignKeyConstraint(["child_snapshot_id"], ["ai_document_snapshots.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["inventory_entry_id"], ["url_source_entries.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(
+            ["child_snapshot_id"], ["ai_document_snapshots.id"], ondelete="SET NULL"
+        ),
+        sa.ForeignKeyConstraint(
+            ["inventory_entry_id"], ["url_source_entries.id"], ondelete="SET NULL"
+        ),
         sa.UniqueConstraint("parent_snapshot_id", "position", name="uq_ai_reference_position"),
     )
-    for column in ("parent_snapshot_id", "target_resource_id", "child_snapshot_id", "normalized_target_url", "optional", "inferred_role", "inferred_kind", "in_scope", "scope_decision", "discovery_depth", "forms_cycle", "inventory_entry_id"):
+    for column in (
+        "parent_snapshot_id",
+        "target_resource_id",
+        "child_snapshot_id",
+        "normalized_target_url",
+        "optional",
+        "inferred_role",
+        "inferred_kind",
+        "in_scope",
+        "scope_decision",
+        "discovery_depth",
+        "forms_cycle",
+        "inventory_entry_id",
+    ):
         op.create_index(f"ix_ai_document_references_{column}", "ai_document_references", [column])
-    op.create_index("ix_ai_reference_parent_scope_id", "ai_document_references", ["parent_snapshot_id", "in_scope", "id"])
+    op.create_index(
+        "ix_ai_reference_parent_scope_id",
+        "ai_document_references",
+        ["parent_snapshot_id", "in_scope", "id"],
+    )
     op.create_table(
         "ai_document_validations",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("refresh_id", sa.Integer(), nullable=False),
-        sa.Column("snapshot_id", sa.Integer()), sa.Column("reference_id", sa.Integer()),
+        sa.Column("snapshot_id", sa.Integer()),
+        sa.Column("reference_id", sa.Integer()),
         sa.Column("severity", sa.String(16), nullable=False),
-        sa.Column("code", sa.String(64), nullable=False), sa.Column("message", sa.Text(), nullable=False),
+        sa.Column("code", sa.String(64), nullable=False),
+        sa.Column("message", sa.Text(), nullable=False),
         sa.Column("data_json", sa.JSON(), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
         sa.ForeignKeyConstraint(["refresh_id"], ["ai_document_refreshes.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["snapshot_id"], ["ai_document_snapshots.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["reference_id"], ["ai_document_references.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["reference_id"], ["ai_document_references.id"], ondelete="CASCADE"
+        ),
     )
     for column in ("refresh_id", "snapshot_id", "reference_id", "severity", "code"):
         op.create_index(f"ix_ai_document_validations_{column}", "ai_document_validations", [column])
