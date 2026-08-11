@@ -27,13 +27,21 @@ Python app package.
 - **Observation:** One scan-specific ResourceSnapshot of a Page.
 - **Scan:** One bounded collection run that produces observations.
 - **Source:** A sitemap, robots-discovered sitemap, manual URL source, or AI Document Source.
-- **Inventory:** Current URL candidates declared by Sources.
+- **Inventory:** Current URL candidates declared by Sources; this is input provenance, not observed
+  Resource evidence.
+- **Resource Inventory:** Observed or HTML-referenced non-HTML WebResource evidence and references.
 - **Graph:** A scan-specific representation of observed Pages and stored links.
 - **Activity:** Durable background execution and worker status.
 - **Evidence:** Stored responses, metadata, links, redirects, source provenance, and reuse
   provenance that support an observation.
+- **Rendered observation:** Browser-derived evidence associated with a Page observation, distinct
+  from retained static HTML.
 - **Scan projection:** A deterministic, versioned, rebuildable index derived from one terminal
   Scan's immutable evidence. It is never the original evidence.
+- **Comparison:** A deterministic relationship and versioned build comparing two terminal Scans
+  from one Site while preserving coverage semantics and immutable evidence provenance.
+- **Structured content:** A ContentBlob-scoped, versioned deterministic derivative representing
+  source-derived heading and section structure with direct text.
 
 Use Page instead of WebResource in product copy. Use Observation where Snapshot would be
 unnecessarily technical. Internal classes, API fields, routes, and developer documentation may use
@@ -54,16 +62,26 @@ Implemented capabilities include:
 - Deterministic Page Category Rules, assignment support provenance, and automatic exclusions.
 - Optional IANA Site display timezone with UTC evidence semantics.
 - Deterministic occurrence-specific link roles and classification provenance.
-- Conditional HTTP revalidation and parsed-result reuse.
-- Stored HTML evidence and parsed metadata.
+- Exact retained HTML evidence, conditional HTTP revalidation, and parse-artifact reuse.
+- ContentBlob-scoped `structured-content-v1` heading, hierarchy, region, and direct-text evidence,
+  with observation/Page inspection and historical preparation.
+- Resource Inventory for observed and referenced non-HTML Resources without general Resource-body
+  storage.
 - Inbound and outgoing link provenance.
+- Optional bounded browser-rendered observations, screenshots, rendered DOM, network, console, and
+  Page-error artifacts associated with static observations.
 - Scan-specific 2D and 3D topology graphs.
+- Immutable, versioned Scan projections for terminal result reads.
+- Deterministic same-Site Scan Comparison over Pages, Resources, and Links, including coverage,
+  exact/normalized source, document-content, metadata, technical states, exact drill-down, and
+  persistent Page Change History.
 - Scan, source, Site, and Activity lifecycle management.
 
-Browser-rendered observations, screenshots, asset inventory, complete comparisons, findings,
-accessibility and performance observations, analytics integrations, semantic analysis, and
-investigation workflow are future areas. Describe them as planned or designed to support, never as
-current behavior.
+Findings and investigation records, PageSpeed/CrUX, accessibility observations, GA4/Search Console,
+section-level comparison, structured-content full-text search, Resource/PDF body extraction,
+rendered-DOM structured extraction, environment or cross-Site comparison, scheduling and
+notifications, embeddings, RAG, and semantic/LLM interpretation are future areas. Describe them as
+planned or designed to support, never as current behavior.
 
 ## Required Stack
 
@@ -97,6 +115,18 @@ behavior. Keep storage behind the existing content-store abstraction.
   document-content extraction; these layers must remain distinct.
 - services.scan_projections owns versioned builds, validation, atomic activation, and fallback
   metadata. services.projection_queries owns projection-backed Page, Resource, and graph reads.
+- models.comparisons, services.scan_comparisons, services.comparison_queries, and
+  api.comparison_routes own deterministic Comparison builds, materialized results, coverage,
+  drill-down, and Page Change History.
+- crawler.structured_content, services.structured_content,
+  services.structured_content_queries, api.structured_content_routes,
+  HtmlStructuredContentArtifact, and HtmlStructuredContentSection own structured Page content.
+- browser.*, models.rendered, services.rendered_capture, services.rendered_queries, and api.routes
+  own bounded browser
+  capture, rendered observations, and rendered artifacts.
+- crawler.resource_classification, ResourceSnapshot/WebResource resource fields,
+  ResourceReferenceOccurrence, and services.resource_queries own Resource Inventory classification,
+  evidence, and reads.
 - services.page_queries owns persistent Page catalogs and observation history.
 - services.site_pages, services.page_categories, and services.notes own Site-scoped Page workflow.
 - services.category_rules and services.category_rule_evaluator own automatic Category provenance,
@@ -123,9 +153,15 @@ Do not rename these models or their tables for branding:
 - HtmlParseArtifact
 - Scan
 - BackgroundJob
+- RenderedObservation
+- RenderedArtifact
+- HtmlStructuredContentArtifact
+- HtmlStructuredContentSection
 - PageCategoryRule
 - ScanProjectionBuild
 - ScanProjectionState
+- ScanComparison
+- ScanComparisonBuild
 - UrlSource
 
 WebResource is the persistent Page identity. ResourceSnapshot is one Page observation. Reused
@@ -149,6 +185,11 @@ The following legacy technical identifiers are intentionally retained:
 
 Preserve these unless a dedicated compatibility migration is explicitly designed. A rename must
 never make existing local data appear missing or silently discard saved preferences.
+
+Current deterministic compatibility identifiers include `html-parser-v3-resource-references`,
+`structured-content-v1` with `default-v1`, `document-content-v2`, `scan-comparison-v2`, and
+`scan-projection-v1`. Treat identity changes as explicit versioned compatibility changes, not
+incidental refactors.
 
 ## Crawl Behavior
 
@@ -203,6 +244,23 @@ Reject deletion while active background jobs can still mutate the target.
 Saved-site scans copy effective scope. Editing a Site must not mutate historical scans. Inventory is
 input provenance, not a replacement for scan observations.
 
+## Deterministic Derivative Rules
+
+Raw retained HTML remains authoritative evidence. Structured content is derived from exact
+ContentBlob identity under a versioned extractor/configuration identity. It is not mutable Site or
+Page metadata, does not replace HtmlParseArtifact, and does not apply comparison normalization.
+RequestId and TimeStamp values preserved by structured content therefore remain distinct from the
+narrow `document-content-v2` operational-template semantics.
+
+Structured section database IDs are artifact-local, not stable cross-Scan identities. Do not add
+section-level comparison by silently changing `scan-comparison-v2`; any future section comparison
+must define and version its deterministic identity and matching semantics explicitly.
+
+Comparison never rewrites evidence. Exact evidence remains exact, normalization remains narrow and
+versioned, and absence means "Not observed in Target", not automatic removal. Technical change is
+distinct from substantive document-content change. Comparison is deterministic interpretation of
+evidence, not an LLM Finding; Findings and AI interpretation must remain downstream.
+
 ## Graph Rules
 
 The Graph is read-only and scan-specific. Nodes represent observations, with optional distinct
@@ -213,8 +271,9 @@ services.graph_config is authoritative for limits and capabilities. Filter, rank
 limit in SQL before loading large object collections. Avoid one query per node or edge.
 
 Do not persist force-layout coordinates, camera state, selection, exports, or presentation settings.
-Keep 2D and 3D renderers lazy and isolated from shared graph state. Browser-rendered observations
-and semantic layouts are future features, not reasons to alter current topology semantics.
+Keep 2D and 3D renderers lazy and isolated from shared graph state. Browser-rendered evidence stays
+separate from graph topology; semantic layouts remain future work and are not reasons to alter
+current topology semantics.
 
 ## Frontend Rules
 
@@ -277,6 +336,8 @@ Do not disable checks or weaken tests to force passing results.
 - Keep deterministic Scan comparisons versioned above immutable Scan projections; never label crawl
   absence as website removal.
 - Update README and focused documentation when behavior or architecture changes.
+- Any PR that materially changes the implemented product boundary, architecture ownership, or
+  compatibility/version identifiers documented here must update `AGENTS.md` in the same PR.
 - Never commit secrets, credentials, local databases, captured HTML, build output, or dependency
   caches.
 - Use the Artsen repository-local Git identity for commits in this repository.

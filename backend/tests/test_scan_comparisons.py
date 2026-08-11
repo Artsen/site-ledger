@@ -26,6 +26,7 @@ from app.services.comparison_queries import (
 from app.services.scan_comparisons import (
     ComparisonBuildCancelled,
     ComparisonEligibilityError,
+    _coverage,
     create_comparison,
     create_comparison_build,
     current_comparison_build,
@@ -58,6 +59,102 @@ def test_comparison_eligibility_is_same_site_terminal_and_directional(db_session
     db_session.flush()
     with pytest.raises(ComparisonEligibilityError, match="this Site"):
         create_comparison(db_session, site.id, baseline.id, target.id)
+
+
+def test_coverage_treats_queue_exhausted_as_normal_completion(db_session) -> None:
+    baseline, target = _coverage_scans(db_session)
+
+    coverage = _coverage(db_session, baseline, target)
+
+    assert coverage["coverage_state"] == "comparable"
+    assert coverage["warnings"] == []
+
+
+def test_coverage_keeps_error_and_fetch_warnings_for_exhausted_scans(db_session) -> None:
+    baseline, target = _coverage_scans(
+        db_session,
+        baseline_status="completed_with_errors",
+        target_status="completed_with_errors",
+        baseline_failed=1,
+        target_failed=2,
+    )
+
+    coverage = _coverage(db_session, baseline, target)
+
+    assert coverage["coverage_state"] == "comparable_with_warnings"
+    assert coverage["warnings"] == [
+        "baseline_completed_with_errors",
+        "baseline_fetch_failures",
+        "target_completed_with_errors",
+        "target_fetch_failures",
+    ]
+
+
+def test_coverage_keeps_page_limit_warnings(db_session) -> None:
+    baseline, target = _coverage_scans(db_session, target_reason="page_limit_reached")
+
+    coverage = _coverage(db_session, baseline, target)
+
+    assert coverage["coverage_state"] == "comparable_with_warnings"
+    assert "target_stop_reason:page_limit_reached" in coverage["warnings"]
+    assert "target_stopped_by_limit" in coverage["warnings"]
+
+
+def test_coverage_keeps_cancelled_scan_limited(db_session) -> None:
+    baseline, target = _coverage_scans(
+        db_session,
+        target_status="cancelled",
+        target_reason="cancelled_by_user",
+    )
+
+    coverage = _coverage(db_session, baseline, target)
+
+    assert coverage["coverage_state"] == "limited"
+    assert "target_cancelled" in coverage["warnings"]
+    assert "target_stop_reason:cancelled_by_user" in coverage["warnings"]
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "expected_warning"),
+    [("failed", None, None), ("interrupted", "worker_shutdown", "worker_shutdown")],
+)
+def test_coverage_keeps_failed_and_interrupted_scans_limited(
+    db_session, status: str, reason: str | None, expected_warning: str | None
+) -> None:
+    baseline, target = _coverage_scans(
+        db_session,
+        target_status=status,
+        target_reason=reason,
+    )
+
+    coverage = _coverage(db_session, baseline, target)
+
+    assert coverage["coverage_state"] == "limited"
+    assert f"target_{status}" in coverage["warnings"]
+    if expected_warning:
+        assert f"target_stop_reason:{expected_warning}" in coverage["warnings"]
+
+
+def test_coverage_keeps_unknown_abnormal_stop_reason_visible(db_session) -> None:
+    baseline, target = _coverage_scans(db_session, target_reason="upstream_aborted")
+
+    coverage = _coverage(db_session, baseline, target)
+
+    assert coverage["coverage_state"] == "comparable_with_warnings"
+    assert "target_stop_reason:upstream_aborted" in coverage["warnings"]
+
+
+def test_coverage_accepts_legacy_queue_empty(db_session) -> None:
+    baseline, target = _coverage_scans(
+        db_session,
+        baseline_reason="queue_empty",
+        target_reason="queue_empty",
+    )
+
+    coverage = _coverage(db_session, baseline, target)
+
+    assert coverage["coverage_state"] == "comparable"
+    assert coverage["warnings"] == []
 
 
 def test_build_compares_pages_resources_links_and_is_deterministic(db_session) -> None:
@@ -579,6 +676,38 @@ def _fixture(db_session):
         )
     db_session.commit()
     return site, baseline, target, resources
+
+
+def _coverage_scans(
+    db_session,
+    *,
+    baseline_status: str = "completed",
+    target_status: str = "completed",
+    baseline_reason: str | None = "queue_exhausted",
+    target_reason: str | None = "queue_exhausted",
+    baseline_failed: int = 0,
+    target_failed: int = 0,
+) -> tuple[Scan, Scan]:
+    site = _site(db_session, "https://coverage.example/")
+    baseline = Scan(
+        website_property_id=site.id,
+        starting_url=site.base_url,
+        status=baseline_status,
+        scope_config={"max_pages": 100},
+        stop_reason=baseline_reason,
+        failed_count=baseline_failed,
+    )
+    target = Scan(
+        website_property_id=site.id,
+        starting_url=site.base_url,
+        status=target_status,
+        scope_config={"max_pages": 100},
+        stop_reason=target_reason,
+        failed_count=target_failed,
+    )
+    db_session.add_all([baseline, target])
+    db_session.flush()
+    return baseline, target
 
 
 def _site(db_session, base_url: str) -> WebsiteProperty:
