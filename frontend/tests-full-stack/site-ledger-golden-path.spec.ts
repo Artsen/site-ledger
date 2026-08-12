@@ -71,6 +71,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   const scan1Start = Date.now();
   const scan1Id = await startScanInUi(page, site.id);
   const scan1 = await waitForScan(request, scan1Id);
+  const scan1Completed = Date.now();
   expect(scan1.status).toBe("completed");
   expect(scan1.fetched_count).toBe(4);
   await waitForProjection(request, scan1Id);
@@ -87,6 +88,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   const scan2Start = Date.now();
   const scan2Id = await startScanInUi(page, site.id);
   const scan2 = await waitForScan(request, scan2Id);
+  const scan2Completed = Date.now();
   expect(scan2.status).toBe("completed");
   expect(scan2.fetched_count).toBe(5);
   await waitForProjection(request, scan2Id);
@@ -138,7 +140,11 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     comparison_id: comparisonId,
     timings_ms: {
       total: comparisonReady - started,
+      scan_1: scan1Completed - scan1Start,
+      projection_1: scan1Ready - scan1Completed,
       scan_1_and_projection: scan1Ready - scan1Start,
+      scan_2: scan2Completed - scan2Start,
+      projection_2: scan2Ready - scan2Completed,
       scan_2_and_projection: scan2Ready - scan2Start,
       comparison: comparisonReady - scan2Ready
     }
