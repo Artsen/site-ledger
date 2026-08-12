@@ -17,7 +17,7 @@ from app.crawler.safe_fetch import (
     connect_error_type,
 )
 from app.crawler.scope import ScopeConfig, ScopeEngine
-from app.crawler.security import UnsafeDestinationError
+from app.crawler.security import DestinationResolutionError, UnsafeDestinationError
 from app.crawler.url_normalizer import normalize_url
 from app.models import SourceRefresh, UrlSource, UrlSourceEntry, WebsiteProperty
 from app.parsers.compression import (
@@ -528,6 +528,8 @@ def _error_type(exc: Exception) -> str:
         return "read_timeout"
     if isinstance(exc, httpx.ConnectError):
         return connect_error_type(exc)
+    if isinstance(exc, DestinationResolutionError):
+        return "dns_error"
     if isinstance(exc, UnsafeDestinationError):
         return "unsafe_destination"
     return "connection_error"
