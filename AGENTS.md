@@ -223,6 +223,15 @@ Treat crawling and source refresh as SSRF boundaries:
 - Block loopback, link-local, and private network destinations by default.
 - Recheck resolved destinations after redirects.
 - Never forward browser cookies or credentials.
+- Public crawling requires a positive globally routable complete-answer policy. Static destination
+  validation must remain bound to the actual socket target.
+- Never restore ambient HTTP(S) or ALL_PROXY inheritance for untrusted fetches.
+- Private-network opt-in permits destinations; it never disables URL, credential, redirect, or
+  response safety.
+- Browser byte limits use observed transfer, not declared Content-Length alone. Bump browser policy
+  or capture-schema provenance when their semantics change.
+- Never claim Chromium DNS pinning unless the actual browser connection is constrained. Keep
+  hostile-network cases in focused lower-level tests rather than the Golden Path.
 - Enforce timeout, redirect, response-size, Page, depth, and source-expansion limits.
 - Parse sitemap XML without networked DTD or entity loading.
 - Bound compressed-source decompression.

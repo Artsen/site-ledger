@@ -53,8 +53,12 @@ Observation where the implementation names would be unnecessarily technical.
 
 - crawler.url_normalizer resolves and normalizes URLs without merging distinct resources.
 - crawler.scope applies persisted scan scope and returns one deterministic decision per URL.
-- crawler.security validates destinations at the SSRF boundary.
-- crawler.safe_fetch performs bounded HTTP GET requests and validates redirects.
+- crawler.security performs asynchronous URL and complete-address-set validation at the SSRF
+  boundary.
+- crawler.secure_transport binds static sockets to validated addresses while retaining original
+  HTTP and TLS hostname identity.
+- crawler.safe_fetch performs bounded HTTP GET requests, disables ambient proxies, and validates
+  redirects.
 - crawler.html_parser extracts head metadata, anchors, and embedded Resource references from
   best-effort HTML.
 - crawler.structured_content extracts bounded source-derived outlines and sections independently
@@ -90,6 +94,10 @@ against scope and network-safety rules before another request is sent.
 
 Response bodies are streamed. Content-Length is checked when available and streamed bytes are
 counted, so oversized responses stop before storage and are recorded as response_too_large.
+
+Chromium uses separate route interception and observed CDP byte budgets. It independently resolves
+destinations, so its residual DNS TOCTOU is not equivalent to the pinned static boundary. See
+[Network security](network-security.md).
 
 ## Scope And URL Identity
 
