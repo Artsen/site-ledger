@@ -13,7 +13,8 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:full-stack": "playwright test --config playwright.full-stack.config.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.51.21",
