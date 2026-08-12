@@ -7,8 +7,8 @@ RENDER_MODES = ("none", "starting_page", "all_eligible")
 ARTIFACT_TYPES = ("rendered_dom", "viewport_screenshot", "full_page_screenshot")
 BROWSER_ENGINE = "chromium"
 RENDERER_VERSION = "1"
-BROWSER_POLICY_VERSION = "1"
-CAPTURE_SCHEMA_VERSION = "1"
+BROWSER_POLICY_VERSION = "2"
+CAPTURE_SCHEMA_VERSION = "2"
 
 
 @dataclass(frozen=True)

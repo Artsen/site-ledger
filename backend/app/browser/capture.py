@@ -5,6 +5,7 @@ import hashlib
 import importlib.metadata
 import json
 import time
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,6 +56,38 @@ class BrowserUnavailableError(RuntimeError):
     pass
 
 
+class ObservedByteBudget:
+    def __init__(self, resource_limit: int, total_limit: int):
+        self.resource_limit = resource_limit
+        self.total_limit = total_limit
+        self.resources: dict[str, int] = {}
+        self.total = 0
+
+    def observe(self, request_id: str, encoded_bytes: int) -> set[str]:
+        if encoded_bytes <= 0:
+            return set()
+        self.resources[request_id] = self.resources.get(request_id, 0) + encoded_bytes
+        self.total += encoded_bytes
+        return self._violations(request_id)
+
+    def finish(self, request_id: str, encoded_bytes: int) -> set[str]:
+        previous = self.resources.get(request_id, 0)
+        if encoded_bytes <= 0:
+            return self._violations(request_id)
+        if encoded_bytes != previous:
+            self.total += encoded_bytes - previous
+            self.resources[request_id] = encoded_bytes
+        return self._violations(request_id)
+
+    def _violations(self, request_id: str) -> set[str]:
+        violations = set()
+        if self.resources.get(request_id, 0) > self.resource_limit:
+            violations.add("resource_byte_budget_exceeded")
+        if self.total > self.total_limit:
+            violations.add("total_network_budget_exceeded")
+        return violations
+
+
 class BrowserRenderer:
     def __init__(self, config: ScopeConfig, starting_url: str):
         self.config = config
@@ -69,7 +102,9 @@ class BrowserRenderer:
             from playwright.async_api import async_playwright
 
             self._playwright = await async_playwright().start()
-            self.browser = await self._playwright.chromium.launch(headless=True)
+            self.browser = await self._playwright.chromium.launch(
+                headless=True, args=["--no-proxy-server"]
+            )
             self.browser_version = self.browser.version
         except Exception as exc:
             if self._playwright:
@@ -123,6 +158,17 @@ class BrowserRenderer:
         request_rows: dict[int, dict[str, Any]] = {}
         main_navigation_count = 0
         network_sequence = 0
+        byte_budget = ObservedByteBudget(
+            self.config.render_max_resource_bytes,
+            self.config.render_max_total_network_bytes,
+        )
+        byte_budget_exhausted = False
+        byte_budget_stop_reason: str | None = None
+        budget_warning_types: set[str] = set()
+        cdp_request_urls: dict[str, str] = {}
+        rows_by_url: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
+        event_tasks: set[asyncio.Task[Any]] = set()
+        cdp: Any = None
 
         def elapsed() -> int:
             return int((time.monotonic() - started) * 1000)
@@ -149,8 +195,8 @@ class BrowserRenderer:
                 pass
             elif scheme not in {"http", "https"}:
                 reason = "unsupported_scheme"
-            elif result.total_network_bytes > self.config.render_max_total_network_bytes:
-                reason = "total_network_budget_exceeded"
+            elif byte_budget_exhausted:
+                reason = byte_budget_stop_reason or "network_byte_budget_exceeded"
             else:
                 try:
                     await validate_public_destination(
@@ -184,6 +230,7 @@ class BrowserRenderer:
             if len(result.network) < self.config.render_max_network_entries:
                 result.network.append(row)
                 request_rows[id(request)] = row
+                rows_by_url[request.url].append(row)
             else:
                 result.network_truncated = True
             if reason:
@@ -203,22 +250,66 @@ class BrowserRenderer:
                 response_headers_json=sanitize_headers(headers, response=True),
                 response_mime_type=headers.get("content-type", "")[:255],
             )
-            try:
-                size = int(headers.get("content-length", "0"))
-            except ValueError:
-                size = 0
-            row["encoded_data_length"] = size
-            result.total_network_bytes += size
-            if size > self.config.render_max_resource_bytes:
-                warning(
-                    "resource_byte_budget_exceeded",
-                    "A declared resource size exceeded the configured limit.",
-                )
-            if result.total_network_bytes > self.config.render_max_total_network_bytes:
-                warning(
-                    "total_network_budget_exceeded",
-                    "Declared network bytes exceeded the configured total limit.",
-                )
+
+        async def apply_byte_observation(
+            request_id: str, encoded_bytes: int, *, finished: bool = False
+        ) -> None:
+            nonlocal byte_budget_exhausted, byte_budget_stop_reason
+            violations = (
+                byte_budget.finish(request_id, encoded_bytes)
+                if finished
+                else byte_budget.observe(request_id, encoded_bytes)
+            )
+            result.total_network_bytes = byte_budget.total
+            url = cdp_request_urls.get(request_id)
+            if url and rows_by_url[url]:
+                row = rows_by_url[url][0]
+                row["encoded_data_length"] = byte_budget.resources.get(request_id, 0)
+                if finished:
+                    rows_by_url[url].popleft()
+            for kind in sorted(violations):
+                if kind not in budget_warning_types:
+                    budget_warning_types.add(kind)
+                    warning(
+                        kind,
+                        "Observed encoded network bytes exceeded the configured "
+                        + ("resource limit." if kind.startswith("resource") else "total limit."),
+                    )
+            if not violations or byte_budget_exhausted:
+                return
+            byte_budget_exhausted = True
+            byte_budget_stop_reason = (
+                "total_network_budget_exceeded"
+                if "total_network_budget_exceeded" in violations
+                else "resource_byte_budget_exceeded"
+            )
+            if cdp is not None:
+                stop_failures = 0
+                for command, params in (
+                    ("Network.setBlockedURLs", {"urls": ["*"]}),
+                    ("Page.stopLoading", {}),
+                ):
+                    try:
+                        await cdp.send(command, params)
+                    except Exception as exc:
+                        stop_failures += 1
+                        warning("network_budget_stop_failed", str(exc))
+                if stop_failures == 2 and page and not page.is_closed():
+                    await page.close()
+
+        def schedule(coro: Any) -> None:
+            task = asyncio.create_task(coro)
+            event_tasks.add(task)
+
+            def event_done(completed: asyncio.Task[Any]) -> None:
+                event_tasks.discard(completed)
+                if completed.cancelled():
+                    return
+                error = completed.exception()
+                if error is not None:
+                    warning("network_accounting_failed", str(error))
+
+            task.add_done_callback(event_done)
 
         def request_finished(request: Any) -> None:
             row = request_rows.get(id(request))
@@ -245,6 +336,33 @@ class BrowserRenderer:
                 Object.defineProperty(window, 'EventSource', {value: BlockedEventSource});
             """)
             page = await context.new_page()
+            cdp = await context.new_cdp_session(page)
+            await cdp.send("Network.enable")
+            cdp.on(
+                "Network.requestWillBeSent",
+                lambda event: cdp_request_urls.__setitem__(
+                    event["requestId"], event["request"]["url"]
+                ),
+            )
+            cdp.on(
+                "Network.dataReceived",
+                lambda event: schedule(
+                    apply_byte_observation(
+                        event["requestId"],
+                        int(event.get("encodedDataLength") or event.get("dataLength", 0)),
+                    )
+                ),
+            )
+            cdp.on(
+                "Network.loadingFinished",
+                lambda event: schedule(
+                    apply_byte_observation(
+                        event["requestId"],
+                        int(event.get("encodedDataLength", 0)),
+                        finished=True,
+                    )
+                ),
+            )
             page.on("response", response_seen)
             page.on("requestfinished", request_finished)
             page.on("requestfailed", request_failed)
@@ -326,12 +444,22 @@ class BrowserRenderer:
             result.state = "cancelled"
             raise
         except Exception as exc:
-            result.state = "failed"
-            result.error_type = type(exc).__name__[:64]
-            result.error_message = redact_text(str(exc), 8000)
+            if byte_budget_exhausted:
+                result.state = "completed_with_warnings"
+                result.error_type = "network_byte_budget_exceeded"
+                result.error_message = "Browser loading stopped after an observed byte limit."
+                if page and not page.is_closed():
+                    result.final_url = page.url
+            else:
+                result.state = "failed"
+                result.error_type = type(exc).__name__[:64]
+                result.error_message = redact_text(str(exc), 8000)
             if page and not page.is_closed():
                 await self._capture_artifacts(page, result, warning)
         finally:
+            if event_tasks:
+                await asyncio.gather(*event_tasks, return_exceptions=True)
+            result.total_network_bytes = byte_budget.total
             result.duration_ms = elapsed()
             await context.close()
         return result
