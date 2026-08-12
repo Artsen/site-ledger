@@ -299,6 +299,12 @@ Frontend coverage should include form validation, navigation, pagination, loadin
 states, Page and observation details, source workflow, worker states, graph controls, accessibility,
 and document titles. Playwright should keep major workflows reachable.
 
+The Golden Path is the canonical real-stack regression test. It must use a deterministic local
+fixture and must not mock Site Ledger APIs, persistence, jobs, crawling, projections, or comparisons.
+Never use production data or a public fixture. Keep the workflow small and stable; cover expensive
+edge cases at lower levels when possible. Core lifecycle changes should evaluate whether Golden Path
+expectations need updating, and full-stack failures must be debugged rather than hidden with retries.
+
 Run relevant checks before completion:
 
 ~~~powershell
@@ -331,8 +337,8 @@ Do not disable checks or weaken tests to force passing results.
   direct requirement changes, and use `uv run` for repository automation.
 - `frontend/package.json` declares requirements; `frontend/package-lock.json` plus `npm ci` is the
   authoritative frontend environment. New dependencies require the corresponding lock update.
-- GitHub Actions enforces the stable `Backend`, `Frontend`, and `Playwright` checks on pull requests
-  to `main` and pushes to `main`.
+- GitHub Actions enforces the stable `Backend`, `Frontend`, `Playwright`, and disposable full-stack
+  `Golden Path` checks on pull requests to `main` and pushes to `main`.
 - CI must use disposable databases and storage, require no production data or secrets, and avoid
   public-network crawl evidence. Benchmarks remain manual diagnostics.
 

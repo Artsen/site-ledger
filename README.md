@@ -182,8 +182,8 @@ cd backend
 uv lock --check
 uv sync --extra dev --locked
 uv run --extra dev --locked pytest
-uv run --extra dev --locked ruff check .
-uv run --extra dev --locked ruff format --check .
+uv run --extra dev --locked ruff check . ../tools
+uv run --extra dev --locked ruff format --check . ../tools
 uv run --extra dev --locked mypy app
 uv run --extra dev --locked alembic upgrade head
 uv run --extra dev --locked alembic check
@@ -202,17 +202,25 @@ npm run e2e
 npm audit --omit=dev
 ~~~
 
-GitHub Actions runs independent `Backend`, `Frontend`, and `Playwright` checks for pull requests to
-`main` and pushes to `main`. The production npm audit blocks on high or critical findings; the full
+Full-stack Golden Path, from the repository root after both locked environments and Playwright
+Chromium are installed:
+
+~~~powershell
+uv run --project backend --extra dev --locked python tools/run_full_stack_e2e.py
+~~~
+
+GitHub Actions runs independent `Backend`, `Frontend`, `Playwright`, and `Golden Path` checks for
+pull requests to `main` and pushes to `main`. The production npm audit blocks on high or critical findings; the full
 dependency-tree audit is reported without blocking while the remaining Vite/Vitest advisories
 require major upgrades. The two current production advisories are moderate React Router findings.
 Python dependency vulnerability scanning is not yet automated.
 
-The Playwright workflow uses mocked API responses. The future real API/worker/fixture-site golden
-path is not part of the current suite. Deterministic crawler behavior, redirect safety, storage,
-graph queries, background jobs, Page history, and reuse are covered by backend tests. Benchmarks
-remain manual diagnostics rather than hosted-runner gates; run them explicitly through `uv run`,
-for example `uv run python -m app.static_benchmark`.
+The regular Playwright workflow uses mocked API responses for fast UI coverage. The separate Golden
+Path runs one deterministic local fixture through the real React, API, SQLite, worker, crawler,
+evidence, projection, comparison, and UI lifecycle. Deterministic crawler behavior, redirect
+safety, storage, graph queries, background jobs, Page history, and reuse remain covered more broadly
+by backend tests. Benchmarks remain manual diagnostics rather than hosted-runner gates; run them
+explicitly through `uv run`, for example `uv run python -m app.static_benchmark`.
 
 ## Updating Dependencies
 
@@ -238,6 +246,7 @@ files when the declared dependency set changes.
 - [Resource Inventory](docs/resource-inventory.md)
 - [AI Document Sources](docs/ai-document-sources.md)
 - [Deterministic Scan comparisons](docs/scan-comparisons.md)
+- [Full-stack Golden Path testing](docs/full-stack-testing.md)
 
 ## Current Limitations
 
@@ -248,7 +257,8 @@ files when the declared dependency set changes.
   for dense scans.
 - The Three.js renderer is a large lazy chunk and triggers Vite's chunk-size warning.
 - SQLite can become a bottleneck for large aggregate graph queries and concurrent local work.
-- Playwright does not currently orchestrate a real API, worker, and fixture website end to end.
+- The full-stack Golden Path covers one deterministic static crawl and adjacent comparison workflow;
+  broader browser-rendered and failure-recovery workflows remain outside that focused path.
 - React Router production audit advisories remain an existing dependency concern.
 
 ## Roadmap

@@ -10,7 +10,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    exclude: ["tests/e2e/**", "node_modules/**", "dist/**"],
+    exclude: ["tests/e2e/**", "tests-full-stack/**", "node_modules/**", "dist/**"],
     setupFiles: ["./tests/setup.ts"]
   }
 });
