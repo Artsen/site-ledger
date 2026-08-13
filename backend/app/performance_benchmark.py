@@ -7,6 +7,7 @@ import json
 import statistics
 import tempfile
 import time
+import tracemalloc
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,8 @@ from app.models import (
     WebResource,
     WebsiteProperty,
 )
+from app.services.performance_collection import execute_performance_run
+from app.services.performance_providers import PerformanceProviderClient, ProviderResult
 from app.services.performance_queries import (
     latest_site_performance,
     list_performance_runs,
@@ -138,6 +141,76 @@ def run_benchmark(
         return result
 
 
+def run_collection_benchmark(page_count: int = 250) -> dict[str, Any]:
+    if not 1 <= page_count <= 250:
+        raise ValueError("Collection benchmark Page count must be between 1 and 250.")
+    with tempfile.TemporaryDirectory(prefix="site-ledger-performance-collection-") as directory:
+        database_path = Path(directory) / "benchmark.db"
+        engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        with session_factory() as db:
+            site = _site()
+            db.add(site)
+            db.flush()
+            resources = [_resource(index) for index in range(page_count)]
+            db.add_all(resources)
+            db.flush()
+            db.add_all(
+                SitePage(website_property_id=site.id, resource_id=resource.id)
+                for resource in resources
+            )
+            request_count = page_count * 4 + 2
+            run = PerformanceRun(
+                website_property_id=site.id,
+                status="queued",
+                trigger="benchmark",
+                configuration_json={
+                    "resource_ids": [resource.id for resource in resources],
+                    "providers": ["crux", "pagespeed"],
+                    "pagespeed_strategies": ["desktop", "mobile"],
+                    "crux_form_factors": ["DESKTOP", "PHONE"],
+                    "include_origin_crux": True,
+                },
+                target_count=page_count,
+                request_count=request_count,
+            )
+            db.add(run)
+            db.commit()
+            run_id = run.id
+        client = _FakeProviderClient()
+        progress: list[tuple[int, int]] = []
+        tracemalloc.start()
+        started = time.perf_counter()
+        result = execute_performance_run(
+            session_factory,
+            run_id,
+            should_cancel=lambda: False,
+            progress=lambda current, total, _counts: progress.append((current, total)),
+            client_factory=lambda: client,
+        )
+        elapsed = time.perf_counter() - started
+        _, peak_memory = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        with session_factory() as db:
+            persisted = (
+                db.query(PerformanceObservation).filter_by(performance_run_id=run_id).count()
+            )
+        output = {
+            "pages": page_count,
+            "provider_requests": request_count,
+            "fake_provider_calls": client.calls,
+            "persisted_observations": persisted,
+            "status": result.status,
+            "final_progress": progress[-1] if progress else None,
+            "elapsed_seconds": round(elapsed, 3),
+            "peak_memory_bytes": peak_memory,
+            "database_bytes": database_path.stat().st_size,
+        }
+        engine.dispose()
+        return output
+
+
 def _measure(operation: Callable[[], Any], repetitions: int) -> list[float]:
     timings = []
     for _ in range(repetitions):
@@ -178,13 +251,44 @@ def _resource(index: int) -> WebResource:
     )
 
 
+class _FakeProviderClient(PerformanceProviderClient):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def pagespeed(self, target: str, strategy: str) -> ProviderResult:
+        self.calls += 1
+        return self._result(target, {"performance_score": {"value": 0.9, "unit": "ratio"}})
+
+    def crux(self, target: str, target_kind: str, form_factor: str) -> ProviderResult:
+        self.calls += 1
+        return self._result(target, {"lcp": {"value": 2200, "unit": "ms"}})
+
+    def close(self) -> None:
+        pass
+
+    @staticmethod
+    def _result(target: str, metrics: dict[str, Any]) -> ProviderResult:
+        return ProviderResult(
+            outcome="ready",
+            payload=None,
+            metrics=metrics,
+            provider_target=target,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pages", type=int, default=DEFAULT_PAGES)
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--observations", type=int, default=DEFAULT_OBSERVATIONS)
+    parser.add_argument("--collection-pages", type=int)
     args = parser.parse_args()
-    print(json.dumps(run_benchmark(args.pages, args.runs, args.observations), indent=2))
+    result = (
+        run_collection_benchmark(args.collection_pages)
+        if args.collection_pages
+        else run_benchmark(args.pages, args.runs, args.observations)
+    )
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

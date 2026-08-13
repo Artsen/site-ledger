@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import gzip
 import json
 import statistics
 import tempfile
+import threading
 import time
+import tracemalloc
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.accessibility.audit import audit_page
+from app.browser.capture import BrowserRenderer
+from app.crawler.scope import ScopeConfig
 from app.database import Base
 from app.models import (
     AccessibilityNodeEvidence,
@@ -214,6 +221,50 @@ def run_benchmark(
         return result
 
 
+async def run_browser_benchmark(audit_count: int = 50) -> dict[str, Any]:
+    if not 1 <= audit_count <= 50:
+        raise ValueError("Browser benchmark audit count must be between 1 and 50.")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _AccessibilityFixtureHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/"
+    scope = ScopeConfig(
+        allowed_host_patterns=["127.0.0.1"],
+        allow_private_networks=True,
+        render_mode="starting_page",
+        render_max_page_duration_seconds=15,
+    )
+    timings: list[float] = []
+    ready = 0
+    tracemalloc.start()
+    started = time.perf_counter()
+    try:
+        async with BrowserRenderer(scope, url) as renderer:
+            for index in range(audit_count):
+                audit_started = time.perf_counter()
+                result = await audit_page(
+                    renderer,
+                    url,
+                    "desktop" if index % 2 == 0 else "mobile",
+                    max_payload_bytes=12 * 1024 * 1024,
+                )
+                timings.append((time.perf_counter() - audit_started) * 1000)
+                ready += int(result.outcome == "ready")
+    finally:
+        server.shutdown()
+    total_seconds = time.perf_counter() - started
+    _, peak_memory = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    return {
+        "audits": audit_count,
+        "ready": ready,
+        "failed": audit_count - ready,
+        "audit_duration_ms": _percentiles(timings),
+        "total_seconds": round(total_seconds, 3),
+        "python_peak_memory_bytes": peak_memory,
+        "single_chromium_session_completed": ready == audit_count,
+    }
+
+
 def _measure(operation: Callable[[], Any], repetitions: int) -> list[float]:
     timings = []
     for _ in range(repetitions):
@@ -288,13 +339,33 @@ def _sample_payload() -> dict[str, Any]:
     }
 
 
+class _AccessibilityFixtureHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        body = (
+            b"<!doctype html><html lang='en'><head><title>Accessibility benchmark</title></head>"
+            b"<body><main><h1>Fixture</h1><button>Continue</button></main></body></html>"
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pages", type=int, default=DEFAULT_PAGES)
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--observations", type=int, default=DEFAULT_OBSERVATIONS)
     parser.add_argument("--repetitions", type=int, default=20)
+    parser.add_argument("--browser-audits", type=int)
     args = parser.parse_args()
+    if args.browser_audits:
+        print(json.dumps(asyncio.run(run_browser_benchmark(args.browser_audits)), indent=2))
+        return
     print(
         json.dumps(
             run_benchmark(args.pages, args.runs, args.observations, args.repetitions), indent=2

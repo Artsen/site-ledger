@@ -40,6 +40,8 @@ const capabilities = {
   ruleset_sha256: "b".repeat(64),
   default_page_limit: 10,
   hard_page_limit: 25,
+  absolute_page_limit: 250,
+  max_audit_count: 500,
   profiles: {},
 };
 

@@ -29,6 +29,9 @@ const capabilities = {
   normalization_version: "performance-normalization-v1",
   default_page_limit: 10,
   hard_page_limit: 25,
+  absolute_page_limit: 250,
+  max_provider_requests: 1002,
+  crux_queries_per_minute: 120,
 };
 
 describe("Performance workspace", () => {
@@ -66,7 +69,7 @@ describe("Performance workspace", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Collect Performance" }));
     fireEvent.click(await screen.findByRole("checkbox", { name: /Page 8/ }));
     fireEvent.click(await screen.findByRole("checkbox", { name: /Page 9/ }));
-    expect(screen.getByText(/This will make/)).toHaveTextContent("10 provider requests");
+    expect(screen.getByText(/Total:/)).toHaveTextContent("10 provider requests");
     fireEvent.click(screen.getByRole("button", { name: "Start collection" }));
     await waitFor(() => expect(api.createPerformanceRun).toHaveBeenCalledWith("3", expect.objectContaining({ resource_ids: [8, 9], include_origin_crux: true })));
   });
@@ -87,7 +90,7 @@ describe("Performance workspace", () => {
     api.getLatestPerformance.mockResolvedValue({ items: [observation({ outcome: "unavailable", error_type: "no_field_data", error_message: "No qualifying dataset." })], total: 1, limit: 500, offset: 0 });
     renderWorkspace(<SitePerformancePage />);
     fireEvent.click(await screen.findByRole("tab", { name: "Field" }));
-    expect(screen.getByText("No field data available")).toBeInTheDocument();
+    expect(screen.getByText("URL-level field data unavailable")).toBeInTheDocument();
     expect(screen.getByText("No qualifying dataset.")).toBeInTheDocument();
   });
 
