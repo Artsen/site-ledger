@@ -290,6 +290,15 @@ Keep the dashboard restrained, dense, and operational. Reuse existing components
 Maintain visible focus states, sufficient contrast, meaningful document titles, accessible
 navigation labels, and non-canvas alternatives for graph exploration.
 
+AppShell owns global layout and navigation, not feature data. Site-scoped product areas belong
+under the Site workspace and use the typed declarative Site navigation model; navigation reflects
+implemented features only. Feature pages must not recreate global or Site navigation. Detail pages
+preserve their parent product-area context, while Scan-specific evidence remains in Scan context
+and persistent Pages remain visibly distinct from Scan Observations. Add a Site navigation entry
+deliberately when a major Site capability becomes real. Extract components by responsibility, not
+an arbitrary line-count threshold. Keep UI-only navigation preferences local rather than storing
+them as evidence or domain state.
+
 Stored or scanned text must be rendered as escaped React text. Do not use dangerouslySetInnerHTML
 for captured content.
 

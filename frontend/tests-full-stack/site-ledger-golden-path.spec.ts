@@ -115,12 +115,12 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(evidence1["/technical/"].structured.document_text_sha256).toBe(evidence2["/technical/"].structured.document_text_sha256);
   expect(evidence1["/technical/"].structured.outline_sha256).toBe(evidence2["/technical/"].structured.outline_sha256);
 
-  await page.goto(`/sites/${site.id}?tab=comparisons&comparison_id=${comparisonId}`);
+  await page.goto(`/sites/${site.id}/comparisons?comparison_id=${comparisonId}`);
   await expect(page.getByRole("heading", { name: `Scan ${scan1Id} to Scan ${scan2Id}` })).toBeVisible();
   await expect(page.getByText("scan-comparison-v2", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: /^Pages/ }).click();
   await page.getByLabel("Show all Pages").check();
-  await page.getByRole("link", { name: `${fixtureUrl}/`, exact: true }).click();
+  await page.getByRole("table").getByRole("link", { name: `${fixtureUrl}/`, exact: true }).click();
   await expect(page.getByText("Substantive Change", { exact: true })).toBeVisible();
   await expect(page.getByText("Changed", { exact: true }).first()).toBeVisible();
   const observationLinks = page.getByRole("link", { name: /^Observation / });

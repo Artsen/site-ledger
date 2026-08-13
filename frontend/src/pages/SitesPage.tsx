@@ -102,7 +102,7 @@ function SitesTable({ sites, activeSort, direction, onSort, onDelete }: { sites:
                 <div className="flex flex-wrap gap-2">
                   <Link className="underline" to={`/sites/${site.id}`}>Open</Link>
                   <Link className="underline" to={`/scans/new?site_id=${site.id}`}>Run scan</Link>
-                  <Link className="underline" to={`/sites/${site.id}/edit`}>Edit</Link>
+                  <Link className="underline" to={`/sites/${site.id}/settings`}>Settings</Link>
                   {site.total_scan_count === 0 ? <button type="button" className="text-red-700 underline" onClick={() => onDelete(site)}>Delete</button> : null}
                 </div>
               </td>

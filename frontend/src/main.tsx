@@ -1,22 +1,44 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import React from "react";
+import React, { lazy } from "react";
 import ReactDOM from "react-dom/client";
 import { Navigate, RouterProvider, createBrowserRouter } from "react-router-dom";
 
 import { AppShell } from "./components/AppShell";
-import { PageDetailPage } from "./pages/PageDetailPage";
-import { PersistentPageDetailPage } from "./pages/PersistentPageDetailPage";
-import { ResourceDetailPage } from "./pages/ResourceDetailPage";
-import { ScanDetailPage } from "./pages/ScanDetailPage";
-import { ScansPage } from "./pages/ScansPage";
-import { SiteDetailPage } from "./pages/SiteDetailPage";
-import { SiteFormPage } from "./pages/SiteFormPage";
-import { SitesPage } from "./pages/SitesPage";
-import { NewScanPage } from "./pages/NewScanPage";
-import { AiDocumentEvidencePage } from "./pages/AiDocumentEvidencePage";
-import { AiDocumentSourcePage } from "./pages/AiDocumentSourcePage";
-import { LinkComparisonDetailPage, PageComparisonDetailPage, ResourceComparisonDetailPage } from "./pages/ComparisonDetailPages";
 import "./styles/index.css";
+
+const PageDetailPage = lazyNamed(() => import("./pages/PageDetailPage"), "PageDetailPage");
+const PersistentPageDetailPage = lazyNamed(() => import("./pages/PersistentPageDetailPage"), "PersistentPageDetailPage");
+const ScanDetailPage = lazyNamed(() => import("./pages/ScanDetailPage"), "ScanDetailPage");
+const ScansPage = lazyNamed(() => import("./pages/ScansPage"), "ScansPage");
+const SitesPage = lazyNamed(() => import("./pages/SitesPage"), "SitesPage");
+const NewScanPage = lazyNamed(() => import("./pages/NewScanPage"), "NewScanPage");
+const AiDocumentEvidencePage = lazyNamed(() => import("./pages/AiDocumentEvidencePage"), "AiDocumentEvidencePage");
+const AiDocumentSourcePage = lazyNamed(() => import("./pages/AiDocumentSourcePage"), "AiDocumentSourcePage");
+const SiteWorkspaceLayout = lazyNamed(() => import("./pages/site-workspace/SiteWorkspaceLayout"), "SiteWorkspaceLayout");
+const SiteFormPage = lazyNamed<{ mode: "create" | "edit"; embedded?: boolean }>(() => import("./pages/SiteFormPage"), "SiteFormPage");
+const ResourceDetailPage = lazyNamed<{ scope: "site" | "scan" }>(() => import("./pages/ResourceDetailPage"), "ResourceDetailPage");
+
+function lazyWorkspacePage(name: keyof typeof import("./pages/site-workspace/SiteWorkspacePages")) {
+  return lazyNamed(() => import("./pages/site-workspace/SiteWorkspacePages"), name);
+}
+
+const LegacySiteRedirect = lazyWorkspacePage("LegacySiteRedirect");
+const SiteAiDocumentsPage = lazyWorkspacePage("SiteAiDocumentsPage");
+const SiteCategoriesPage = lazyWorkspacePage("SiteCategoriesPage");
+const SiteCategoryRulesPage = lazyWorkspacePage("SiteCategoryRulesPage");
+const SiteComparisonsPage = lazyWorkspacePage("SiteComparisonsPage");
+const SiteGraphPage = lazyWorkspacePage("SiteGraphPage");
+const SiteInventoryPage = lazyWorkspacePage("SiteInventoryPage");
+const SiteNotesPage = lazyWorkspacePage("SiteNotesPage");
+const SitePagesPage = lazyWorkspacePage("SitePagesPage");
+const SiteResourcesPage = lazyWorkspacePage("SiteResourcesPage");
+const SiteScansPage = lazyWorkspacePage("SiteScansPage");
+const SiteSettingsPage = lazyWorkspacePage("SiteSettingsPage");
+const SiteSourcesPage = lazyWorkspacePage("SiteSourcesPage");
+
+const PageComparisonDetailPage = lazyNamed(() => import("./pages/ComparisonDetailPages"), "PageComparisonDetailPage");
+const ResourceComparisonDetailPage = lazyNamed(() => import("./pages/ComparisonDetailPages"), "ResourceComparisonDetailPage");
+const LinkComparisonDetailPage = lazyNamed(() => import("./pages/ComparisonDetailPages"), "LinkComparisonDetailPage");
 
 const router = createBrowserRouter([
   {
@@ -26,13 +48,33 @@ const router = createBrowserRouter([
       { index: true, element: <Navigate to="/scans/new" replace /> },
       { path: "sites", element: <SitesPage /> },
       { path: "sites/new", element: <SiteFormPage mode="create" /> },
-      { path: "sites/:siteId", element: <SiteDetailPage /> },
-      { path: "sites/:siteId/pages/:resourceId", element: <PersistentPageDetailPage /> },
-      { path: "sites/:siteId/comparisons/:comparisonId/pages/:resourceId", element: <PageComparisonDetailPage /> },
-      { path: "sites/:siteId/comparisons/:comparisonId/resources/:resourceId", element: <ResourceComparisonDetailPage /> },
-      { path: "sites/:siteId/comparisons/:comparisonId/links/:sourceResourceId/:targetResourceId", element: <LinkComparisonDetailPage /> },
-      { path: "sites/:siteId/resources/:resourceId", element: <ResourceDetailPage scope="site" /> },
-      { path: "sites/:siteId/edit", element: <SiteFormPage mode="edit" /> },
+      {
+        path: "sites/:siteId",
+        element: <SiteWorkspaceLayout />,
+        children: [
+          { index: true, element: <LegacySiteRedirect /> },
+          { path: "scans", element: <SiteScansPage /> },
+          { path: "pages", element: <SitePagesPage /> },
+          { path: "pages/:resourceId", element: <PersistentPageDetailPage /> },
+          { path: "resources", element: <SiteResourcesPage /> },
+          { path: "resources/:resourceId", element: <ResourceDetailPage scope="site" /> },
+          { path: "sources", element: <SiteSourcesPage /> },
+          { path: "inventory", element: <SiteInventoryPage /> },
+          { path: "ai-documents", element: <SiteAiDocumentsPage /> },
+          { path: "ai-documents/evidence/:snapshotId", element: <AiDocumentEvidencePage /> },
+          { path: "ai-documents/:sourceId", element: <AiDocumentSourcePage /> },
+          { path: "comparisons", element: <SiteComparisonsPage /> },
+          { path: "comparisons/:comparisonId/pages/:resourceId", element: <PageComparisonDetailPage /> },
+          { path: "comparisons/:comparisonId/resources/:resourceId", element: <ResourceComparisonDetailPage /> },
+          { path: "comparisons/:comparisonId/links/:sourceResourceId/:targetResourceId", element: <LinkComparisonDetailPage /> },
+          { path: "graph", element: <SiteGraphPage /> },
+          { path: "categories", element: <SiteCategoriesPage /> },
+          { path: "category-rules", element: <SiteCategoryRulesPage /> },
+          { path: "notes", element: <SiteNotesPage /> },
+          { path: "settings", element: <SiteSettingsPage /> },
+          { path: "edit", element: <Navigate to="../settings" replace /> },
+        ],
+      },
       { path: "ai-document-sources/:sourceId", element: <AiDocumentSourcePage /> },
       { path: "ai-document-snapshots/:snapshotId", element: <AiDocumentEvidencePage /> },
       { path: "scans", element: <ScansPage /> },
@@ -53,4 +95,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>
 );
+
+function lazyNamed<Props extends object = Record<string, never>>(loader: () => Promise<unknown>, key: string) {
+  return lazy(async () => ({ default: (await loader() as Record<string, React.ComponentType<Props>>)[key] }));
+}
 

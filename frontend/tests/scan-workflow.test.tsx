@@ -304,10 +304,10 @@ describe("Site Ledger product identity", () => {
   it("renders the accessible shell brand, mark, and desktop tagline", async () => {
     renderShell("/scans/new");
 
-    const brandLink = screen.getByRole("link", { name: "Site Ledger home" });
-    expect(brandLink).toHaveAttribute("href", "/scans/new");
+    const brandLink = screen.getByRole("link", { name: "Site Ledger Sites" });
+    expect(brandLink).toHaveAttribute("href", "/sites");
     expect(brandLink.querySelector("svg")).toBeInTheDocument();
-    expect(screen.getByText("Site Ledger")).toBeInTheDocument();
+    expect(screen.getAllByText("Site Ledger").length).toBeGreaterThan(0);
     expect(screen.getByText("A historical record of your website.")).toBeInTheDocument();
     expect(screen.queryByText("Website Scanner")).not.toBeInTheDocument();
     await waitFor(() => expect(document.title).toBe("New Scan | Site Ledger"));
