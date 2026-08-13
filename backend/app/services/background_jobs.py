@@ -23,6 +23,7 @@ from app.services.job_types import (
     JOB_STATUS_INTERRUPTED,
     JOB_STATUS_QUEUED,
     JOB_STATUS_RUNNING,
+    JOB_TYPE_ACCESSIBILITY_RUN,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
     JOB_TYPE_PERFORMANCE_RUN,
     JOB_TYPE_SCAN,
@@ -201,6 +202,20 @@ def enqueue_performance_run_job(
     )
 
 
+def enqueue_accessibility_run_job(
+    db: Session, run_id: int, site_id: int, *, priority: int = 125
+) -> BackgroundJob:
+    return _enqueue_job(
+        db,
+        job_type=JOB_TYPE_ACCESSIBILITY_RUN,
+        dedupe_key=f"accessibility-run:{run_id}",
+        accessibility_run_id=run_id,
+        website_property_id=site_id,
+        priority=priority,
+        payload={"accessibility_run_id": run_id, "site_id": site_id},
+    )
+
+
 def _enqueue_job(
     db: Session,
     *,
@@ -212,6 +227,7 @@ def _enqueue_job(
     source_refresh_id: int | None = None,
     scan_comparison_id: int | None = None,
     performance_run_id: int | None = None,
+    accessibility_run_id: int | None = None,
     website_property_id: int | None = None,
 ) -> BackgroundJob:
     existing = db.scalar(select(BackgroundJob).where(BackgroundJob.dedupe_key == dedupe_key))
@@ -228,6 +244,7 @@ def _enqueue_job(
         source_refresh_id=source_refresh_id,
         scan_comparison_id=scan_comparison_id,
         performance_run_id=performance_run_id,
+        accessibility_run_id=accessibility_run_id,
         website_property_id=website_property_id,
         dedupe_key=dedupe_key,
         payload_json=payload,
@@ -654,6 +671,18 @@ def recover_expired_jobs(
                 performance_run.error_summary = (
                     "Worker lease expired during Performance collection."
                 )
+        elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN:
+            from app.models import AccessibilityRun
+
+            accessibility_run = db.get(
+                AccessibilityRun, int(job.payload_json.get("accessibility_run_id", 0))
+            )
+            if accessibility_run and accessibility_run.status not in TERMINAL_JOB_STATUSES:
+                accessibility_run.status = "interrupted"
+                accessibility_run.finished_at = now
+                accessibility_run.error_summary = (
+                    "Worker lease expired during Accessibility collection."
+                )
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan and scan.status not in TERMINAL_JOB_STATUSES:
@@ -711,6 +740,13 @@ def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
 
         performance_run = db.get(PerformanceRun, int(job.payload_json.get("performance_run_id", 0)))
         domain_status = performance_run.status if performance_run else JOB_STATUS_FAILED
+    elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN:
+        from app.models import AccessibilityRun
+
+        accessibility_run = db.get(
+            AccessibilityRun, int(job.payload_json.get("accessibility_run_id", 0))
+        )
+        domain_status = accessibility_run.status if accessibility_run else JOB_STATUS_FAILED
     elif job.scan_id:
         scan = db.get(Scan, job.scan_id)
         domain_status = scan.status if scan else JOB_STATUS_FAILED

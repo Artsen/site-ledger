@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import is_transient_database_lock
 from app.models import (
+    AccessibilityRun,
     BackgroundJob,
     PageCategoryRule,
     PageCategoryRuleRun,
@@ -22,12 +23,17 @@ from app.models import (
     SourceRefresh,
 )
 from app.services import background_jobs
+from app.services.accessibility_collection import (
+    execute_accessibility_run,
+    mark_accessibility_run_failed,
+)
 from app.services.category_rules import create_followup_evaluation, reconcile_site
 from app.services.job_types import (
     JOB_STATUS_CANCELLED,
     JOB_STATUS_COMPLETED,
     JOB_STATUS_COMPLETED_WITH_ERRORS,
     JOB_STATUS_FAILED,
+    JOB_TYPE_ACCESSIBILITY_RUN,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
     JOB_TYPE_PERFORMANCE_RUN,
     JOB_TYPE_SCAN,
@@ -434,6 +440,39 @@ class PerformanceRunJobHandler:
         )
 
 
+class AccessibilityRunJobHandler:
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
+        self.session_factory = session_factory
+
+    async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
+        run_id = job.accessibility_run_id or int(job.payload_json.get("accessibility_run_id", 0))
+        if not run_id:
+            raise ValueError("Accessibility job is missing accessibility_run_id.")
+        run = await execute_accessibility_run(
+            self.session_factory,
+            run_id,
+            should_cancel=context.check_cancelled,
+            progress=lambda current, total, counters: context.progress(
+                phase="auditing",
+                current_operation="Collecting automated Accessibility evidence",
+                current=current,
+                total=total,
+                unit="browser audits",
+                counters=counters,
+            ),
+        )
+        if run.status == "cancelled":
+            raise JobCancelled("Accessibility run cancelled by user.")
+        return HandlerResult(
+            status=(JOB_STATUS_COMPLETED_WITH_ERRORS if run.failed_count else JOB_STATUS_COMPLETED),
+            result_json={
+                "accessibility_run_id": run.id,
+                "ready": run.ready_count,
+                "failed": run.failed_count,
+            },
+        )
+
+
 class JobHandlerRegistry:
     def __init__(self, handlers: dict[str, JobHandler]):
         self.handlers = handlers
@@ -459,6 +498,7 @@ def build_handler_registry(
                 session_factory, store
             ),
             JOB_TYPE_PERFORMANCE_RUN: PerformanceRunJobHandler(session_factory),
+            JOB_TYPE_ACCESSIBILITY_RUN: AccessibilityRunJobHandler(session_factory),
         }
     )
 
@@ -580,10 +620,15 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 "Comparison build cancelled by user.",
             )
         elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
-            run = db.get(PerformanceRun, job.performance_run_id)
-            if run:
-                run.status = "cancelled"
-                run.finished_at = now
+            performance_run = db.get(PerformanceRun, job.performance_run_id)
+            if performance_run:
+                performance_run.status = "cancelled"
+                performance_run.finished_at = now
+        elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN and job.accessibility_run_id:
+            accessibility_run = db.get(AccessibilityRun, job.accessibility_run_id)
+            if accessibility_run:
+                accessibility_run.status = "cancelled"
+                accessibility_run.finished_at = now
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -626,11 +671,19 @@ def _mark_domain_interrupted(
                 "Worker interrupted during comparison build.",
             )
         elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
-            run = db.get(PerformanceRun, job.performance_run_id)
-            if run:
-                run.status = "failed"
-                run.finished_at = now
-                run.error_summary = "Worker interrupted during Performance collection."
+            performance_run = db.get(PerformanceRun, job.performance_run_id)
+            if performance_run:
+                performance_run.status = "failed"
+                performance_run.finished_at = now
+                performance_run.error_summary = "Worker interrupted during Performance collection."
+        elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN and job.accessibility_run_id:
+            accessibility_run = db.get(AccessibilityRun, job.accessibility_run_id)
+            if accessibility_run:
+                accessibility_run.status = "interrupted"
+                accessibility_run.finished_at = now
+                accessibility_run.error_summary = (
+                    "Worker interrupted during Accessibility collection."
+                )
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -677,6 +730,8 @@ def _mark_domain_failed(
             )
         elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
             mark_performance_run_failed(db, job.performance_run_id, exc)
+        elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN and job.accessibility_run_id:
+            mark_accessibility_run_failed(db, job.accessibility_run_id, exc)
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:

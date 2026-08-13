@@ -18,6 +18,7 @@ from app.database import Base
 from app.database import UTCDateTime as DateTime
 
 if TYPE_CHECKING:
+    from app.models.accessibility import AccessibilityRun
     from app.models.ai_documents import AiDocumentRefresh
     from app.models.performance import PerformanceRun
     from app.models.rendered import RenderedObservation
@@ -819,6 +820,9 @@ class BackgroundJob(Base):
     performance_run_id: Mapped[int | None] = mapped_column(
         ForeignKey("performance_runs.id", ondelete="CASCADE"), index=True
     )
+    accessibility_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("accessibility_runs.id", ondelete="CASCADE"), index=True
+    )
     website_property_id: Mapped[int | None] = mapped_column(
         ForeignKey("website_properties.id", ondelete="SET NULL"), index=True
     )
@@ -856,6 +860,7 @@ class BackgroundJob(Base):
     scan: Mapped[Scan | None] = relationship(back_populates="jobs")
     source_refresh: Mapped[SourceRefresh | None] = relationship(back_populates="jobs")
     performance_run: Mapped["PerformanceRun | None"] = relationship(back_populates="jobs")
+    accessibility_run: Mapped["AccessibilityRun | None"] = relationship(back_populates="jobs")
     website_property: Mapped[WebsiteProperty | None] = relationship()
     events: Mapped[list["JobEvent"]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
@@ -864,16 +869,23 @@ class BackgroundJob(Base):
     __table_args__ = (
         CheckConstraint(
             "(scan_id IS NOT NULL AND source_refresh_id IS NULL "
-            "AND scan_comparison_id IS NULL AND performance_run_id IS NULL) OR "
+            "AND scan_comparison_id IS NULL AND performance_run_id IS NULL "
+            "AND accessibility_run_id IS NULL) OR "
             "(scan_id IS NULL AND source_refresh_id IS NOT NULL "
-            "AND scan_comparison_id IS NULL AND performance_run_id IS NULL) OR "
+            "AND scan_comparison_id IS NULL AND performance_run_id IS NULL "
+            "AND accessibility_run_id IS NULL) OR "
             "(scan_id IS NULL AND source_refresh_id IS NULL "
             "AND scan_comparison_id IS NOT NULL AND performance_run_id IS NULL "
+            "AND accessibility_run_id IS NULL "
             "AND job_type = 'scan_comparison_build') OR "
             "(scan_id IS NULL AND source_refresh_id IS NULL AND scan_comparison_id IS NULL "
-            "AND performance_run_id IS NOT NULL AND job_type = 'performance_run') OR "
+            "AND performance_run_id IS NOT NULL AND accessibility_run_id IS NULL "
+            "AND job_type = 'performance_run') OR "
             "(scan_id IS NULL AND source_refresh_id IS NULL AND scan_comparison_id IS NULL "
-            "AND performance_run_id IS NULL "
+            "AND performance_run_id IS NULL AND accessibility_run_id IS NOT NULL "
+            "AND job_type = 'accessibility_run') OR "
+            "(scan_id IS NULL AND source_refresh_id IS NULL AND scan_comparison_id IS NULL "
+            "AND performance_run_id IS NULL AND accessibility_run_id IS NULL "
             "AND website_property_id IS NOT NULL "
             "AND job_type IN ('category_rule_evaluation', 'structured_content_build'))",
             name="ck_background_job_one_subject",

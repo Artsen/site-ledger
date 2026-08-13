@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.accessibility_routes import router as accessibility_router
 from app.api.ai_document_routes import router as ai_document_router
 from app.api.category_rule_routes import router as category_rule_router
 from app.api.comparison_routes import router as comparison_router
@@ -12,6 +13,7 @@ from app.api.routes import router
 from app.api.structured_content_routes import router as structured_content_router
 from app.config import get_settings
 from app.product import API_TITLE, API_VERSION, PRODUCT_DESCRIPTION
+from app.storage.accessibility_store import LocalAccessibilityPayloadStore
 from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
 from app.storage.performance_store import LocalPerformancePayloadStore
@@ -23,6 +25,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     store = LocalContentStore(settings.html_storage_root)
     app.state.content_store = store
     app.state.artifact_store = LocalArtifactStore(settings.rendered_artifact_storage_root)
+    app.state.accessibility_payload_store = LocalAccessibilityPayloadStore(
+        settings.accessibility_payload_storage_root
+    )
     app.state.performance_payload_store = LocalPerformancePayloadStore(
         settings.performance_payload_storage_root
     )
@@ -45,6 +50,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router)
+    app.include_router(accessibility_router)
     app.include_router(ai_document_router)
     app.include_router(category_rule_router)
     app.include_router(comparison_router)

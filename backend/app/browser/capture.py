@@ -6,6 +6,7 @@ import importlib.metadata
 import json
 import time
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,6 +51,7 @@ class CaptureResult:
     console_truncated: bool = False
     page_errors_truncated: bool = False
     total_network_bytes: int = 0
+    callback_result: Any = None
 
 
 class BrowserUnavailableError(RuntimeError):
@@ -136,7 +138,13 @@ class BrowserRenderer:
         if self._playwright:
             await self._playwright.stop()
 
-    async def capture(self, url: str) -> CaptureResult:
+    async def capture(
+        self,
+        url: str,
+        *,
+        after_ready: Callable[[Any], Awaitable[Any]] | None = None,
+        capture_artifacts: bool = True,
+    ) -> CaptureResult:
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
         started = time.monotonic()
@@ -437,7 +445,10 @@ class BrowserRenderer:
             result.final_url = page.url
             result.title = (await page.title())[:2000]
             result.user_agent = (await page.evaluate("navigator.userAgent"))[:2000]
-            await self._capture_artifacts(page, result, warning)
+            if after_ready is not None:
+                result.callback_result = await after_ready(page)
+            if capture_artifacts:
+                await self._capture_artifacts(page, result, warning)
             if result.warnings or result.page_errors:
                 result.state = "completed_with_warnings"
         except asyncio.CancelledError:
@@ -454,7 +465,7 @@ class BrowserRenderer:
                 result.state = "failed"
                 result.error_type = type(exc).__name__[:64]
                 result.error_message = redact_text(str(exc), 8000)
-            if page and not page.is_closed():
+            if capture_artifacts and page and not page.is_closed():
                 await self._capture_artifacts(page, result, warning)
         finally:
             if event_tasks:

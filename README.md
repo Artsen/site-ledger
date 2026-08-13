@@ -28,6 +28,7 @@ observations from separate scans without erasing the evidence captured by each s
 - Stores exact HTML responses as compressed, content-addressed evidence.
 - Extracts versioned deterministic Page outlines and direct source-text sections from retained HTML.
 - Collects immutable PageSpeed lab and CrUX field observations on demand with exact provider payloads.
+- Collects immutable automated Accessibility observations with pinned local axe-core evidence.
 - Records page metadata, redirect chains, errors, and inbound/outgoing link provenance.
 - Uses conditional HTTP revalidation and deterministic parsed-result reuse when safe.
 - Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
@@ -37,7 +38,7 @@ observations from separate scans without erasing the evidence captured by each s
 - Supports scan, source, Site, and background Activity lifecycle management.
 
 Site Ledger does not perform browser-only crawling, Resource-body storage, complete website change
-detection, visual regression, accessibility audits, performance regression detection, analytics
+detection, visual regression, WCAG certification, performance regression detection, analytics
 correlation, or AI findings.
 
 ## Core Product Model
@@ -55,6 +56,8 @@ correlation, or AI findings.
 - **Activity:** Durable background execution and worker status.
 - **Performance observation:** External PageSpeed lab or CrUX field evidence collected independently
   of a Scan.
+- **Accessibility observation:** Automated axe-core evidence for one persistent Page and responsive
+  profile, collected independently of a Scan.
 
 See [Product vision](docs/product-vision.md) for the broader model and roadmap.
 See [Resource Inventory](docs/resource-inventory.md) for classification, provenance, and storage
@@ -67,6 +70,8 @@ See [Page Category Rules](docs/page-category-rules.md) and
 [Site display timezones](docs/site-timezones.md) for mutable Site organization and presentation.
 See [Performance observations](docs/performance-observations.md) for external provider evidence,
 security, collection limits, and workspace semantics.
+See [Automated Accessibility observations](docs/accessibility-observations.md) for detector
+provenance, browser security, evidence semantics, and automated-testing limitations.
 
 ## Architecture Overview
 
@@ -146,6 +151,8 @@ Category Rule performance can be measured with
 `uv run python -m app.category_rule_benchmark`.
 Performance history queries can be measured with
 `uv run python -m app.performance_benchmark`.
+Run the deterministic Accessibility history benchmark with
+`uv run python -m app.accessibility_benchmark`.
 
 Run the frontend in a third terminal:
 

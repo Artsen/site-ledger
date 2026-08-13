@@ -1,0 +1,304 @@
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from app.accessibility.engine import (
+    ACCESSIBILITY_INTEGRATION_VERSION,
+    ACCESSIBILITY_NORMALIZATION_VERSION,
+    AXE_BUNDLE_SHA256,
+    AXE_CORE_VERSION,
+    PROFILES,
+    RULESET_PROFILE,
+    RULESET_SHA256,
+    ruleset_metadata,
+)
+from app.config import get_settings
+from app.database import get_db
+from app.models import AccessibilityObservation, AccessibilityRun, BackgroundJob, WebsiteProperty
+from app.schemas.accessibility import (
+    AccessibilityCapabilities,
+    AccessibilityObservationList,
+    AccessibilityObservationRead,
+    AccessibilityPageSummaryList,
+    AccessibilityRuleAggregateList,
+    AccessibilityRuleDetail,
+    AccessibilityRunCreate,
+    AccessibilityRunDetail,
+    AccessibilityRunList,
+    AccessibilityRunRead,
+    AccessibilitySummary,
+)
+from app.services.accessibility_collection import create_accessibility_run
+from app.services.accessibility_queries import (
+    accessibility_pages,
+    accessibility_rule_detail,
+    accessibility_rules,
+    accessibility_summary,
+    get_accessibility_run,
+    latest_accessibility,
+    list_accessibility_runs,
+    observation_read,
+    page_accessibility_history,
+    page_latest_accessibility,
+)
+from app.services.background_jobs import enqueue_accessibility_run_job, request_cancellation
+from app.services.site_pages import find_site_page
+from app.storage.accessibility_store import (
+    AccessibilityPayloadNotFoundError,
+    LocalAccessibilityPayloadStore,
+)
+
+router = APIRouter(prefix="/api", tags=["accessibility"])
+DbSession = Annotated[Session, Depends(get_db)]
+
+
+@router.get("/accessibility/capabilities", response_model=AccessibilityCapabilities)
+def capabilities() -> AccessibilityCapabilities:
+    settings = get_settings()
+    return AccessibilityCapabilities(
+        axe_core_version=AXE_CORE_VERSION,
+        detector_bundle_sha256=AXE_BUNDLE_SHA256,
+        integration_version=ACCESSIBILITY_INTEGRATION_VERSION,
+        normalization_version=ACCESSIBILITY_NORMALIZATION_VERSION,
+        ruleset_profile=RULESET_PROFILE,
+        ruleset_rule_count=len(ruleset_metadata()["rules"]),
+        ruleset_sha256=RULESET_SHA256,
+        default_page_limit=settings.accessibility_default_page_limit,
+        hard_page_limit=settings.accessibility_hard_page_limit,
+        profiles=PROFILES,
+    )
+
+
+@router.post(
+    "/sites/{site_id}/accessibility-runs", response_model=AccessibilityRunRead, status_code=202
+)
+def create_run(
+    site_id: int, payload: AccessibilityRunCreate, db: DbSession
+) -> AccessibilityRunRead:
+    try:
+        run = create_accessibility_run(db, site_id, payload)
+        job = enqueue_accessibility_run_job(db, run.id, site_id)
+        db.commit()
+        db.refresh(run)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(404 if str(exc) == "Site not found." else 422, str(exc)) from exc
+    return AccessibilityRunRead.model_validate(
+        {
+            **{column.name: getattr(run, column.name) for column in run.__table__.columns},
+            "job_id": job.id,
+            "presentation_status": job.status,
+        }
+    )
+
+
+@router.get("/sites/{site_id}/accessibility-runs", response_model=AccessibilityRunList)
+def list_runs(
+    site_id: int, db: DbSession, limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0)
+) -> AccessibilityRunList:
+    _site(db, site_id)
+    return list_accessibility_runs(db, site_id, limit=limit, offset=offset)
+
+
+@router.get("/sites/{site_id}/accessibility-runs/{run_id}", response_model=AccessibilityRunDetail)
+def get_run(
+    site_id: int,
+    run_id: int,
+    db: DbSession,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> AccessibilityRunDetail:
+    result = get_accessibility_run(db, site_id, run_id, limit=limit, offset=offset)
+    if result is None:
+        raise HTTPException(404, "Accessibility run not found")
+    return result
+
+
+@router.post(
+    "/sites/{site_id}/accessibility-runs/{run_id}/cancel", response_model=AccessibilityRunRead
+)
+def cancel_run(site_id: int, run_id: int, db: DbSession) -> AccessibilityRunRead:
+    run = db.scalar(
+        select(AccessibilityRun).where(
+            AccessibilityRun.id == run_id, AccessibilityRun.website_property_id == site_id
+        )
+    )
+    if run is None:
+        raise HTTPException(404, "Accessibility run not found")
+    job = db.scalar(select(BackgroundJob).where(BackgroundJob.accessibility_run_id == run_id))
+    if job:
+        request_cancellation(db, job, "Accessibility audit cancellation requested.")
+        if job.status == "cancelled":
+            run.status = "cancelled"
+            run.finished_at = job.finished_at
+            db.commit()
+    result = get_accessibility_run(db, site_id, run_id, limit=1, offset=0)
+    assert result is not None
+    return AccessibilityRunRead(**result.model_dump(exclude={"observations"}))
+
+
+@router.get("/sites/{site_id}/accessibility/latest", response_model=AccessibilityObservationList)
+def latest(
+    site_id: int, db: DbSession, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)
+) -> AccessibilityObservationList:
+    _site(db, site_id)
+    return latest_accessibility(db, site_id, limit=limit, offset=offset)
+
+
+@router.get("/sites/{site_id}/accessibility/summary", response_model=AccessibilitySummary)
+def summary(site_id: int, db: DbSession) -> AccessibilitySummary:
+    _site(db, site_id)
+    return accessibility_summary(db, site_id)
+
+
+@router.get("/sites/{site_id}/accessibility/pages", response_model=AccessibilityPageSummaryList)
+def pages(
+    site_id: int,
+    db: DbSession,
+    search: str | None = None,
+    outcome: Literal["ready", "failed"] | None = None,
+    impact: Literal["critical", "serious"] | None = None,
+    has_violations: bool | None = None,
+    needs_review: bool | None = None,
+    sort: Literal[
+        "page", "audited", "desktop", "mobile", "critical", "serious", "needs_review"
+    ] = "audited",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: int = Query(100, ge=1, le=250),
+    offset: int = Query(0, ge=0),
+) -> AccessibilityPageSummaryList:
+    _site(db, site_id)
+    return accessibility_pages(
+        db,
+        site_id,
+        search=search,
+        outcome=outcome,
+        impact=impact,
+        has_violations=has_violations,
+        needs_review=needs_review,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/sites/{site_id}/accessibility/rules", response_model=AccessibilityRuleAggregateList)
+def rules(
+    site_id: int,
+    db: DbSession,
+    result_type: Literal["violation", "incomplete"] | None = None,
+    impact: str | None = None,
+    profile: Literal["desktop", "mobile"] | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> AccessibilityRuleAggregateList:
+    _site(db, site_id)
+    return accessibility_rules(
+        db,
+        site_id,
+        result_type=result_type,
+        impact=impact,
+        profile=profile,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/sites/{site_id}/accessibility/rules/{rule_id}", response_model=AccessibilityRuleDetail
+)
+def rule_detail(
+    site_id: int,
+    rule_id: str,
+    db: DbSession,
+    result_type: Literal["violation", "incomplete"] = "violation",
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> AccessibilityRuleDetail:
+    result = accessibility_rule_detail(
+        db, site_id, rule_id, result_type=result_type, limit=limit, offset=offset
+    )
+    if result is None:
+        raise HTTPException(404, "Accessibility rule evidence not found")
+    return result
+
+
+@router.get(
+    "/sites/{site_id}/pages/{resource_id}/accessibility",
+    response_model=AccessibilityObservationList,
+)
+def page_history(
+    site_id: int,
+    resource_id: int,
+    db: DbSession,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> AccessibilityObservationList:
+    _page(db, site_id, resource_id)
+    return page_accessibility_history(db, site_id, resource_id, limit=limit, offset=offset)
+
+
+@router.get(
+    "/sites/{site_id}/pages/{resource_id}/accessibility/latest",
+    response_model=AccessibilityObservationList,
+)
+def page_latest(site_id: int, resource_id: int, db: DbSession) -> AccessibilityObservationList:
+    _page(db, site_id, resource_id)
+    return page_latest_accessibility(db, site_id, resource_id)
+
+
+@router.get(
+    "/sites/{site_id}/accessibility-observations/{observation_id}",
+    response_model=AccessibilityObservationRead,
+)
+def observation_detail(
+    site_id: int, observation_id: int, db: DbSession
+) -> AccessibilityObservationRead:
+    observation = db.scalar(
+        select(AccessibilityObservation)
+        .options(
+            selectinload(AccessibilityObservation.web_resource),
+            selectinload(AccessibilityObservation.payload_blob),
+        )
+        .where(
+            AccessibilityObservation.id == observation_id,
+            AccessibilityObservation.website_property_id == site_id,
+        )
+    )
+    if observation is None:
+        raise HTTPException(404, "Accessibility observation not found")
+    return observation_read(observation)
+
+
+@router.get("/accessibility-observations/{observation_id}/raw")
+def raw_payload(observation_id: int, request: Request, db: DbSession) -> Response:
+    observation = db.get(AccessibilityObservation, observation_id)
+    if observation is None or observation.payload_blob is None:
+        raise HTTPException(404, "Accessibility payload not found")
+    store: LocalAccessibilityPayloadStore = request.app.state.accessibility_payload_store
+    try:
+        content = store.read(observation.payload_blob)
+    except AccessibilityPayloadNotFoundError as exc:
+        raise HTTPException(404, "Accessibility payload file is missing") from exc
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+            "X-Content-SHA256": observation.payload_blob.sha256,
+        },
+    )
+
+
+def _site(db: Session, site_id: int) -> None:
+    if db.get(WebsiteProperty, site_id) is None:
+        raise HTTPException(404, "Site not found")
+
+
+def _page(db: Session, site_id: int, resource_id: int) -> None:
+    if find_site_page(db, site_id, resource_id) is None:
+        raise HTTPException(404, "Page not found")
