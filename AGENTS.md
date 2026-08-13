@@ -77,8 +77,8 @@ Implemented capabilities include:
   persistent Page Change History.
 - Scan, source, Site, and Activity lifecycle management.
 
-Findings and investigation records, PageSpeed/CrUX, accessibility observations, GA4/Search Console,
-section-level comparison, structured-content full-text search, Resource/PDF body extraction,
+Findings and investigation records, GA4/Search Console, section-level comparison,
+structured-content full-text search, Resource/PDF body extraction,
 rendered-DOM structured extraction, environment or cross-Site comparison, scheduling and
 notifications, embeddings, RAG, and semantic/LLM interpretation are future areas. Describe them as
 planned or designed to support, never as current behavior.
@@ -242,6 +242,16 @@ Authenticated and private-network crawling require explicit future design. Do no
 boundaries for local convenience.
 
 ## Persistence And Lifecycle
+
+`WebResource` is persistent global URL identity; changing normalization semantics is a compatibility
+change. Current behavior is named `url-normalization-v1`. Never change URL identity in an incidental
+refactor or casually decode reserved percent-encoded delimiters into structural delimiters.
+Site-specific query suppression is policy and must remain distinct from generic syntax
+normalization. Provider-returned URLs never redefine Site Ledger identity. Any normalization change
+requires retained-data impact analysis before migration: immutable evidence may be mechanically
+attributable, but splitting a Page can make mutable SitePage workspace metadata ambiguous.
+Rebuildable projections and comparisons are not authoritative migration evidence. See
+[URL identity contract](docs/url-identity-contract.md).
 
 Exact HTML bytes are SHA-256 addressed, gzip-compressed, and deduplicated through the content store.
 Do not put large HTML bodies directly into observation rows.

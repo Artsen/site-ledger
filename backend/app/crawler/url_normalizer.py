@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from posixpath import normpath
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
+URL_NORMALIZATION_VERSION = "url-normalization-v1"
+
 
 @dataclass(frozen=True)
 class NormalizedUrl:

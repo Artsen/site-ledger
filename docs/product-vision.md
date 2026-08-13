@@ -32,6 +32,8 @@ The current application implements:
 - Inbound and outgoing link occurrence provenance.
 - Scan-specific 2D and 3D topology graphs.
 - Versioned prepared results for immutable terminal Scans, with raw evidence fallback and rebuilds.
+- Immutable PageSpeed lab and CrUX field observations collected independently of Scans.
+- Immutable automated Accessibility observations with pinned detector and browser provenance.
 - Scan, source, Site, and Activity lifecycle management.
 
 ## Product Vocabulary
@@ -143,8 +145,9 @@ Change History without interpreting those facts as Findings.
 
 Rules, statistics, models, or AI that explain evidence.
 
-This is future direction. Findings, audits, semantic analysis, and AI explanations are not currently
-implemented.
+Findings, semantic analysis, and AI explanations are future direction. Automated Accessibility and
+Performance collection are implemented evidence domains, not interpretive Findings or compliance
+or regression conclusions.
 
 ### Workflow
 
@@ -155,7 +158,7 @@ permissions, and resolution workflow remain future direction.
 ## Roadmap
 
 Planned areas include Resource-body analysis, environment comparisons,
-findings, accessibility and performance observations, analytics
+findings, performance regression interpretation, analytics
 integrations, semantic analysis, and investigation workflow.
 
 New work should preserve the separation between evidence, deterministic comparison, interpretation,
@@ -166,8 +169,8 @@ and workflow. Interpretation must remain traceable to the observations that supp
 - Browser rendering is bounded optional Page evidence, not browser-only crawling or Resource discovery.
 - Cross-Site and environment comparison are not implemented. Same-Site Scan comparison is
   documented in [Deterministic Scan comparisons](scan-comparisons.md).
-- Resource-body storage and analysis, findings, audits, analytics, semantic embeddings, and AI
-  summaries are not implemented.
+- Resource-body storage and analysis, Findings, analytics, semantic embeddings, and AI summaries
+  are not implemented. Automated Accessibility and Performance evidence collection is current.
 - Authenticated and private-network crawling are not supported.
 - Robots.txt enforcement and within-crawl concurrency remain deferred.
 - Graph views are bounded and scan-specific, not persistent site-wide knowledge graphs.

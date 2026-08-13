@@ -72,6 +72,8 @@ See [Performance observations](docs/performance-observations.md) for external pr
 security, collection limits, and workspace semantics.
 See [Automated Accessibility observations](docs/accessibility-observations.md) for detector
 provenance, browser security, evidence semantics, and automated-testing limitations.
+See [URL identity contract](docs/url-identity-contract.md) for persistent WebResource semantics,
+known V1 equivalences, retained-data audit results, and future migration constraints.
 
 ## Architecture Overview
 
@@ -296,6 +298,6 @@ files when the declared dependency set changes.
 ## Roadmap
 
 Future direction is designed to support screenshots, richer asset
-inventories, environment comparisons, findings, accessibility and
-performance observations, analytics integrations, semantic analysis, and investigation workflow.
+inventories, environment comparisons, findings, performance regression interpretation, analytics
+integrations, semantic analysis, and investigation workflow.
 These capabilities are planned areas, not current product claims.

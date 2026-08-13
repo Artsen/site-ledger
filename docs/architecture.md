@@ -231,6 +231,14 @@ persistent Page `WebResource`. Lab and field evidence remain separate. Latest su
 views over history and do not mutate Page or Scan records. See
 [Performance observations](performance-observations.md).
 
+## Automated Accessibility Evidence
+
+Accessibility collection is independent of Scan execution. A durable `AccessibilityRun` loads an
+existing persistent Page through the hardened browser boundary, executes a pinned local axe-core
+detector, retains exact compressed payloads, and creates immutable, versioned
+`AccessibilityObservation` rows. Automated evidence does not establish WCAG conformance and does
+not create Findings. See [Automated Accessibility observations](accessibility-observations.md).
+
 ## Portability And Compatibility
 
 SQLAlchemy services avoid SQLite-only behavior where a normal portable solution exists. The content
@@ -250,7 +258,7 @@ crawl behavior, or break operator configuration.
 ## Deferred Areas
 
 Resource-body storage, environment comparison,
-findings, accessibility observations, performance regression interpretation, analytics integrations, semantic analysis,
+findings, performance regression interpretation, analytics integrations, semantic analysis,
 investigation workflow, scheduling, notifications, authentication, and multi-user permissions are
 future direction.
 
