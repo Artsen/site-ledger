@@ -5,8 +5,8 @@ import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import type { AiDeletePreview, AiDiscoveryCandidate, AiDocumentReference, AiDocumentRefresh, AiDocumentSnapshot, AiDocumentSource, AiDocumentSettings, AiValidation, Paginated } from "../types/aiDocuments";
 import type { ComparisonLink, ComparisonPage, ComparisonResource, ComparisonResultList, OccurrenceDiff, PageChangeHistory, ScanComparisonBuild, ScanComparisonList, ScanComparisonOverview, SourceDiff } from "../types/comparisons";
-import type { PerformanceObservation, PerformanceObservationList, PerformanceProviderCapabilities, PerformanceRun, PerformanceRunDetail, PerformanceRunList, PerformanceRunPayload } from "../types/performance";
-import type { AccessibilityCapabilities, AccessibilityObservation, AccessibilityObservationList, AccessibilityPageSummaryList, AccessibilityRuleAggregateList, AccessibilityRuleDetail, AccessibilityRun, AccessibilityRunDetail, AccessibilityRunList, AccessibilityRunPayload, AccessibilitySummary } from "../types/accessibility";
+import type { PerformanceObservation, PerformanceObservationList, PerformanceObservationPresentation, PerformanceProviderCapabilities, PerformanceRun, PerformanceRunDetail, PerformanceRunList, PerformanceRunPayload } from "../types/performance";
+import type { AccessibilityCapabilities, AccessibilityNodeList, AccessibilityObservation, AccessibilityObservationList, AccessibilityPageSummaryList, AccessibilityRuleAggregateList, AccessibilityRuleDetail, AccessibilityRuleList, AccessibilityRun, AccessibilityRunDetail, AccessibilityRunList, AccessibilityRunPayload, AccessibilitySummary } from "../types/accessibility";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -213,6 +213,7 @@ export const getLatestPerformance = (siteId: string, query = "") => request<Perf
 export const getPagePerformance = (siteId: string, resourceId: string, query = "") => request<PerformanceObservationList>(`/api/sites/${siteId}/pages/${resourceId}/performance${query}`);
 export const getPageLatestPerformance = (siteId: string, resourceId: string) => request<PerformanceObservationList>(`/api/sites/${siteId}/pages/${resourceId}/performance/latest`);
 export const getPerformanceObservation = (siteId: string, observationId: number) => request<PerformanceObservation>(`/api/sites/${siteId}/performance-observations/${observationId}`);
+export const getPerformanceObservationPresentation = (siteId: string, observationId: number) => request<PerformanceObservationPresentation>(`/api/sites/${siteId}/performance-observations/${observationId}/presentation`);
 export const performancePayloadUrl = (observationId: number) => `${API_BASE}/api/performance-observations/${observationId}/payload`;
 
 export async function getPerformancePayload(observationId: number): Promise<string> {
@@ -233,6 +234,8 @@ export const getAccessibilityRule = (siteId: string, ruleId: string, query = "")
 export const getPageAccessibility = (siteId: string, resourceId: string, query = "") => request<AccessibilityObservationList>(`/api/sites/${siteId}/pages/${resourceId}/accessibility${query}`);
 export const getPageLatestAccessibility = (siteId: string, resourceId: string) => request<AccessibilityObservationList>(`/api/sites/${siteId}/pages/${resourceId}/accessibility/latest`);
 export const getAccessibilityObservation = (siteId: string, observationId: number) => request<AccessibilityObservation>(`/api/sites/${siteId}/accessibility-observations/${observationId}`);
+export const getAccessibilityObservationRules = (siteId: string, observationId: number, query = "") => request<AccessibilityRuleList>(`/api/sites/${siteId}/accessibility-observations/${observationId}/rules${query}`);
+export const getAccessibilityObservationNodes = (siteId: string, observationId: number, ruleId: number, query = "") => request<AccessibilityNodeList>(`/api/sites/${siteId}/accessibility-observations/${observationId}/rules/${ruleId}/nodes${query}`);
 export const accessibilityPayloadUrl = (observationId: number) => `${API_BASE}/api/accessibility-observations/${observationId}/raw`;
 
 export async function getAccessibilityPayload(observationId: number): Promise<string> {

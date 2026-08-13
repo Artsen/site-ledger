@@ -4,12 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.config import get_settings
+from app.config import OBSERVABILITY_ABSOLUTE_PAGE_LIMIT, get_settings
 from app.database import get_db
 from app.models import BackgroundJob, PerformanceObservation, PerformanceRun, WebsiteProperty
 from app.schemas.performance import (
+    PageSpeedAuditPresentation,
     PerformanceLatestList,
     PerformanceObservationList,
+    PerformanceObservationPresentation,
     PerformanceObservationRead,
     PerformanceProviderCapabilities,
     PerformanceProviderState,
@@ -23,6 +25,7 @@ from app.services.background_jobs import (
     request_cancellation,
 )
 from app.services.performance_collection import create_performance_run
+from app.services.performance_presentation import metric_presentations, parse_pagespeed_presentation
 from app.services.performance_providers import (
     CRUX_ADAPTER_VERSION,
     PAGESPEED_ADAPTER_VERSION,
@@ -62,6 +65,9 @@ def provider_capabilities(site_id: int, db: DbSession) -> PerformanceProviderCap
         normalization_version=PERFORMANCE_NORMALIZATION_VERSION,
         default_page_limit=settings.performance_default_page_limit,
         hard_page_limit=settings.performance_hard_page_limit,
+        absolute_page_limit=OBSERVABILITY_ABSOLUTE_PAGE_LIMIT,
+        max_provider_requests=settings.performance_max_provider_requests,
+        crux_queries_per_minute=settings.performance_crux_queries_per_minute,
     )
 
 
@@ -194,6 +200,72 @@ def observation_detail(
     if observation is None:
         raise HTTPException(404, "Performance observation not found")
     return performance_observation_read(observation)
+
+
+@router.get(
+    "/sites/{site_id}/performance-observations/{observation_id}/presentation",
+    response_model=PerformanceObservationPresentation,
+)
+def observation_presentation(
+    site_id: int, observation_id: int, request: Request, db: DbSession
+) -> PerformanceObservationPresentation:
+    observation = db.scalar(
+        select(PerformanceObservation)
+        .options(
+            selectinload(PerformanceObservation.web_resource),
+            selectinload(PerformanceObservation.payload_blob),
+        )
+        .where(
+            PerformanceObservation.id == observation_id,
+            PerformanceObservation.website_property_id == site_id,
+        )
+    )
+    if observation is None:
+        raise HTTPException(404, "Performance observation not found")
+    origin_context = None
+    if (
+        observation.provider == "crux"
+        and observation.target_kind == "url"
+        and observation.outcome == "unavailable"
+    ):
+        origin_context = db.scalar(
+            select(PerformanceObservation)
+            .options(
+                selectinload(PerformanceObservation.web_resource),
+                selectinload(PerformanceObservation.payload_blob),
+            )
+            .where(
+                PerformanceObservation.performance_run_id == observation.performance_run_id,
+                PerformanceObservation.provider == "crux",
+                PerformanceObservation.target_kind == "origin",
+                PerformanceObservation.dimension == observation.dimension,
+            )
+            .order_by(PerformanceObservation.id.desc())
+        )
+    opportunities: list[PageSpeedAuditPresentation] = []
+    diagnostics: list[PageSpeedAuditPresentation] = []
+    presentation_error = None
+    if observation.provider == "pagespeed" and observation.payload_blob is not None:
+        store: LocalPerformancePayloadStore = request.app.state.performance_payload_store
+        try:
+            opportunities, diagnostics, presentation_error = parse_pagespeed_presentation(
+                store.read(observation.payload_blob)
+            )
+        except PerformancePayloadNotFoundError:
+            presentation_error = "The retained PageSpeed payload file is missing."
+    return PerformanceObservationPresentation(
+        observation=performance_observation_read(observation),
+        metrics=metric_presentations(observation.provider, observation.metrics_json),
+        opportunities=opportunities,
+        diagnostics=diagnostics,
+        origin_context=(performance_observation_read(origin_context) if origin_context else None),
+        origin_metrics=(
+            metric_presentations(origin_context.provider, origin_context.metrics_json)
+            if origin_context
+            else []
+        ),
+        presentation_error=presentation_error,
+    )
 
 
 @router.get("/performance-observations/{observation_id}/payload")

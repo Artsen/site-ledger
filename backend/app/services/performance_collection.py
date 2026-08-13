@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,6 +40,38 @@ class PerformanceTask:
     web_resource_id: int | None
 
 
+class PerformanceCollectionCancelled(RuntimeError):
+    pass
+
+
+class CruxRateLimiter:
+    def __init__(
+        self,
+        queries_per_minute: int,
+        *,
+        should_cancel: Callable[[], bool],
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.minimum_interval = 60.0 / queries_per_minute
+        self.should_cancel = should_cancel
+        self.clock = clock
+        self.sleep = sleep
+        self.next_request_at: float | None = None
+
+    def wait(self) -> None:
+        while self.next_request_at is not None:
+            if self.should_cancel():
+                raise PerformanceCollectionCancelled
+            remaining = self.next_request_at - self.clock()
+            if remaining <= 0:
+                break
+            self.sleep(min(remaining, 0.25))
+        if self.should_cancel():
+            raise PerformanceCollectionCancelled
+        self.next_request_at = self.clock() + self.minimum_interval
+
+
 def create_performance_run(
     db: Session, site_id: int, payload: PerformanceRunCreate
 ) -> PerformanceRun:
@@ -51,11 +84,6 @@ def create_performance_run(
     if len(payload.resource_ids) > settings.performance_hard_page_limit:
         raise ValueError(
             f"A Performance run supports at most {settings.performance_hard_page_limit} Pages."
-        )
-    if len(payload.resource_ids) > settings.performance_default_page_limit:
-        raise ValueError(
-            f"A Performance run is configured for at most "
-            f"{settings.performance_default_page_limit} Pages."
         )
     pages = list(
         db.execute(
@@ -87,13 +115,19 @@ def create_performance_run(
     origin_requests = (
         len(configuration["crux_form_factors"]) if configuration["include_origin_crux"] else 0
     )
+    request_count = len(pages) * requests_per_page + origin_requests
+    if request_count > settings.performance_max_provider_requests:
+        raise ValueError(
+            f"This Performance run requires {request_count} provider requests; the configured "
+            f"maximum is {settings.performance_max_provider_requests}."
+        )
     run = PerformanceRun(
         website_property_id=site_id,
         status="queued",
         trigger=payload.trigger,
         configuration_json=configuration,
         target_count=len(pages),
-        request_count=len(pages) * requests_per_page + origin_requests,
+        request_count=request_count,
     )
     db.add(run)
     db.flush()
@@ -119,12 +153,17 @@ def execute_performance_run(
         run.started_at = run.started_at or datetime.now(UTC)
         tasks = _tasks(db, run)
         db.commit()
+    crux_limiter = CruxRateLimiter(
+        settings.performance_crux_queries_per_minute,
+        should_cancel=should_cancel,
+    )
     factory = client_factory or (
         lambda: PerformanceProviderClient(
             settings.google_api_key or "",
             timeout_seconds=settings.performance_provider_timeout_seconds,
             max_response_bytes=settings.performance_provider_max_response_bytes,
             max_attempts=settings.performance_provider_max_attempts,
+            before_crux_attempt=crux_limiter.wait,
         )
     )
     client = factory()
@@ -150,11 +189,14 @@ def execute_performance_run(
                 )
             if exists is None:
                 requested_at = datetime.now(UTC)
-                result = (
-                    client.pagespeed(task.target, task.dimension)
-                    if task.provider == "pagespeed"
-                    else client.crux(task.target, task.target_kind, task.dimension)
-                )
+                try:
+                    result = (
+                        client.pagespeed(task.target, task.dimension)
+                        if task.provider == "pagespeed"
+                        else client.crux(task.target, task.target_kind, task.dimension)
+                    )
+                except PerformanceCollectionCancelled:
+                    return _mark_cancelled(session_factory, run_id)
                 _persist_result(session_factory, run_id, task, result, requested_at)
             counters = _refresh_run_counts(session_factory, run_id)
             progress(counters["completed"], len(tasks), counters)
@@ -178,6 +220,17 @@ def mark_performance_run_failed(db: Session, run_id: int, exc: Exception) -> Non
     run.finished_at = datetime.now(UTC)
     run.error_summary = f"{type(exc).__name__}: {str(exc)[:800]}"
     db.commit()
+
+
+def _mark_cancelled(session_factory: Callable[[], Session], run_id: int) -> PerformanceRun:
+    with session_factory() as db:
+        run = db.get(PerformanceRun, run_id)
+        assert run is not None
+        run.status = "cancelled"
+        run.finished_at = datetime.now(UTC)
+        db.commit()
+        db.refresh(run)
+        return run
 
 
 def _tasks(db: Session, run: PerformanceRun) -> list[PerformanceTask]:

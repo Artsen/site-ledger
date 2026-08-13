@@ -120,13 +120,53 @@ def latest_site_performance(
         )
         or 0
     )
+    latest_crux = (
+        select(
+            PerformanceObservation.id.label("observation_id"),
+            PerformanceObservation.web_resource_id.label("web_resource_id"),
+            PerformanceObservation.dimension.label("dimension"),
+            PerformanceObservation.outcome.label("outcome"),
+            func.row_number()
+            .over(
+                partition_by=(
+                    PerformanceObservation.web_resource_id,
+                    PerformanceObservation.dimension,
+                ),
+                order_by=(
+                    PerformanceObservation.observed_at.desc(),
+                    PerformanceObservation.id.desc(),
+                ),
+            )
+            .label("position"),
+        )
+        .where(
+            PerformanceObservation.website_property_id == site_id,
+            PerformanceObservation.provider == "crux",
+            PerformanceObservation.target_kind == "url",
+            PerformanceObservation.web_resource_id.is_not(None),
+        )
+        .subquery()
+    )
+    current_crux = (
+        select(latest_crux)
+        .where(latest_crux.c.position == 1, latest_crux.c.outcome == "ready")
+        .subquery()
+    )
     field_available_page_count = (
+        db.scalar(select(func.count(func.distinct(current_crux.c.web_resource_id)))) or 0
+    )
+    field_available_phone_page_count = (
         db.scalar(
-            select(func.count(func.distinct(PerformanceObservation.web_resource_id))).where(
-                PerformanceObservation.website_property_id == site_id,
-                PerformanceObservation.provider == "crux",
-                PerformanceObservation.outcome == "ready",
-                PerformanceObservation.web_resource_id.is_not(None),
+            select(func.count(func.distinct(current_crux.c.web_resource_id))).where(
+                current_crux.c.dimension == "PHONE"
+            )
+        )
+        or 0
+    )
+    field_available_desktop_page_count = (
+        db.scalar(
+            select(func.count(func.distinct(current_crux.c.web_resource_id))).where(
+                current_crux.c.dimension == "DESKTOP"
             )
         )
         or 0
@@ -135,6 +175,8 @@ def latest_site_performance(
         **result.model_dump(),
         measured_page_count=measured_page_count,
         field_available_page_count=field_available_page_count,
+        field_available_phone_page_count=field_available_phone_page_count,
+        field_available_desktop_page_count=field_available_desktop_page_count,
     )
 
 

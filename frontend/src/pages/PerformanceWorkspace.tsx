@@ -14,10 +14,10 @@ import {
   getPerformanceProviders,
   getPerformanceRun,
   listPerformanceRuns,
-  listSitePages,
   performancePayloadUrl,
 } from "../api/client";
 import { Button } from "../components/ui/Button";
+import { CollectionPageSelector } from "../components/observability/CollectionPageSelector";
 import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
@@ -63,7 +63,8 @@ export function SitePerformancePage() {
   const configured = Boolean(capabilities.data?.pagespeed.configured && capabilities.data.crux.configured);
   const latestRun = runs.data?.items[0];
   const measuredPages = latest.data?.measured_page_count ?? 0;
-  const fieldReady = latest.data?.field_available_page_count ?? 0;
+  const fieldPhone = latest.data?.field_available_phone_page_count ?? 0;
+  const fieldDesktop = latest.data?.field_available_desktop_page_count ?? 0;
   return <div className="space-y-5">
     <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div><h1 className="text-xl font-semibold">Performance</h1><p className="mt-1 text-sm text-stone-600">PageSpeed lab and CrUX field evidence are collected and retained separately.</p></div>
@@ -74,7 +75,8 @@ export function SitePerformancePage() {
       <Summary label="Latest run" value={latestRun ? formatStatus(latestRun.presentation_status ?? latestRun.status) : "None"} />
       <Summary label="Latest collection" value={latestRun ? formatDate(latestRun.created_at, { timeZone: site.display_timezone }) : "No evidence"} />
       <Summary label="Pages measured" value={String(measuredPages)} />
-      <Summary label="Ready field observations" value={String(fieldReady)} />
+      <Summary label="Phone field coverage" value={`${fieldPhone} / ${measuredPages} Pages`} />
+      <Summary label="Desktop field coverage" value={`${fieldDesktop} / ${measuredPages} Pages`} />
     </section>
     <Tabs tabs={[{ id: "overview", label: "Overview" }, { id: "lab", label: "Lab" }, { id: "field", label: "Field" }, { id: "runs", label: "Runs", count: runs.data?.total }]} active={view} onChange={(next) => setSearchParams(next === "overview" ? {} : { view: next })} />
     {view === "runs" ? <RunsTable siteId={String(site.id)} runs={runs.data?.items ?? []} /> : <LatestEvidence siteId={String(site.id)} data={latest.data} pagination={pagination} />}
@@ -94,15 +96,17 @@ function LatestEvidence({ siteId, data, pagination }: { siteId: string; data?: P
 }
 
 function ObservationTable({ siteId, observations }: { siteId: string; observations: PerformanceObservation[] }) {
+  const groups = new Map<string, PerformanceObservation[]>();
+  for (const observation of observations) {
+    const key = observation.web_resource_id ? `page:${observation.web_resource_id}` : `origin:${observation.requested_target}`;
+    groups.set(key, [...(groups.get(key) ?? []), observation]);
+  }
   return <div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm">
-    <thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="px-3 py-2">Target</th><th className="px-3 py-2">Evidence</th><th className="px-3 py-2">Key metrics</th><th className="hidden px-3 py-2 md:table-cell">Collected</th><th className="px-3 py-2">Raw</th></tr></thead>
-    <tbody>{observations.map((item) => <tr key={item.id} className="border-t border-stone-100 align-top">
-      <td className="max-w-xs px-3 py-2"><span className="block font-medium">{item.target_kind === "origin" ? "Site origin" : "Page"}</span>{item.web_resource_id ? <Link className="block truncate font-mono text-xs underline" to={`/sites/${siteId}/pages/${item.web_resource_id}`}>{item.page_url}</Link> : <span className="block truncate font-mono text-xs text-stone-500">{item.requested_target}</span>}</td>
-      <td className="px-3 py-2"><span className="block font-medium">{item.provider === "pagespeed" ? "PageSpeed Lab" : "CrUX Field"}</span><span className="text-xs text-stone-500">{formatStatus(item.dimension)}</span><div className="mt-1"><StatusBadge status={item.outcome} label={item.outcome === "unavailable" ? "No field data available" : undefined} /></div>{item.error_message ? <span className="mt-1 block max-w-xs text-xs text-red-700">{item.error_message}</span> : null}</td>
-      <td className="px-3 py-2"><MetricSummary observation={item} /></td>
-      <td className="hidden whitespace-nowrap px-3 py-2 md:table-cell">{formatDate(item.observed_at)}</td>
-      <td className="px-3 py-2">{item.payload_sha256 ? <Link className="underline" to={`/sites/${siteId}/performance/evidence/${item.id}`}>View</Link> : "None"}</td>
-    </tr>)}</tbody>
+    <thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="px-3 py-2">Target</th><th className="px-3 py-2">Evidence by dimension</th></tr></thead>
+    <tbody>{[...groups.entries()].map(([key, items]) => { const first = items[0]; return <tr key={key} className="border-t border-stone-100 align-top">
+      <td className="max-w-xs px-3 py-2"><span className="block font-medium">{first.target_kind === "origin" ? "Site origin" : "Page"}</span>{first.web_resource_id ? <Link className="block truncate font-mono text-xs underline" to={`/sites/${siteId}/pages/${first.web_resource_id}`}>{first.page_url}</Link> : <span className="block truncate font-mono text-xs text-stone-500">{first.requested_target}</span>}</td>
+      <td className="px-3 py-2"><div className="grid gap-3 sm:grid-cols-2">{items.map((item) => <div key={item.id} className="min-w-0 border-l-2 border-stone-200 pl-3"><div className="flex flex-wrap items-center gap-2"><strong>{item.provider === "pagespeed" ? "PageSpeed Lab" : "CrUX Field"} {formatStatus(item.dimension)}</strong><StatusBadge status={item.outcome} label={item.outcome === "unavailable" ? "URL-level field data unavailable" : undefined} /></div><div className="mt-1"><MetricSummary observation={item} /></div>{item.error_message ? <span className={`mt-1 block text-xs ${item.outcome === "failed" ? "text-red-700" : "text-stone-600"}`}>{item.error_message}</span> : null}<div className="mt-2 flex flex-wrap gap-3 text-xs"><span>{formatDate(item.observed_at)}</span><Link className="underline" to={`/sites/${siteId}/performance/observations/${item.id}`}>Inspect result</Link></div></div>)}</div></td>
+    </tr>; })}</tbody>
   </table></div>;
 }
 
@@ -130,8 +134,6 @@ function CollectPanel({ siteId, capabilities, onClose, initialResourceId }: { si
   const dialogRef = useRef<HTMLElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<number[]>(initialResourceId ? [initialResourceId] : []);
   const [pagespeed, setPagespeed] = useState(true);
   const [crux, setCrux] = useState(true);
@@ -140,13 +142,16 @@ function CollectPanel({ siteId, capabilities, onClose, initialResourceId }: { si
   const [phone, setPhone] = useState(true);
   const [cruxDesktop, setCruxDesktop] = useState(true);
   const [origin, setOrigin] = useState(true);
-  const limit = 10;
-  const pages = useQuery({ queryKey: ["performance-page-selector", siteId, search, page], queryFn: () => listSitePages(siteId, `?search=${encodeURIComponent(search)}&limit=${limit}&offset=${(page - 1) * limit}&sort=url&direction=asc`) });
-  const requestCount = selected.length * ((pagespeed ? Number(mobile) + Number(desktop) : 0) + (crux ? Number(phone) + Number(cruxDesktop) : 0)) + (crux && origin ? Number(phone) + Number(cruxDesktop) : 0);
+  const pageSpeedMobile = pagespeed && mobile ? selected.length : 0;
+  const pageSpeedDesktop = pagespeed && desktop ? selected.length : 0;
+  const cruxPhoneUrl = crux && phone ? selected.length : 0;
+  const cruxDesktopUrl = crux && cruxDesktop ? selected.length : 0;
+  const cruxPhoneOrigin = crux && origin && phone ? 1 : 0;
+  const cruxDesktopOrigin = crux && origin && cruxDesktop ? 1 : 0;
+  const requestCount = pageSpeedMobile + pageSpeedDesktop + cruxPhoneUrl + cruxDesktopUrl + cruxPhoneOrigin + cruxDesktopOrigin;
   const payload: PerformanceRunPayload = { resource_ids: selected, providers: [...(pagespeed ? ["pagespeed" as const] : []), ...(crux ? ["crux" as const] : [])], pagespeed_strategies: [...(mobile ? ["mobile" as const] : []), ...(desktop ? ["desktop" as const] : [])], crux_form_factors: [...(phone ? ["PHONE" as const] : []), ...(cruxDesktop ? ["DESKTOP" as const] : [])], include_origin_crux: origin, trigger: initialResourceId ? "page_workspace" : "site_workspace" };
   const create = useMutation({ mutationFn: () => createPerformanceRun(siteId, payload), onSuccess: async (run) => { await queryClient.invalidateQueries({ queryKey: ["performance-runs", siteId] }); navigate(`/sites/${siteId}/performance/runs/${run.id}`); } });
-  const runPageLimit = Math.min(capabilities.default_page_limit, capabilities.hard_page_limit);
-  const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : current.length < runPageLimit ? [...current, id] : current);
+  const runPageLimit = capabilities.hard_page_limit;
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const dialog = dialogRef.current;
@@ -178,12 +183,10 @@ function CollectPanel({ siteId, capabilities, onClose, initialResourceId }: { si
     };
   }, []);
   return <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="collect-performance-title" className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-3 sm:p-8"><div className="mx-auto max-w-3xl rounded-md bg-white p-4 shadow-xl sm:p-6">
-    <header className="flex items-start justify-between gap-3"><div><h2 id="collect-performance-title" className="text-lg font-semibold">Collect Performance</h2><p className="text-sm text-stone-600">Select up to {runPageLimit} Pages. Provider calls run serially.</p></div><button type="button" aria-label="Close Performance collection" onClick={onClose} className="rounded p-2 hover:bg-stone-100"><X size={20} /></button></header>
-    {!initialResourceId ? <div className="mt-5 space-y-3"><input aria-label="Search Pages for Performance" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search known Pages" className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm" />
-      {pages.isLoading ? <LoadingBlock label="Loading Pages..." /> : pages.error ? <ErrorBanner error={pages.error} title="Could not load Pages" /> : <><div className="divide-y rounded-md border border-stone-200">{pages.data?.items.map((item) => <label key={item.resource_id} className="flex cursor-pointer items-start gap-3 p-3 hover:bg-stone-50"><input type="checkbox" className="mt-1" checked={selected.includes(item.resource_id)} disabled={!selected.includes(item.resource_id) && selected.length >= runPageLimit} onChange={() => toggle(item.resource_id)} /><span className="min-w-0"><span className="block truncate font-medium">{item.latest_title ?? "Untitled Page"}</span><span className="block truncate font-mono text-xs text-stone-500">{item.normalized_url}</span></span></label>)}</div>{pages.data ? <PaginatedTableControls compact total={pages.data.total} limit={limit} offset={(page - 1) * limit} onPageChange={setPage} onPageSizeChange={() => undefined} allowedPageSizes={[limit]} itemLabel="Page" /> : null}</>}
-    </div> : null}
+    <header className="flex items-start justify-between gap-3"><div><h2 id="collect-performance-title" className="text-lg font-semibold">Collect Performance</h2><p className="text-sm text-stone-600">Recommended batch: {capabilities.default_page_limit} Pages. Hard limit: {runPageLimit}. Provider calls run serially.</p></div><button type="button" aria-label="Close Performance collection" onClick={onClose} className="rounded p-2 hover:bg-stone-100"><X size={20} /></button></header>
+    {!initialResourceId ? <div className="mt-5"><CollectionPageSelector siteId={siteId} selected={selected} hardLimit={runPageLimit} label="Performance" onChange={setSelected} /></div> : null}
     <div className="mt-5 grid gap-4 border-t border-stone-200 pt-5 md:grid-cols-2"><fieldset><legend className="font-medium">PageSpeed Lab</legend><Check label="PageSpeed" checked={pagespeed} onChange={setPagespeed} disabled={!capabilities.pagespeed.configured} /><Check label="Mobile" checked={mobile} onChange={setMobile} disabled={!pagespeed} /><Check label="Desktop" checked={desktop} onChange={setDesktop} disabled={!pagespeed} /></fieldset><fieldset><legend className="font-medium">CrUX Field</legend><Check label="CrUX" checked={crux} onChange={setCrux} disabled={!capabilities.crux.configured} /><Check label="Phone" checked={phone} onChange={setPhone} disabled={!crux} /><Check label="Desktop" checked={cruxDesktop} onChange={setCruxDesktop} disabled={!crux} /><Check label="Include Site origin" checked={origin} onChange={setOrigin} disabled={!crux} /></fieldset></div>
-    <div className="mt-5 flex flex-col gap-3 border-t border-stone-200 pt-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-sm"><strong>{selected.length}</strong> Pages selected. This will make <strong>{requestCount}</strong> provider requests.</p><div className="flex gap-2"><Button type="button" onClick={onClose}>Cancel</Button><Button type="button" variant="primary" loading={create.isPending} disabled={!selected.length || !requestCount} onClick={() => create.mutate()}>Start collection</Button></div></div>{create.error ? <div className="mt-3"><ErrorBanner error={create.error} title="Could not start Performance collection" /></div> : null}
+    <div className="mt-5 border-t border-stone-200 pt-4"><dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3"><div>PageSpeed Mobile: <strong>{pageSpeedMobile}</strong></div><div>PageSpeed Desktop: <strong>{pageSpeedDesktop}</strong></div><div>CrUX Phone URL: <strong>{cruxPhoneUrl}</strong></div><div>CrUX Desktop URL: <strong>{cruxDesktopUrl}</strong></div><div>CrUX Phone Origin: <strong>{cruxPhoneOrigin}</strong></div><div>CrUX Desktop Origin: <strong>{cruxDesktopOrigin}</strong></div></dl><p className="mt-2 text-sm">Total: <strong>{requestCount}</strong> provider requests.</p>{selected.length > capabilities.default_page_limit ? <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">This exceeds the recommended {capabilities.default_page_limit}-Page batch. Large runs may take significant time and consume provider quota.</p> : null}<div className="mt-4 flex justify-end gap-2"><Button type="button" onClick={onClose}>Cancel</Button><Button type="button" variant="primary" loading={create.isPending} disabled={!selected.length || !requestCount || requestCount > capabilities.max_provider_requests} onClick={() => create.mutate()}>Start collection</Button></div></div>{create.error ? <div className="mt-3"><ErrorBanner error={create.error} title="Could not start Performance collection" /></div> : null}
   </div></section>;
 }
 

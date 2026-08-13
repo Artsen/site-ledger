@@ -17,6 +17,7 @@ from app.models import (
     WebResource,
 )
 from app.schemas.accessibility import (
+    AccessibilityNodeList,
     AccessibilityNodeRead,
     AccessibilityObservationList,
     AccessibilityObservationRead,
@@ -25,7 +26,9 @@ from app.schemas.accessibility import (
     AccessibilityRuleAggregate,
     AccessibilityRuleAggregateList,
     AccessibilityRuleDetail,
+    AccessibilityRuleList,
     AccessibilityRuleOccurrence,
+    AccessibilityRuleRead,
     AccessibilityRunDetail,
     AccessibilityRunList,
     AccessibilityRunRead,
@@ -493,6 +496,90 @@ def observation_read(observation: AccessibilityObservation) -> AccessibilityObse
         payload_stored_byte_size=observation.payload_blob.stored_byte_size
         if observation.payload_blob
         else None,
+    )
+
+
+def observation_rules(
+    db: Session,
+    site_id: int,
+    observation_id: int,
+    *,
+    result_type: str | None,
+    limit: int,
+    offset: int,
+) -> AccessibilityRuleList | None:
+    observation_exists = db.scalar(
+        select(AccessibilityObservation.id).where(
+            AccessibilityObservation.id == observation_id,
+            AccessibilityObservation.website_property_id == site_id,
+        )
+    )
+    if observation_exists is None:
+        return None
+    base = select(AccessibilityRuleEvidence).where(
+        AccessibilityRuleEvidence.accessibility_observation_id == observation_id
+    )
+    if result_type:
+        base = base.where(AccessibilityRuleEvidence.result_type == result_type)
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = list(
+        db.scalars(
+            base.order_by(
+                AccessibilityRuleEvidence.result_type.desc(),
+                AccessibilityRuleEvidence.position,
+                AccessibilityRuleEvidence.id,
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    return AccessibilityRuleList(
+        items=[AccessibilityRuleRead.model_validate(row, from_attributes=True) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def observation_rule_nodes(
+    db: Session,
+    site_id: int,
+    observation_id: int,
+    rule_evidence_id: int,
+    *,
+    limit: int,
+    offset: int,
+) -> AccessibilityNodeList | None:
+    rule_exists = db.scalar(
+        select(AccessibilityRuleEvidence.id)
+        .join(
+            AccessibilityObservation,
+            AccessibilityObservation.id == AccessibilityRuleEvidence.accessibility_observation_id,
+        )
+        .where(
+            AccessibilityRuleEvidence.id == rule_evidence_id,
+            AccessibilityRuleEvidence.accessibility_observation_id == observation_id,
+            AccessibilityObservation.website_property_id == site_id,
+        )
+    )
+    if rule_exists is None:
+        return None
+    base = select(AccessibilityNodeEvidence).where(
+        AccessibilityNodeEvidence.accessibility_rule_evidence_id == rule_evidence_id
+    )
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = list(
+        db.scalars(
+            base.order_by(AccessibilityNodeEvidence.position, AccessibilityNodeEvidence.id)
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    return AccessibilityNodeList(
+        items=[AccessibilityNodeRead.model_validate(row, from_attributes=True) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 

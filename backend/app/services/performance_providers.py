@@ -58,11 +58,13 @@ class PerformanceProviderClient:
         max_attempts: int = 3,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        before_crux_attempt: Callable[[], None] | None = None,
     ) -> None:
         self.api_key = api_key
         self.max_response_bytes = max_response_bytes
         self.max_attempts = max_attempts
         self.sleep = sleep
+        self.before_crux_attempt = before_crux_attempt
         self.client = httpx.Client(
             timeout=httpx.Timeout(timeout_seconds),
             trust_env=False,
@@ -121,6 +123,7 @@ class PerformanceProviderClient:
             CRUX_ENDPOINT,
             params={"key": self.api_key},
             json_body=body,
+            before_attempt=self.before_crux_attempt,
         )
         if error:
             return error
@@ -163,8 +166,11 @@ class PerformanceProviderClient:
         *,
         params: dict[str, str],
         json_body: dict[str, Any] | None = None,
+        before_attempt: Callable[[], None] | None = None,
     ) -> tuple[httpx.Response | None, bytes | None, ProviderResult | None]:
         for attempt in range(1, self.max_attempts + 1):
+            if before_attempt is not None:
+                before_attempt()
             try:
                 with self.client.stream(
                     method, endpoint, params=params, json=json_body

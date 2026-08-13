@@ -4,6 +4,9 @@ from pathlib import Path
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+OBSERVABILITY_ABSOLUTE_PAGE_LIMIT = 250
+CRUX_OFFICIAL_QUERIES_PER_MINUTE = 150
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="SCANNER_")
@@ -14,8 +17,9 @@ class Settings(BaseSettings):
     rendered_artifact_storage_root: Path = Path("../data/rendered")
     performance_payload_storage_root: Path = Path("../data/performance")
     accessibility_payload_storage_root: Path = Path("../data/accessibility")
-    accessibility_default_page_limit: int = 10
-    accessibility_hard_page_limit: int = 25
+    accessibility_default_page_limit: int = 50
+    accessibility_hard_page_limit: int = 250
+    accessibility_max_audit_count: int = 500
     accessibility_max_payload_bytes: int = 12 * 1024 * 1024
     google_api_key: str | None = Field(
         default=None,
@@ -24,8 +28,10 @@ class Settings(BaseSettings):
     performance_provider_timeout_seconds: float = 90.0
     performance_provider_max_response_bytes: int = 12 * 1024 * 1024
     performance_provider_max_attempts: int = 3
-    performance_default_page_limit: int = 10
-    performance_hard_page_limit: int = 25
+    performance_default_page_limit: int = 50
+    performance_hard_page_limit: int = 250
+    performance_max_provider_requests: int = 1002
+    performance_crux_queries_per_minute: int = 120
     crawler_user_agent: str = "WebsiteScanner/0.1"
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
@@ -68,16 +74,35 @@ class Settings(BaseSettings):
             raise ValueError("PERFORMANCE_PROVIDER_MAX_ATTEMPTS must be positive.")
         if self.performance_hard_page_limit < 1:
             raise ValueError("PERFORMANCE_HARD_PAGE_LIMIT must be positive.")
+        if self.performance_hard_page_limit > OBSERVABILITY_ABSOLUTE_PAGE_LIMIT:
+            raise ValueError(
+                "PERFORMANCE_HARD_PAGE_LIMIT cannot exceed the absolute application ceiling "
+                f"of {OBSERVABILITY_ABSOLUTE_PAGE_LIMIT}."
+            )
         if not 1 <= self.performance_default_page_limit <= self.performance_hard_page_limit:
             raise ValueError(
                 "PERFORMANCE_DEFAULT_PAGE_LIMIT must be between 1 and the hard Page limit."
             )
+        if self.performance_max_provider_requests < 1:
+            raise ValueError("PERFORMANCE_MAX_PROVIDER_REQUESTS must be positive.")
+        if not 1 <= self.performance_crux_queries_per_minute <= CRUX_OFFICIAL_QUERIES_PER_MINUTE:
+            raise ValueError(
+                "PERFORMANCE_CRUX_QUERIES_PER_MINUTE must be between 1 and the current "
+                f"provider ceiling of {CRUX_OFFICIAL_QUERIES_PER_MINUTE}."
+            )
         if self.accessibility_hard_page_limit < 1:
             raise ValueError("ACCESSIBILITY_HARD_PAGE_LIMIT must be positive.")
+        if self.accessibility_hard_page_limit > OBSERVABILITY_ABSOLUTE_PAGE_LIMIT:
+            raise ValueError(
+                "ACCESSIBILITY_HARD_PAGE_LIMIT cannot exceed the absolute application ceiling "
+                f"of {OBSERVABILITY_ABSOLUTE_PAGE_LIMIT}."
+            )
         if not 1 <= self.accessibility_default_page_limit <= self.accessibility_hard_page_limit:
             raise ValueError(
                 "ACCESSIBILITY_DEFAULT_PAGE_LIMIT must be between 1 and the hard Page limit."
             )
+        if self.accessibility_max_audit_count < 1:
+            raise ValueError("ACCESSIBILITY_MAX_AUDIT_COUNT must be positive.")
         if self.accessibility_max_payload_bytes < 1:
             raise ValueError("ACCESSIBILITY_MAX_PAYLOAD_BYTES must be positive.")
         return self
