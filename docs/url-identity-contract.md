@@ -189,6 +189,18 @@ aggregate output; elapsed time is informational and not a CI gate.
 9. Verify foreign keys, evidence counts, and deterministic checksums.
 10. Only then make V2 the default for new observations.
 
+PR #29 implements the non-production reconciliation workflow described in
+[`url-identity-reconciliation.md`](url-identity-reconciliation.md). Its
+`url-identity-reconciliation-v1` manifest is a decision/planning contract, not a URL normalization
+version. Candidate V2 remains reference-only and production continues to use
+`url-normalization-v1`.
+
+Candidate V2 syntactic normalization should be Site-independent. Site-specific
+`drop_query_parameters` belongs in Site crawl/source policy and must not redefine a globally unique
+`WebResource`. PR #30 should separate suppressed crawl-candidate dedupe from the global syntactic
+identity lookup; continuing to apply Site-specific drops before global lookup would preserve the
+cross-Site contradiction identified by this audit.
+
 Any semantic change requires `url-normalization-v2`. A future design should decide whether the
 version belongs on WebResource creation provenance, each Scan's copied scope, parser/source
 artifacts, and projection/comparison algorithm identities. Migration provenance needs its own

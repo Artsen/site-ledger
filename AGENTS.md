@@ -414,6 +414,16 @@ Do not disable checks or weaken tests to force passing results.
 - Never commit secrets, credentials, local databases, captured HTML, build output, or dependency
   caches.
 - Use the Artsen repository-local Git identity for commits in this repository.
+- URL identity migration is fail-closed; candidate V2 remains reference-only until reconciliation
+  and disposable simulation pass.
+- Reassign immutable evidence only from retained requested/resolved identity provenance. Provider
+  targets, final URLs, and redirects do not redefine Page ownership.
+- Never guess split Page workspace state. Keep insufficient provenance explicit and prefer an honest
+  grandfathered V1 identity to invented history.
+- Reconciliation manifests and reports are local sensitive artifacts. Never commit them or apply a
+  stale manifest.
+- Real identity migration requires no active mutating jobs, a verified SQLite backup plus content
+  store inventory, and post-migration invariants. Rebuild projections/comparisons from evidence.
 
 ## Pull Request Format
 
