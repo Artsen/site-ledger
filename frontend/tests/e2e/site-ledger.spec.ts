@@ -33,6 +33,26 @@ test("product workspace shell is stable across desktop, tablet, and mobile", asy
   if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/workspace-mobile.png`, fullPage: true });
 });
 
+test("Performance workspace is responsive and safe without provider configuration", async ({ page }) => {
+  await mockApi(page);
+  for (const viewport of [
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+    { width: 1024, height: 768 },
+    { width: 1440, height: 960 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/sites/3/performance");
+    await expect(page.getByRole("heading", { name: "Performance", exact: true })).toBeVisible();
+    await expect(page.getByText("Google providers are not configured.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Collect Performance" })).toBeDisabled();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(page.getByRole("link", { name: "Performance" })).toHaveAttribute("aria-current", "page");
+});
+
 test("Site Ledger workflow supports creation, filtering, details, inbound links, and deletion", async ({
   page,
 }) => {
@@ -707,6 +727,16 @@ async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
   let siteActive = true;
   let pageNote: Record<string, unknown> | null = null;
+
+  await page.route("**/api/sites/3/performance/providers", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ pagespeed: { configured: false, adapter_version: "pagespeed-provider-v1" }, crux: { configured: false, adapter_version: "crux-provider-v1" }, normalization_version: "performance-normalization-v1", default_page_limit: 10, hard_page_limit: 25 }) });
+  });
+  await page.route("**/api/sites/3/performance/latest**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], total: 0, limit: 100, offset: 0, measured_page_count: 0, field_available_page_count: 0 }) });
+  });
+  await page.route("**/api/sites/3/performance-runs**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], total: 0, limit: 25, offset: 0 }) });
+  });
 
   await page.route("**/api/scans/1/projection**", async (route) => {
     if (route.request().method() === "POST") {

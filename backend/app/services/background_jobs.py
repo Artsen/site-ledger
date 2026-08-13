@@ -24,6 +24,7 @@ from app.services.job_types import (
     JOB_STATUS_QUEUED,
     JOB_STATUS_RUNNING,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
+    JOB_TYPE_PERFORMANCE_RUN,
     JOB_TYPE_SCAN,
     JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
@@ -186,6 +187,20 @@ def enqueue_structured_content_job(
     )
 
 
+def enqueue_performance_run_job(
+    db: Session, run_id: int, site_id: int, *, priority: int = 125
+) -> BackgroundJob:
+    return _enqueue_job(
+        db,
+        job_type=JOB_TYPE_PERFORMANCE_RUN,
+        dedupe_key=f"performance-run:{run_id}",
+        performance_run_id=run_id,
+        website_property_id=site_id,
+        priority=priority,
+        payload={"performance_run_id": run_id, "site_id": site_id},
+    )
+
+
 def _enqueue_job(
     db: Session,
     *,
@@ -196,6 +211,7 @@ def _enqueue_job(
     scan_id: int | None = None,
     source_refresh_id: int | None = None,
     scan_comparison_id: int | None = None,
+    performance_run_id: int | None = None,
     website_property_id: int | None = None,
 ) -> BackgroundJob:
     existing = db.scalar(select(BackgroundJob).where(BackgroundJob.dedupe_key == dedupe_key))
@@ -211,6 +227,7 @@ def _enqueue_job(
         scan_id=scan_id,
         source_refresh_id=source_refresh_id,
         scan_comparison_id=scan_comparison_id,
+        performance_run_id=performance_run_id,
         website_property_id=website_property_id,
         dedupe_key=dedupe_key,
         payload_json=payload,
@@ -625,6 +642,18 @@ def recover_expired_jobs(
                 run.finished_at = now
                 run.error_type = "lease_expired"
                 run.error_message = "Worker lease expired during Category Rule evaluation."
+        elif job.job_type == JOB_TYPE_PERFORMANCE_RUN:
+            from app.models import PerformanceRun
+
+            performance_run = db.get(
+                PerformanceRun, int(job.payload_json.get("performance_run_id", 0))
+            )
+            if performance_run and performance_run.status not in TERMINAL_JOB_STATUSES:
+                performance_run.status = "failed"
+                performance_run.finished_at = now
+                performance_run.error_summary = (
+                    "Worker lease expired during Performance collection."
+                )
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan and scan.status not in TERMINAL_JOB_STATUSES:
@@ -677,6 +706,11 @@ def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
 
         run = db.get(PageCategoryRuleRun, int(job.payload_json.get("run_id", 0)))
         domain_status = run.status if run else JOB_STATUS_FAILED
+    elif job.job_type == JOB_TYPE_PERFORMANCE_RUN:
+        from app.models import PerformanceRun
+
+        performance_run = db.get(PerformanceRun, int(job.payload_json.get("performance_run_id", 0)))
+        domain_status = performance_run.status if performance_run else JOB_STATUS_FAILED
     elif job.scan_id:
         scan = db.get(Scan, job.scan_id)
         domain_status = scan.status if scan else JOB_STATUS_FAILED

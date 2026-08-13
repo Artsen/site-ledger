@@ -14,6 +14,11 @@ from app.models.comparisons import (
     ScanComparisonResourceResult,
     ScanComparisonSummary,
 )
+from app.models.performance import (
+    PerformanceObservation,
+    PerformancePayloadBlob,
+    PerformanceRun,
+)
 from app.models.projections import (
     ScanLinkProjection,
     ScanPageProjection,
@@ -81,6 +86,9 @@ __all__ = [
     "PageCategoryRuleCondition",
     "PageCategoryRuleRevision",
     "PageCategoryRuleRun",
+    "PerformanceObservation",
+    "PerformancePayloadBlob",
+    "PerformanceRun",
     "ResourceOccurrence",
     "ResourceReferenceOccurrence",
     "ResourceSnapshot",

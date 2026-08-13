@@ -7,12 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.ai_document_routes import router as ai_document_router
 from app.api.category_rule_routes import router as category_rule_router
 from app.api.comparison_routes import router as comparison_router
+from app.api.performance_routes import router as performance_router
 from app.api.routes import router
 from app.api.structured_content_routes import router as structured_content_router
 from app.config import get_settings
 from app.product import API_TITLE, API_VERSION, PRODUCT_DESCRIPTION
 from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
+from app.storage.performance_store import LocalPerformancePayloadStore
 
 
 @asynccontextmanager
@@ -21,6 +23,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     store = LocalContentStore(settings.html_storage_root)
     app.state.content_store = store
     app.state.artifact_store = LocalArtifactStore(settings.rendered_artifact_storage_root)
+    app.state.performance_payload_store = LocalPerformancePayloadStore(
+        settings.performance_payload_storage_root
+    )
     yield
 
 
@@ -44,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(category_rule_router)
     app.include_router(comparison_router)
     app.include_router(structured_content_router)
+    app.include_router(performance_router)
     return app
 
 

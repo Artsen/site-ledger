@@ -20,6 +20,7 @@ import {
 } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
 import { StructuredContentView } from "../components/StructuredContentView";
+import { PagePerformancePanel } from "./PerformanceWorkspace";
 import {
   LinkRoleBadge,
   PageCategoryBadges,
@@ -139,6 +140,7 @@ export function PersistentPageDetailPage() {
           { id: "content", label: "Content" },
           { id: "links", label: "Links" },
           { id: "browser", label: "Browser evidence" },
+          { id: "performance", label: "Performance" },
           { id: "notes", label: "Notes", count: value.note_count },
         ]}
         active={tab}
@@ -153,6 +155,7 @@ export function PersistentPageDetailPage() {
         {tab === "content" ? <StructuredContentView queryKey={["page-structured-content", siteId, resourceId]} load={() => getPageStructuredContent(siteId, resourceId)} prepare={() => preparePageStructuredContent(siteId, resourceId)} /> : null}
         {tab === "links" ? <LinksTab detail={page.data} /> : null}
         {tab === "browser" ? <BrowserEvidenceTab siteId={siteId} resourceId={resourceId} /> : null}
+        {tab === "performance" ? <PagePerformancePanel siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "notes" ? (
           <NotesPanel
             queryKey={["page-notes", siteId, resourceId]}

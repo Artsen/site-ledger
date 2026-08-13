@@ -302,6 +302,14 @@ them as evidence or domain state.
 Stored or scanned text must be rendered as escaped React text. Do not use dangerouslySetInnerHTML
 for captured content.
 
+Performance evidence is external provider evidence, not Scan evidence. Keep PageSpeed Lab and CrUX
+Field distinct; exact provider payloads are authoritative and normalized metrics are versioned
+derivatives. Performance observations are immutable historical records. Provider URL normalization
+must not rewrite `WebResource`, and unavailable CrUX data is not automatically a failure. Never
+persist or expose provider keys in evidence, logs, checksums, or APIs. New provider adapters require
+fixed trusted endpoints, bounded networking, and sanitized failures. Performance does not modify
+`scan-comparison-v2`; Findings, regressions, and scheduling remain downstream work.
+
 Preserve URL-backed tab, filter, pagination, graph, and presentation state. Preserve the existing
 local-storage preference key unless a read-old/write-new migration is implemented.
 
