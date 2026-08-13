@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
+  Accessibility,
   Bot,
   Boxes,
   ChartNoAxesCombined,
@@ -29,6 +30,7 @@ export type SiteArea =
   | "ai-documents"
   | "comparisons"
   | "performance"
+  | "accessibility"
   | "graph"
   | "categories"
   | "category-rules"
@@ -71,6 +73,7 @@ export const siteNavigation: SiteNavigationGroup[] = [
     items: [
       { area: "comparisons", label: "Comparisons", icon: GitCompareArrows, segment: "comparisons" },
       { area: "performance", label: "Performance", icon: Gauge, segment: "performance" },
+      { area: "accessibility", label: "Accessibility", icon: Accessibility, segment: "accessibility" },
       { area: "graph", label: "Graph", icon: Network, segment: "graph" },
     ],
   },
@@ -105,6 +108,7 @@ export function siteAreaFromPath(pathname: string): SiteArea {
   if (segment === "resources") return "resources";
   if (segment === "comparisons") return "comparisons";
   if (segment === "performance") return "performance";
+  if (segment === "accessibility") return "accessibility";
   return allSiteItems.find((item) => item.segment === segment)?.area ?? "overview";
 }
 

@@ -21,6 +21,7 @@ import {
 import { NotesPanel } from "../components/NotesPanel";
 import { StructuredContentView } from "../components/StructuredContentView";
 import { PagePerformancePanel } from "./PerformanceWorkspace";
+import { PageAccessibilityPanel } from "./AccessibilityWorkspace";
 import {
   LinkRoleBadge,
   PageCategoryBadges,
@@ -141,6 +142,7 @@ export function PersistentPageDetailPage() {
           { id: "links", label: "Links" },
           { id: "browser", label: "Browser evidence" },
           { id: "performance", label: "Performance" },
+          { id: "accessibility", label: "Accessibility" },
           { id: "notes", label: "Notes", count: value.note_count },
         ]}
         active={tab}
@@ -156,6 +158,7 @@ export function PersistentPageDetailPage() {
         {tab === "links" ? <LinksTab detail={page.data} /> : null}
         {tab === "browser" ? <BrowserEvidenceTab siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "performance" ? <PagePerformancePanel siteId={siteId} resourceId={resourceId} /> : null}
+        {tab === "accessibility" ? <PageAccessibilityPanel siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "notes" ? (
           <NotesPanel
             queryKey={["page-notes", siteId, resourceId]}

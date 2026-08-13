@@ -6,6 +6,7 @@ import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import type { AiDeletePreview, AiDiscoveryCandidate, AiDocumentReference, AiDocumentRefresh, AiDocumentSnapshot, AiDocumentSource, AiDocumentSettings, AiValidation, Paginated } from "../types/aiDocuments";
 import type { ComparisonLink, ComparisonPage, ComparisonResource, ComparisonResultList, OccurrenceDiff, PageChangeHistory, ScanComparisonBuild, ScanComparisonList, ScanComparisonOverview, SourceDiff } from "../types/comparisons";
 import type { PerformanceObservation, PerformanceObservationList, PerformanceProviderCapabilities, PerformanceRun, PerformanceRunDetail, PerformanceRunList, PerformanceRunPayload } from "../types/performance";
+import type { AccessibilityCapabilities, AccessibilityObservation, AccessibilityObservationList, AccessibilityPageSummaryList, AccessibilityRuleAggregateList, AccessibilityRuleDetail, AccessibilityRun, AccessibilityRunDetail, AccessibilityRunList, AccessibilityRunPayload, AccessibilitySummary } from "../types/accessibility";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -216,6 +217,26 @@ export const performancePayloadUrl = (observationId: number) => `${API_BASE}/api
 
 export async function getPerformancePayload(observationId: number): Promise<string> {
   const response = await fetch(performancePayloadUrl(observationId));
+  if (!response.ok) throw errorFromResponse(response.status, await response.text());
+  return response.text();
+}
+
+export const getAccessibilityCapabilities = () => request<AccessibilityCapabilities>("/api/accessibility/capabilities");
+export const createAccessibilityRun = (siteId: string, payload: AccessibilityRunPayload) => request<AccessibilityRun>(`/api/sites/${siteId}/accessibility-runs`, { method: "POST", body: JSON.stringify(payload) });
+export const listAccessibilityRuns = (siteId: string, query = "") => request<AccessibilityRunList>(`/api/sites/${siteId}/accessibility-runs${query}`);
+export const getAccessibilityRun = (siteId: string, runId: string, query = "") => request<AccessibilityRunDetail>(`/api/sites/${siteId}/accessibility-runs/${runId}${query}`);
+export const cancelAccessibilityRun = (siteId: string, runId: string) => request<AccessibilityRun>(`/api/sites/${siteId}/accessibility-runs/${runId}/cancel`, { method: "POST" });
+export const getAccessibilitySummary = (siteId: string) => request<AccessibilitySummary>(`/api/sites/${siteId}/accessibility/summary`);
+export const getAccessibilityPages = (siteId: string, query = "") => request<AccessibilityPageSummaryList>(`/api/sites/${siteId}/accessibility/pages${query}`);
+export const getAccessibilityRules = (siteId: string, query = "") => request<AccessibilityRuleAggregateList>(`/api/sites/${siteId}/accessibility/rules${query}`);
+export const getAccessibilityRule = (siteId: string, ruleId: string, query = "") => request<AccessibilityRuleDetail>(`/api/sites/${siteId}/accessibility/rules/${encodeURIComponent(ruleId)}${query}`);
+export const getPageAccessibility = (siteId: string, resourceId: string, query = "") => request<AccessibilityObservationList>(`/api/sites/${siteId}/pages/${resourceId}/accessibility${query}`);
+export const getPageLatestAccessibility = (siteId: string, resourceId: string) => request<AccessibilityObservationList>(`/api/sites/${siteId}/pages/${resourceId}/accessibility/latest`);
+export const getAccessibilityObservation = (siteId: string, observationId: number) => request<AccessibilityObservation>(`/api/sites/${siteId}/accessibility-observations/${observationId}`);
+export const accessibilityPayloadUrl = (observationId: number) => `${API_BASE}/api/accessibility-observations/${observationId}/raw`;
+
+export async function getAccessibilityPayload(observationId: number): Promise<string> {
+  const response = await fetch(accessibilityPayloadUrl(observationId));
   if (!response.ok) throw errorFromResponse(response.status, await response.text());
   return response.text();
 }
