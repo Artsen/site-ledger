@@ -74,7 +74,13 @@ progress, cooperates with cancellation, and continues after individual blob fail
 `performance_run` executes a bounded canonical request set serially through fixed PageSpeed and CrUX
 adapters. It commits each immutable observation independently, reports ready/unavailable/failed
 counters, cooperates between provider requests, and skips already-retained logical requests after a
-reclaim. See [Performance observations](performance-observations.md).
+reclaim. Page count and provider-request budgets are independently enforced. CrUX URL and origin
+attempts use one local cancellation-aware quota limiter; PageSpeed remains serial without that
+delay. See [Performance observations](performance-observations.md).
+
+`accessibility_run` enforces both a bounded Page count and an exact Page/profile audit budget. It
+reuses one Chromium session, commits each immutable observation independently, and checks
+cancellation between audits. See [Automated Accessibility observations](accessibility-observations.md).
 
 The scan comparison build job waits for compatible prepared results, stages materialized
 differences, validates and checksums them, and atomically activates a ready build. Failed,

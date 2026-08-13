@@ -80,9 +80,18 @@ Final messages are sanitized; exact HTTP response bodies remain payload evidence
 ## Jobs And Limits
 
 The `performance_run` BackgroundJob executes requests serially to protect provider quota. The
-default selection guidance is 10 Pages and the hard application cap is 25. The API rejects invalid
+recommended selection is 50 Pages, the configurable hard limit defaults to 250, and the absolute
+application Page ceiling is 250. A separate backend provider-request budget defaults to 1,002,
+enough for 250 Pages across all four URL dimensions plus two origin dimensions. The API rejects invalid
 Site membership, unknown Pages, duplicate targets/dimensions, unsupported dimensions, missing
-providers, and oversized selections rather than truncating them.
+providers, and oversized Page or request workloads rather than truncating them. Frontend counts are
+previews; backend calculation is authoritative.
+
+Google's [current CrUX API documentation](https://developer.chrome.com/docs/crux/api/) documents a
+limit of 150 queries/minute per Cloud project. Site Ledger ships
+with a 120/minute local CrUX-only limiter, applied to URL and origin attempts including retries.
+Waiting checks cancellation in short intervals. PageSpeed remains serial and is not delayed by the
+CrUX limiter; bounded `Retry-After` and 429 retries remain in effect.
 
 Cancellation is cooperative between requests and preserves completed observations. Reclaim is
 idempotent because each logical request is checked before collection and protected by database
@@ -92,9 +101,24 @@ do not produce that status. Expired worker leases settle both the job and run.
 ## Workspace
 
 `/sites/:siteId/performance` has URL-backed Overview, Lab, Field, and Runs views. The collection
-surface uses paginated persistent Page search, explicit selection, provider dimensions, Site-origin
-CrUX choice, and an exact provider-request count. Active runs poll until terminal. Nested routes own
-run details and raw evidence, and Site switching returns to the destination Site's Performance root.
+surface supports paginated search, individual/current-page/bounded matching selection, explicit
+dimensions, Site-origin CrUX, and a live request breakdown. Selection above 50 warns without
+blocking. Lab, Field, and run evidence group dimensions under one Page row.
+
+`/sites/:siteId/performance/observations/:id` is the normal historical result route. PageSpeed
+details derive bounded metrics, up to ten savings-ordered opportunities, diagnostics, and technical
+provenance from immutable evidence at read time. CrUX details show p75 metrics, official Core Web
+Vitals assessments, histograms, and clearly scoped same-run Site-origin context when URL data is
+unavailable. Raw `/performance/evidence/:id` remains available as secondary exact evidence.
+
+Assessments use current primary Google guidance: [Core Web Vitals thresholds](https://web.dev/articles/vitals)
+for LCP, INP, and CLS, and [Lighthouse Performance scoring](https://developer.chrome.com/docs/lighthouse/performance/performance-scoring/)
+for the category score. FCP, TTFB, TBT, Speed Index, and server response remain measured values
+without an invented assessment where this presentation has no directly applicable official band.
+
+Field coverage is computed from the latest URL-level attempt per Page and form factor. A newer
+unavailable or failed attempt is never masked by older ready evidence, and Phone/Desktop counts are
+reported separately.
 
 Persistent Pages have a Performance tab with latest Lab Mobile/Desktop, latest Field Phone/Desktop,
 history, and a one-Page run action through the same `PerformanceRun` API.
@@ -109,6 +133,13 @@ observations. On the development Windows/SQLite environment, measured query p50/
 | Latest Site evidence, first 500 | 96.5 ms | 118.4 ms |
 | One Page history | 10.2 ms | 13.9 ms |
 | Run list | 2.7 ms | 3.6 ms |
+
+The network-free `python -m app.performance_benchmark --collection-pages 250` workload expands the
+maximum 250 Pages across PageSpeed Mobile/Desktop and CrUX Phone/Desktop plus two origin requests.
+It completed and persisted all 1,002 fake-provider observations in 19.691 seconds, reached progress
+1,002/1,002, used 829,834 bytes of peak traced Python memory, and produced a 3,248,128-byte SQLite
+database. This validates worklist expansion, bookkeeping, persistence, and terminal progress without
+spending provider quota; it is not an estimate of Google response time.
 
 Small deterministic fixtures measured 490 raw / 281 gzip bytes for PageSpeed and 373 raw / 243 gzip
 bytes for CrUX. Real PageSpeed payloads can be much larger, so collection enforces a 12 MiB default

@@ -74,6 +74,8 @@ The Site switcher preserves the conceptual product area and discards object-spec
 - `/sites/12/pages/44` switched to Site 20 becomes `/sites/20/pages`.
 - `/sites/12/comparisons/7/pages/44` switched to Site 20 becomes `/sites/20/comparisons`.
 - `/sites/12/performance/evidence/91` switched to Site 20 becomes `/sites/20/performance`.
+- `/sites/12/performance/observations/91` switched to Site 20 becomes `/sites/20/performance`.
+- `/sites/12/accessibility/observations/91` switched to Site 20 becomes `/sites/20/accessibility`.
 - `/sites/12/accessibility/runs/7` switched to Site 20 becomes `/sites/20/accessibility`.
 - `/sites/12/resources/9?tab=history` switched to Site 20 becomes `/sites/20/resources`.
 
