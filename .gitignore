@@ -1,4 +1,5 @@
 data/
+.local/url-identity/
 *.db
 *.sqlite
 *.sqlite3
