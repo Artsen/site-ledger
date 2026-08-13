@@ -39,6 +39,7 @@ jobs:
           echo "SCANNER_HTML_STORAGE_ROOT=$RUNNER_TEMP/site-ledger-html" >> "$GITHUB_ENV"
           echo "SCANNER_AI_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/site-ledger-ai-documents" >> "$GITHUB_ENV"
           echo "SCANNER_RENDERED_ARTIFACT_STORAGE_ROOT=$RUNNER_TEMP/site-ledger-rendered" >> "$GITHUB_ENV"
+          echo "SCANNER_ACCESSIBILITY_PAYLOAD_STORAGE_ROOT=$RUNNER_TEMP/site-ledger-accessibility" >> "$GITHUB_ENV"
       - name: Verify backend lockfile
         run: uv lock --check
       - name: Sync backend dependencies

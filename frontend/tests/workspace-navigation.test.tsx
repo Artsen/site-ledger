@@ -43,6 +43,7 @@ describe("workspace navigation contract", () => {
     expect(siteAreaFromPath("/sites/3/pages/92")).toBe("pages");
     expect(siteAreaFromPath("/sites/3/comparisons/11/resources/9")).toBe("comparisons");
     expect(siteAreaFromPath("/sites/3/performance/runs/12")).toBe("performance");
+    expect(siteAreaFromPath("/sites/3/accessibility/rules/image-alt")).toBe("accessibility");
     expect(siteAreaFromPath("/sites/3/edit")).toBe("settings");
     expect(isSiteAreaActive("/sites/3/resources/7", 3, "resources")).toBe(true);
     expect(isSiteAreaActive("/sites/3/resources/7", 3, "overview")).toBe(false);
@@ -54,6 +55,7 @@ describe("workspace navigation contract", () => {
     expect(switchSiteHref("/sites/3", 8)).toBe("/sites/8");
     expect(siteAreaHref(8, "category-rules")).toBe("/sites/8/category-rules");
     expect(switchSiteHref("/sites/3/performance/runs/12", 8)).toBe("/sites/8/performance");
+    expect(switchSiteHref("/sites/3/accessibility/runs/12", 8)).toBe("/sites/8/accessibility");
   });
 
   it("persists desktop collapse preference", async () => {
@@ -69,6 +71,14 @@ describe("workspace navigation contract", () => {
     expect(links.length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
     expect(screen.getByRole("link", { name: "Performance" })).toHaveAttribute("title", "Performance");
+  });
+
+  it("shows Accessibility under Analyze with an accessible collapsed label", async () => {
+    renderShell("/sites/3/accessibility");
+    const links = await screen.findAllByRole("link", { name: "Accessibility" });
+    expect(links.length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    expect(screen.getByRole("link", { name: "Accessibility" })).toHaveAttribute("title", "Accessibility");
   });
 
   it("ignores an invalid persisted collapse preference", () => {

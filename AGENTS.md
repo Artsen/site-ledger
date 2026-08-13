@@ -310,6 +310,16 @@ persist or expose provider keys in evidence, logs, checksums, or APIs. New provi
 fixed trusted endpoints, bounded networking, and sanitized failures. Performance does not modify
 `scan-comparison-v2`; Findings, regressions, and scheduling remain downstream work.
 
+Accessibility observations are independent evidence collected at their own time, not Scan browser
+evidence. Automated results do not establish WCAG conformance and must never produce a compliance
+boolean or score. Keep axe-core version, exact detector checksum, effective ruleset identity,
+responsive profile, and browser provenance with every observation. Exact raw detector payloads are
+authoritative; violation and incomplete rows are versioned normalized detector evidence, not Site
+Ledger Findings. Preserve Needs Review separately from violations and Desktop separately from
+Mobile. Detector updates create later evidence and never rewrite history. Accessibility must reuse
+the hardened browser networking policy, never load detector code from a runtime CDN, belongs to
+persistent Page history rather than Scan Observation, and must not alter `scan-comparison-v2`.
+
 Preserve URL-backed tab, filter, pagination, graph, and presentation state. Preserve the existing
 local-storage preference key unless a read-old/write-new migration is implemented.
 

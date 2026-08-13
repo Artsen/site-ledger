@@ -53,6 +53,35 @@ test("Performance workspace is responsive and safe without provider configuratio
   await expect(page.getByRole("link", { name: "Performance" })).toHaveAttribute("aria-current", "page");
 });
 
+test("Accessibility workspace is responsive and keeps automated evidence explicit", async ({ page }) => {
+  await mockApi(page);
+  for (const viewport of [
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+    { width: 1024, height: 768 },
+    { width: 1440, height: 960 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/sites/3/accessibility");
+    await expect(page.getByRole("heading", { name: "Accessibility", exact: true })).toBeVisible();
+    await expect(page.getByText("Automated checks are limited.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run Accessibility Audit" })).toBeEnabled();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
+  await page.getByRole("tab", { name: "Pages" }).click();
+  await expect(page.getByText("No audited Pages match")).toBeVisible();
+  await page.getByRole("tab", { name: "Rules" }).click();
+  await expect(page.getByText("No current rule evidence")).toBeVisible();
+  await page.getByRole("tab", { name: /Runs/ }).click();
+  await expect(page.getByText("No Accessibility runs")).toBeVisible();
+  await page.getByRole("button", { name: "Run Accessibility Audit" }).click();
+  await expect(page.getByRole("dialog", { name: "Run Accessibility Audit" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(page.getByRole("link", { name: "Accessibility" })).toHaveAttribute("aria-current", "page");
+});
+
 test("Site Ledger workflow supports creation, filtering, details, inbound links, and deletion", async ({
   page,
 }) => {
@@ -727,6 +756,22 @@ async function mockApi(page: Page) {
   let scanStatus: "running" | "completed" = "running";
   let siteActive = true;
   let pageNote: Record<string, unknown> | null = null;
+
+  await page.route("**/api/accessibility/capabilities", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ axe_core_version: "4.12.1", detector_bundle_sha256: "a".repeat(64), integration_version: "accessibility-engine-v1", normalization_version: "accessibility-normalization-v1", ruleset_profile: "wcag22-aa-v1", ruleset_rule_count: 62, ruleset_sha256: "b".repeat(64), default_page_limit: 10, hard_page_limit: 25, profiles: {} }) });
+  });
+  await page.route("**/api/sites/3/accessibility/summary", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ pages_audited: 0, profiles_audited: 0, pages_with_violations: 0, violation_rules: 0, affected_nodes: 0, needs_review_rules: 0, impact_counts: {}, failed_latest: 0, latest_observed_at: null }) });
+  });
+  await page.route("**/api/sites/3/accessibility-runs**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], total: 0, limit: 25, offset: 0 }) });
+  });
+  await page.route("**/api/sites/3/accessibility/pages**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], total: 0, limit: 100, offset: 0 }) });
+  });
+  await page.route("**/api/sites/3/accessibility/rules**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], total: 0, limit: 50, offset: 0 }) });
+  });
 
   await page.route("**/api/sites/3/performance/providers", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ pagespeed: { configured: false, adapter_version: "pagespeed-provider-v1" }, crux: { configured: false, adapter_version: "crux-provider-v1" }, normalization_version: "performance-normalization-v1", default_page_limit: 10, hard_page_limit: 25 }) });
