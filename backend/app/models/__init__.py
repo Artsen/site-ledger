@@ -1,3 +1,10 @@
+from app.models.accessibility import (
+    AccessibilityNodeEvidence,
+    AccessibilityObservation,
+    AccessibilityPayloadBlob,
+    AccessibilityRuleEvidence,
+    AccessibilityRun,
+)
 from app.models.category_rules import (
     PageCategoryAssignmentSupport,
     PageCategoryAutomaticExclusion,
@@ -64,6 +71,11 @@ from app.models.resources import (
 )
 
 __all__ = [
+    "AccessibilityNodeEvidence",
+    "AccessibilityObservation",
+    "AccessibilityPayloadBlob",
+    "AccessibilityRuleEvidence",
+    "AccessibilityRun",
     "AiDocumentBlob",
     "AiDocumentReference",
     "AiDocumentRefresh",

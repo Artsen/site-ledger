@@ -14,6 +14,7 @@ class JobRead(BaseModel):
     source_refresh_id: int | None
     scan_comparison_id: int | None
     performance_run_id: int | None
+    accessibility_run_id: int | None
     website_property_id: int | None
     dedupe_key: str
     payload_json: dict[str, Any]

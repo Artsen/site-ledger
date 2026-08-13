@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     ai_document_storage_root: Path = Path("../data/ai-documents")
     rendered_artifact_storage_root: Path = Path("../data/rendered")
     performance_payload_storage_root: Path = Path("../data/performance")
+    accessibility_payload_storage_root: Path = Path("../data/accessibility")
+    accessibility_default_page_limit: int = 10
+    accessibility_hard_page_limit: int = 25
+    accessibility_max_payload_bytes: int = 12 * 1024 * 1024
     google_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("SITE_LEDGER_GOOGLE_API_KEY", "SCANNER_GOOGLE_API_KEY"),
@@ -68,6 +72,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PERFORMANCE_DEFAULT_PAGE_LIMIT must be between 1 and the hard Page limit."
             )
+        if self.accessibility_hard_page_limit < 1:
+            raise ValueError("ACCESSIBILITY_HARD_PAGE_LIMIT must be positive.")
+        if not 1 <= self.accessibility_default_page_limit <= self.accessibility_hard_page_limit:
+            raise ValueError(
+                "ACCESSIBILITY_DEFAULT_PAGE_LIMIT must be between 1 and the hard Page limit."
+            )
+        if self.accessibility_max_payload_bytes < 1:
+            raise ValueError("ACCESSIBILITY_MAX_PAYLOAD_BYTES must be positive.")
         return self
 
 
