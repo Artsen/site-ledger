@@ -54,11 +54,6 @@ def create_accessibility_run(
         raise ValueError(
             f"An Accessibility run supports at most {settings.accessibility_hard_page_limit} Pages."
         )
-    if len(payload.resource_ids) > settings.accessibility_default_page_limit:
-        raise ValueError(
-            f"An Accessibility run is configured for at most "
-            f"{settings.accessibility_default_page_limit} Pages."
-        )
     pages = list(
         db.execute(
             select(SitePage.resource_id)
@@ -74,6 +69,13 @@ def create_accessibility_run(
         raise ValueError("One or more selected Pages do not belong to this Site.")
     profiles = sorted(payload.profiles)
     resource_ids = sorted(payload.resource_ids)
+    audit_count = len(resource_ids) * len(profiles)
+    if audit_count > settings.accessibility_max_audit_count:
+        raise ValueError(
+            "This Accessibility run requires "
+            f"{audit_count} browser audits; the configured maximum is "
+            f"{settings.accessibility_max_audit_count}."
+        )
     metadata = ruleset_metadata()
     run = AccessibilityRun(
         website_property_id=site_id,
@@ -81,7 +83,7 @@ def create_accessibility_run(
         trigger=payload.trigger,
         configuration_json={"resource_ids": resource_ids, "profiles": profiles},
         target_count=len(resource_ids),
-        observation_count=len(resource_ids) * len(profiles),
+        observation_count=audit_count,
         axe_core_version=AXE_CORE_VERSION,
         detector_bundle_sha256=AXE_BUNDLE_SHA256,
         integration_version=ACCESSIBILITY_INTEGRATION_VERSION,

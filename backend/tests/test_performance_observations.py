@@ -22,7 +22,16 @@ from app.services.background_jobs import (
     enqueue_performance_run_job,
     recover_expired_jobs,
 )
-from app.services.performance_collection import create_performance_run, execute_performance_run
+from app.services.performance_collection import (
+    CruxRateLimiter,
+    PerformanceCollectionCancelled,
+    create_performance_run,
+    execute_performance_run,
+)
+from app.services.performance_presentation import (
+    metric_presentations,
+    parse_pagespeed_presentation,
+)
 from app.services.performance_providers import (
     PERFORMANCE_NORMALIZATION_VERSION,
     PerformanceProviderClient,
@@ -99,6 +108,95 @@ def test_crux_404_is_unavailable_and_payload_is_retained() -> None:
     assert result.outcome == "unavailable"
     assert result.error_type == "no_field_data"
     assert result.payload is not None and b"NOT_FOUND" in result.payload
+
+
+def test_crux_throttle_hook_runs_before_every_attempt_only_for_crux() -> None:
+    requests: list[httpx.Request] = []
+    throttle_calls: list[int] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.host == "chromeuxreport.googleapis.com" and len(requests) == 1:
+            return httpx.Response(429, json={"error": {}}, headers={"Retry-After": "0"})
+        if request.url.host == "chromeuxreport.googleapis.com":
+            return httpx.Response(200, json=_crux_document())
+        return httpx.Response(200, json=_pagespeed_document())
+
+    client = PerformanceProviderClient(
+        "secret-key",
+        transport=httpx.MockTransport(respond),
+        sleep=lambda _delay: None,
+        before_crux_attempt=lambda: throttle_calls.append(len(requests)),
+    )
+    assert client.crux("https://example.com/page", "url", "PHONE").outcome == "ready"
+    assert throttle_calls == [0, 1]
+    assert client.pagespeed("https://example.com/page", "mobile").outcome == "ready"
+    assert throttle_calls == [0, 1]
+    client.close()
+
+
+def test_pagespeed_presentation_is_bounded_ordered_and_literal() -> None:
+    document = _pagespeed_document()
+    audits = document["lighthouseResult"]["audits"]
+    for index in range(12):
+        audits[f"opportunity-{index:02d}"] = {
+            "title": f"<b>Opportunity {index}</b>",
+            "description": "Provider **markup** remains literal.",
+            "details": {"type": "opportunity", "overallSavingsMs": index * 10},
+        }
+    audits["diagnostic"] = {
+        "title": "Diagnostic",
+        "score": 0,
+        "scoreDisplayMode": "informative",
+    }
+
+    opportunities, diagnostics, error = parse_pagespeed_presentation(json.dumps(document).encode())
+
+    assert error is None
+    assert len(opportunities) == 10
+    assert opportunities[0].audit_id == "opportunity-11"
+    assert opportunities[0].title == "<b>Opportunity 11</b>"
+    assert diagnostics[0].audit_id == "diagnostic"
+    assert parse_pagespeed_presentation(b"not-json")[2] is not None
+
+
+def test_metric_assessments_use_provider_specific_thresholds() -> None:
+    metrics = metric_presentations(
+        "crux",
+        {
+            "lcp": {"value": 2500, "unit": "ms"},
+            "inp": {"value": 300, "unit": "ms"},
+            "cls": {"value": 0.3, "unit": "score"},
+            "fcp": {"value": 1000, "unit": "ms"},
+        },
+    )
+
+    assessments = {item.key: item.assessment for item in metrics}
+    assert assessments == {
+        "fcp": None,
+        "lcp": "good",
+        "cls": "poor",
+        "inp": "needs_improvement",
+    }
+
+
+def test_crux_rate_limiter_spaces_attempts_and_checks_cancellation() -> None:
+    now = [0.0]
+    cancelled = [False]
+
+    def sleep(delay: float) -> None:
+        now[0] += delay
+        cancelled[0] = True
+
+    limiter = CruxRateLimiter(
+        120,
+        should_cancel=lambda: cancelled[0],
+        clock=lambda: now[0],
+        sleep=sleep,
+    )
+    limiter.wait()
+    with pytest.raises(PerformanceCollectionCancelled):
+        limiter.wait()
 
 
 def test_provider_bounds_response_and_sanitizes_auth_failure() -> None:
@@ -186,8 +284,33 @@ def test_run_is_bounded_idempotent_and_preserves_unavailable(
     history = page_performance_history(db_session, site.id, resource.id, limit=20, offset=0)
     page_latest = page_latest_performance(db_session, site.id, resource.id)
     assert latest.total == 6
+    assert latest.field_available_phone_page_count == 1
+    assert latest.field_available_desktop_page_count == 0
     assert history.total == 4
     assert page_latest.total == 4
+
+    newer = create_performance_run(
+        db_session,
+        site.id,
+        PerformanceRunCreate(
+            resource_ids=[resource.id],
+            providers=["crux"],
+            pagespeed_strategies=[],
+            crux_form_factors=["PHONE"],
+            include_origin_crux=False,
+        ),
+    )
+    db_session.commit()
+    execute_performance_run(
+        session_factory,
+        newer.id,
+        should_cancel=lambda: False,
+        progress=lambda _current, _total, _counters: None,
+        client_factory=lambda: UnavailableProviderClient(),
+    )
+    current = latest_site_performance(db_session, site.id, provider=None, limit=20, offset=0)
+    assert current.field_available_phone_page_count == 0
+    assert current.field_available_page_count == 0
 
 
 def test_run_validates_configuration_membership_and_key(
@@ -204,9 +327,15 @@ def test_run_validates_configuration_membership_and_key(
     settings.google_api_key = "test-key"
     with pytest.raises(ValueError, match="do not belong"):
         create_performance_run(db_session, site.id, PerformanceRunCreate(resource_ids=[999]))
+    settings.performance_hard_page_limit = 10
     with pytest.raises(ValueError, match="at most 10 Pages"):
         create_performance_run(
             db_session, site.id, PerformanceRunCreate(resource_ids=list(range(1, 12)))
+        )
+    settings.performance_max_provider_requests = 5
+    with pytest.raises(ValueError, match="6 provider requests"):
+        create_performance_run(
+            db_session, site.id, PerformanceRunCreate(resource_ids=[resource.id])
         )
     with pytest.raises(ValueError, match="duplicates"):
         PerformanceRunCreate(resource_ids=[resource.id, resource.id])
@@ -315,6 +444,17 @@ class FakeProviderClient:
         pass
 
 
+class UnavailableProviderClient(FakeProviderClient):
+    def crux(self, target: str, target_kind: str, form_factor: str) -> ProviderResult:
+        return ProviderResult(
+            outcome="unavailable",
+            payload=b'{"newer":"unavailable"}',
+            metrics={},
+            error_type="no_field_data",
+            error_message="No URL-level field data.",
+        )
+
+
 def _site_page(db: Session):
     site = create_site(
         db,
@@ -348,6 +488,8 @@ def _settings(tmp_path: Path):
         performance_provider_max_attempts=3,
         performance_hard_page_limit=25,
         performance_default_page_limit=10,
+        performance_max_provider_requests=102,
+        performance_crux_queries_per_minute=120,
     )
 
 

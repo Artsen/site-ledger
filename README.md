@@ -126,8 +126,17 @@ environment before starting both API and worker:
 $env:SITE_LEDGER_GOOGLE_API_KEY="your-local-key"
 ~~~
 
-The normal run cap is 10 Pages and the backend retains an absolute hard maximum of 25 Pages per run.
-Collection is serial and manual. Scheduling and CrUX History import are not implemented.
+The recommended Performance and Accessibility batch is 50 Pages. The configurable hard Page
+limit defaults to the absolute application ceiling of 250 Pages. Performance additionally permits
+at most 1,002 provider requests per run and throttles CrUX to 120 queries/minute; Accessibility
+permits at most 500 Page/profile browser audits. Collection is serial and manual. Scheduling and
+CrUX History import are not implemented.
+
+Operators may lower the limits with `SCANNER_PERFORMANCE_DEFAULT_PAGE_LIMIT`,
+`SCANNER_PERFORMANCE_HARD_PAGE_LIMIT`, `SCANNER_PERFORMANCE_MAX_PROVIDER_REQUESTS`,
+`SCANNER_PERFORMANCE_CRUX_QUERIES_PER_MINUTE`, `SCANNER_ACCESSIBILITY_DEFAULT_PAGE_LIMIT`,
+`SCANNER_ACCESSIBILITY_HARD_PAGE_LIMIT`, and `SCANNER_ACCESSIBILITY_MAX_AUDIT_COUNT`. Invalid
+values fail settings validation and are never silently clamped.
 
 ## Running Locally
 

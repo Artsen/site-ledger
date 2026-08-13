@@ -90,9 +90,10 @@ history.
 
 These are viewport profiles, not claims of physical-device emulation. Responsive results remain
 separate observations. A user sees the exact cost before starting a run: selected Pages multiplied
-by selected profiles. Default selection guidance is 10 Pages; the hard configured cap is 25 Pages
-and at most two profiles, for at most 50 logical audits. Invalid requests are rejected, not
-truncated. Browser observations execute serially under the configured worker concurrency.
+by selected profiles. Recommended selection is 50 Pages; the configurable hard limit and absolute
+application ceiling are 250 Pages. A separate backend budget permits at most 500 logical audits.
+Invalid requests are rejected, not truncated. Browser observations execute serially under the
+configured worker concurrency.
 
 ## Browser Security And Readiness
 
@@ -136,6 +137,14 @@ reports counts without a score. Pages provide server-side search, filters, sorti
 Rules distinguish Violations from Needs Review and link to paginated affected-element evidence.
 Runs poll while active and expose effective ruleset identity and per-observation status. Nested run,
 rule, and raw routes return to the destination Site's Accessibility root when switching Sites.
+Collection supports individual, current-page, and bounded matching selection and warns above the
+recommended batch without treating it as a blocker.
+
+`/sites/:siteId/accessibility/observations/:id` is the normal immutable historical result route. It
+shows the observation summary, separates Violations from Needs Review, and lazily paginates retained
+node targets, literal escaped snippets, and failure summaries. Detector/browser/ruleset provenance
+follows the investigation content. Raw `/accessibility/evidence/:id` remains secondary exact
+detector evidence.
 
 Persistent Page workspaces include latest Desktop/Mobile states, immutable history, raw evidence,
 and a one-Page audit action through the same run API. Accessibility does not appear on Scan
@@ -163,6 +172,12 @@ startup/session creation took 540.8 ms. Clean Desktop and Mobile fixtures took 5
 fixture with 30 missing-alt images took 857.4 ms Desktop and 1,000.8 ms Mobile, retained about
 76.1 KiB raw / 6.1 KiB gzip, and normalized one rule plus 30 node rows for each profile. These
 measurements are diagnostics, not CI thresholds.
+
+The bounded `python -m app.accessibility_benchmark --browser-audits 50` control ran 50 alternating
+Desktop/Mobile audits against a local synthetic Page in one Chromium session. All 50 completed Ready
+in 30.316 seconds; per-audit duration was 577.485 ms p50 and 617.450 ms p95, and peak traced Python
+memory was 17,323,488 bytes. The shared session remained stable. Focused cancellation tests confirm
+that the durable run exits before the next audit and preserves already committed evidence.
 
 ## Non-Goals
 

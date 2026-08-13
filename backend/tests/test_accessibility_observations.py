@@ -46,6 +46,8 @@ from app.services.accessibility_queries import (
     accessibility_pages,
     accessibility_rules,
     accessibility_summary,
+    observation_rule_nodes,
+    observation_rules,
     page_latest_accessibility,
 )
 from app.services.background_jobs import (
@@ -193,20 +195,56 @@ async def test_run_lifecycle_is_idempotent_and_queries_latest_population(
     assert rules.items[0].tags == ["wcag111", "wcag2a"]
     assert latest.total == 2
     assert {item.profile for item in latest.items} == {"desktop", "mobile"}
+    observation_id = latest.items[0].id
+    retained_rules = observation_rules(
+        db_session,
+        site.id,
+        observation_id,
+        result_type=None,
+        limit=10,
+        offset=0,
+    )
+    assert retained_rules is not None and retained_rules.total == 2
+    nodes = observation_rule_nodes(
+        db_session,
+        site.id,
+        observation_id,
+        retained_rules.items[0].id,
+        limit=1,
+        offset=0,
+    )
+    assert nodes is not None and nodes.total == 1
+    assert len(nodes.items) == 1
+    assert (
+        observation_rules(
+            db_session,
+            site.id + 999,
+            observation_id,
+            result_type=None,
+            limit=10,
+            offset=0,
+        )
+        is None
+    )
 
 
 def test_run_validates_ownership_caps_profiles_and_logical_uniqueness(
     db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     site, resource = _site_page(db_session)
-    monkeypatch.setattr(
-        "app.services.accessibility_collection.get_settings", lambda: _settings(tmp_path)
-    )
+    settings = _settings(tmp_path)
+    monkeypatch.setattr("app.services.accessibility_collection.get_settings", lambda: settings)
     with pytest.raises(ValueError, match="do not belong"):
         create_accessibility_run(db_session, site.id, AccessibilityRunCreate(resource_ids=[999]))
+    settings.accessibility_hard_page_limit = 10
     with pytest.raises(ValueError, match="at most 10 Pages"):
         create_accessibility_run(
             db_session, site.id, AccessibilityRunCreate(resource_ids=list(range(1, 12)))
+        )
+    settings.accessibility_max_audit_count = 1
+    with pytest.raises(ValueError, match="2 browser audits"):
+        create_accessibility_run(
+            db_session, site.id, AccessibilityRunCreate(resource_ids=[resource.id])
         )
     with pytest.raises(ValueError, match="duplicates"):
         AccessibilityRunCreate(resource_ids=[resource.id, resource.id])
@@ -493,6 +531,7 @@ def _settings(tmp_path: Path) -> SimpleNamespace:
         accessibility_payload_storage_root=tmp_path / "accessibility",
         accessibility_hard_page_limit=25,
         accessibility_default_page_limit=10,
+        accessibility_max_audit_count=50,
         accessibility_max_payload_bytes=12 * 1024 * 1024,
     )
 

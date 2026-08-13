@@ -14,16 +14,18 @@ from app.accessibility.engine import (
     RULESET_SHA256,
     ruleset_metadata,
 )
-from app.config import get_settings
+from app.config import OBSERVABILITY_ABSOLUTE_PAGE_LIMIT, get_settings
 from app.database import get_db
 from app.models import AccessibilityObservation, AccessibilityRun, BackgroundJob, WebsiteProperty
 from app.schemas.accessibility import (
     AccessibilityCapabilities,
+    AccessibilityNodeList,
     AccessibilityObservationList,
     AccessibilityObservationRead,
     AccessibilityPageSummaryList,
     AccessibilityRuleAggregateList,
     AccessibilityRuleDetail,
+    AccessibilityRuleList,
     AccessibilityRunCreate,
     AccessibilityRunDetail,
     AccessibilityRunList,
@@ -40,6 +42,8 @@ from app.services.accessibility_queries import (
     latest_accessibility,
     list_accessibility_runs,
     observation_read,
+    observation_rule_nodes,
+    observation_rules,
     page_accessibility_history,
     page_latest_accessibility,
 )
@@ -67,6 +71,8 @@ def capabilities() -> AccessibilityCapabilities:
         ruleset_sha256=RULESET_SHA256,
         default_page_limit=settings.accessibility_default_page_limit,
         hard_page_limit=settings.accessibility_hard_page_limit,
+        absolute_page_limit=OBSERVABILITY_ABSOLUTE_PAGE_LIMIT,
+        max_audit_count=settings.accessibility_max_audit_count,
         profiles=PROFILES,
     )
 
@@ -271,6 +277,56 @@ def observation_detail(
     if observation is None:
         raise HTTPException(404, "Accessibility observation not found")
     return observation_read(observation)
+
+
+@router.get(
+    "/sites/{site_id}/accessibility-observations/{observation_id}/rules",
+    response_model=AccessibilityRuleList,
+)
+def observation_rule_list(
+    site_id: int,
+    observation_id: int,
+    db: DbSession,
+    result_type: Literal["violation", "incomplete"] | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> AccessibilityRuleList:
+    result = observation_rules(
+        db,
+        site_id,
+        observation_id,
+        result_type=result_type,
+        limit=limit,
+        offset=offset,
+    )
+    if result is None:
+        raise HTTPException(404, "Accessibility observation not found")
+    return result
+
+
+@router.get(
+    "/sites/{site_id}/accessibility-observations/{observation_id}/rules/{rule_evidence_id}/nodes",
+    response_model=AccessibilityNodeList,
+)
+def observation_node_list(
+    site_id: int,
+    observation_id: int,
+    rule_evidence_id: int,
+    db: DbSession,
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> AccessibilityNodeList:
+    result = observation_rule_nodes(
+        db,
+        site_id,
+        observation_id,
+        rule_evidence_id,
+        limit=limit,
+        offset=offset,
+    )
+    if result is None:
+        raise HTTPException(404, "Accessibility rule evidence not found")
+    return result
 
 
 @router.get("/accessibility-observations/{observation_id}/raw")

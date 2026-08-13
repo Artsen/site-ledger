@@ -82,6 +82,28 @@ test("Accessibility workspace is responsive and keeps automated evidence explici
   await expect(page.getByRole("link", { name: "Accessibility" })).toHaveAttribute("aria-current", "page");
 });
 
+test("observability details are human-readable before raw evidence", async ({ page }) => {
+  await mockApi(page);
+  for (const viewport of [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1024, height: 768 }, { width: 1440, height: 960 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/sites/3/performance/observations/12");
+    await expect(page.getByRole("heading", { name: "Real-user experience" })).toBeVisible();
+    await expect(page.getByText("URL-level field data unavailable")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Site-origin context" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
+  await page.getByRole("link", { name: /View exact raw JSON/ }).click();
+  await expect(page).toHaveURL(/\/performance\/evidence\/12$/);
+  await expect(page.getByRole("heading", { name: "Raw provider evidence" })).toBeVisible();
+  await page.goto("/sites/3/accessibility/observations/12");
+  await expect(page.getByRole("heading", { name: "Accessibility observation" })).toBeVisible();
+  await page.getByRole("button", { name: /Buttons must have discernible text/ }).click();
+  await expect(page.getByText("Fix the missing accessible name.")).toBeVisible();
+  await page.getByRole("link", { name: /View exact raw detector JSON/ }).click();
+  await expect(page).toHaveURL(/\/accessibility\/evidence\/12$/);
+  await expect(page.getByRole("heading", { name: "Raw Accessibility evidence" })).toBeVisible();
+});
+
 test("Site Ledger workflow supports creation, filtering, details, inbound links, and deletion", async ({
   page,
 }) => {
@@ -757,8 +779,21 @@ async function mockApi(page: Page) {
   let siteActive = true;
   let pageNote: Record<string, unknown> | null = null;
 
+  await page.route("**/api/sites/3/performance-observations/12/presentation", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ observation: performanceObservation({ outcome: "unavailable", error_type: "no_field_data", error_message: "No qualifying dataset." }), metrics: [], opportunities: [], diagnostics: [], origin_context: performanceObservation({ id: 13, target_kind: "origin", requested_target: "https://example.com", provider_target: "https://example.com", outcome: "ready" }), origin_metrics: [{ key: "lcp", label: "Largest Contentful Paint", value: 2200, unit: "ms", formatted_value: "2.20 s", assessment: "good", histogram: [{ density: 0.8 }, { density: 0.15 }, { density: 0.05 }] }], presentation_error: null }) });
+  });
+  await page.route("**/api/sites/3/performance-observations/12", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(performanceObservation()) }));
+  await page.route("**/api/performance-observations/12/payload", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ exact: true }) }));
+  await page.route("**/api/sites/3/accessibility-observations/12/rules/31/nodes**", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ id: 51, position: 0, impact: "critical", target_json: ["#submit"], html_snippet: "<button id=\"submit\"></button>", html_original_length: 29, html_truncated: false, failure_summary: "Fix the missing accessible name.", node_evidence_sha256: "f".repeat(64) }], total: 1, limit: 25, offset: 0 }) }));
+  await page.route("**/api/sites/3/accessibility-observations/12/rules**", async (route) => {
+    if (new URL(route.request().url()).pathname !== "/api/sites/3/accessibility-observations/12/rules") { await route.fallback(); return; }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ id: 31, accessibility_observation_id: 12, position: 0, rule_id: "button-name", result_type: "violation", impact: "critical", description: "Buttons must have discernible text", help: "Buttons must have discernible text", help_url: "https://dequeuniversity.com/rules/axe/4.12/button-name", tags_json: ["wcag2a", "wcag412"], node_count: 1, rule_evidence_sha256: "e".repeat(64) }], total: 1, limit: 200, offset: 0 }) });
+  });
+  await page.route("**/api/sites/3/accessibility-observations/12", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(accessibilityObservation()) }));
+  await page.route("**/api/accessibility-observations/12/raw", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ exact: true }) }));
+
   await page.route("**/api/accessibility/capabilities", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ axe_core_version: "4.12.1", detector_bundle_sha256: "a".repeat(64), integration_version: "accessibility-engine-v1", normalization_version: "accessibility-normalization-v1", ruleset_profile: "wcag22-aa-v1", ruleset_rule_count: 62, ruleset_sha256: "b".repeat(64), default_page_limit: 10, hard_page_limit: 25, profiles: {} }) });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ axe_core_version: "4.12.1", detector_bundle_sha256: "a".repeat(64), integration_version: "accessibility-engine-v1", normalization_version: "accessibility-normalization-v1", ruleset_profile: "wcag22-aa-v1", ruleset_rule_count: 62, ruleset_sha256: "b".repeat(64), default_page_limit: 50, hard_page_limit: 250, absolute_page_limit: 250, max_audit_count: 500, profiles: {} }) });
   });
   await page.route("**/api/sites/3/accessibility/summary", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ pages_audited: 0, profiles_audited: 0, pages_with_violations: 0, violation_rules: 0, affected_nodes: 0, needs_review_rules: 0, impact_counts: {}, failed_latest: 0, latest_observed_at: null }) });
@@ -774,7 +809,7 @@ async function mockApi(page: Page) {
   });
 
   await page.route("**/api/sites/3/performance/providers", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ pagespeed: { configured: false, adapter_version: "pagespeed-provider-v1" }, crux: { configured: false, adapter_version: "crux-provider-v1" }, normalization_version: "performance-normalization-v1", default_page_limit: 10, hard_page_limit: 25 }) });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ pagespeed: { configured: false, adapter_version: "pagespeed-provider-v1" }, crux: { configured: false, adapter_version: "crux-provider-v1" }, normalization_version: "performance-normalization-v1", default_page_limit: 50, hard_page_limit: 250, absolute_page_limit: 250, max_provider_requests: 1002, crux_queries_per_minute: 120 }) });
   });
   await page.route("**/api/sites/3/performance/latest**", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], total: 0, limit: 100, offset: 0, measured_page_count: 0, field_available_page_count: 0 }) });
@@ -1677,6 +1712,14 @@ const renderedObservation = {
   warnings_json: [],
   artifacts: [],
 };
+
+function performanceObservation(overrides: Record<string, unknown> = {}) {
+  return { id: 12, performance_run_id: 4, website_property_id: 3, web_resource_id: 8, provider: "crux", provider_adapter_version: "crux-provider-v1", normalization_version: "performance-normalization-v1", target_kind: "url", requested_target: "https://example.com/pricing", provider_target: "https://example.com/pricing", dimension: "PHONE", outcome: "ready", metrics_json: { lcp: { value: 2200, unit: "ms" } }, normalized_sha256: "b".repeat(64), provider_analysis_at: null, provider_period_json: null, provider_product_version: null, observed_at: "2026-08-13T12:00:00Z", error_type: null, error_message: null, page_url: "https://example.com/pricing", payload_sha256: "a".repeat(64), payload_raw_byte_size: 100, payload_stored_byte_size: 80, ...overrides };
+}
+
+function accessibilityObservation() {
+  return { id: 12, accessibility_run_id: 4, website_property_id: 3, web_resource_id: 8, requested_url: "https://example.com/pricing", final_url: "https://example.com/pricing", profile: "desktop", outcome: "ready", observed_at: "2026-08-13T12:00:00Z", axe_core_version: "4.12.1", detector_bundle_sha256: "a".repeat(64), integration_version: "accessibility-engine-v1", normalization_version: "accessibility-normalization-v1", ruleset_profile: "wcag22-aa-v1", ruleset_sha256: "b".repeat(64), browser_engine: "chromium", browser_version: "151", playwright_version: "1.55", profile_json: {}, violation_rule_count: 1, violation_node_count: 1, incomplete_rule_count: 0, incomplete_node_count: 0, pass_rule_count: 20, inapplicable_rule_count: 40, normalized_sha256: "c".repeat(64), error_type: null, error_message: null, page_url: "https://example.com/pricing", payload_sha256: "d".repeat(64), payload_raw_byte_size: 100, payload_stored_byte_size: 80 };
+}
 
 function resourceItem(overrides: Record<string, unknown>) {
   return {

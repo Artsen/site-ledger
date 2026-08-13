@@ -4,6 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 AccessibilityProfile = Literal["desktop", "mobile"]
+OBSERVABILITY_REQUEST_PAGE_LIMIT = 250
 
 
 def _default_profiles() -> list[AccessibilityProfile]:
@@ -11,7 +12,7 @@ def _default_profiles() -> list[AccessibilityProfile]:
 
 
 class AccessibilityRunCreate(BaseModel):
-    resource_ids: list[int] = Field(min_length=1, max_length=25)
+    resource_ids: list[int] = Field(min_length=1, max_length=OBSERVABILITY_REQUEST_PAGE_LIMIT)
     profiles: list[AccessibilityProfile] = Field(default_factory=_default_profiles)
     trigger: Literal["site_workspace", "page_workspace"] = "site_workspace"
 
@@ -36,6 +37,8 @@ class AccessibilityCapabilities(BaseModel):
     ruleset_sha256: str
     default_page_limit: int
     hard_page_limit: int
+    absolute_page_limit: int
+    max_audit_count: int
     profiles: dict[str, dict[str, Any]]
 
 
@@ -129,6 +132,20 @@ class AccessibilityNodeRead(BaseModel):
     html_truncated: bool
     failure_summary: str
     node_evidence_sha256: str
+
+
+class AccessibilityRuleList(BaseModel):
+    items: list[AccessibilityRuleRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class AccessibilityNodeList(BaseModel):
+    items: list[AccessibilityNodeRead]
+    total: int
+    limit: int
+    offset: int
 
 
 class AccessibilityObservationList(BaseModel):

@@ -10,6 +10,8 @@ export type AccessibilityCapabilities = {
   ruleset_sha256: string;
   default_page_limit: number;
   hard_page_limit: number;
+  absolute_page_limit: number;
+  max_audit_count: number;
   profiles: Record<string, Record<string, unknown>>;
 };
 
@@ -160,6 +162,16 @@ export type AccessibilityNode = {
   failure_summary: string;
   node_evidence_sha256: string;
 };
+
+export type AccessibilityRule = {
+  id: number; accessibility_observation_id: number; position: number; rule_id: string;
+  result_type: "violation" | "incomplete"; impact: string | null; description: string;
+  help: string; help_url: string | null; tags_json: string[]; node_count: number;
+  rule_evidence_sha256: string;
+};
+
+export type AccessibilityRuleList = { items: AccessibilityRule[]; total: number; limit: number; offset: number };
+export type AccessibilityNodeList = { items: AccessibilityNode[]; total: number; limit: number; offset: number };
 
 export type AccessibilityRuleDetail = {
   rule_id: string;

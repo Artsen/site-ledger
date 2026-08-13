@@ -10,6 +10,9 @@ export type PerformanceProviderCapabilities = {
   normalization_version: string;
   default_page_limit: number;
   hard_page_limit: number;
+  absolute_page_limit: number;
+  max_provider_requests: number;
+  crux_queries_per_minute: number;
 };
 
 export type PerformanceRun = {
@@ -72,6 +75,8 @@ export type PerformanceObservationList = {
   offset: number;
   measured_page_count?: number;
   field_available_page_count?: number;
+  field_available_phone_page_count?: number;
+  field_available_desktop_page_count?: number;
 };
 
 export type PerformanceRunList = {
@@ -92,4 +97,25 @@ export type PerformanceRunPayload = {
   crux_form_factors: Array<"PHONE" | "DESKTOP">;
   include_origin_crux: boolean;
   trigger: "site_workspace" | "page_workspace";
+};
+
+export type PerformanceMetricPresentation = {
+  key: string; label: string; value: number; unit: string; formatted_value: string;
+  assessment: "good" | "needs_improvement" | "poor" | null;
+  histogram: Array<Record<string, number>>;
+};
+
+export type PageSpeedAuditPresentation = {
+  audit_id: string; title: string; description: string | null; display_value: string | null;
+  score: number | null; savings_ms: number | null; savings_bytes: number | null;
+};
+
+export type PerformanceObservationPresentation = {
+  observation: PerformanceObservation;
+  metrics: PerformanceMetricPresentation[];
+  opportunities: PageSpeedAuditPresentation[];
+  diagnostics: PageSpeedAuditPresentation[];
+  origin_context: PerformanceObservation | null;
+  origin_metrics: PerformanceMetricPresentation[];
+  presentation_error: string | null;
 };

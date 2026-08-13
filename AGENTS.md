@@ -330,6 +330,13 @@ Mobile. Detector updates create later evidence and never rewrite history. Access
 the hardened browser networking policy, never load detector code from a runtime CDN, belongs to
 persistent Page history rather than Scan Observation, and must not alter `scan-comparison-v2`.
 
+Raw Performance and Accessibility evidence is authoritative but is not the default result view.
+Human-readable details must be deterministic, read-time traceable derivatives and must retain exact
+raw routes. CrUX unavailable means insufficient qualifying provider data, not collection failure;
+URL and origin scope must remain distinct, and origin context must be labeled. Frontend workload
+previews never replace backend validation. Performance presentation never mutates payloads.
+Accessibility Violations and Needs Review remain distinct detector evidence, not Findings.
+
 Preserve URL-backed tab, filter, pagination, graph, and presentation state. Preserve the existing
 local-storage preference key unless a read-old/write-new migration is implemented.
 

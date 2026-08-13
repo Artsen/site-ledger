@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 PerformanceProvider = Literal["pagespeed", "crux"]
 PageSpeedStrategy = Literal["mobile", "desktop"]
 CruxFormFactor = Literal["PHONE", "DESKTOP"]
+OBSERVABILITY_REQUEST_PAGE_LIMIT = 250
 
 
 def _default_providers() -> list[PerformanceProvider]:
@@ -21,7 +22,7 @@ def _default_form_factors() -> list[CruxFormFactor]:
 
 
 class PerformanceRunCreate(BaseModel):
-    resource_ids: list[int] = Field(min_length=1, max_length=25)
+    resource_ids: list[int] = Field(min_length=1, max_length=OBSERVABILITY_REQUEST_PAGE_LIMIT)
     providers: list[PerformanceProvider] = Field(default_factory=_default_providers)
     pagespeed_strategies: list[PageSpeedStrategy] = Field(default_factory=_default_strategies)
     crux_form_factors: list[CruxFormFactor] = Field(default_factory=_default_form_factors)
@@ -58,6 +59,9 @@ class PerformanceProviderCapabilities(BaseModel):
     normalization_version: str
     default_page_limit: int
     hard_page_limit: int
+    absolute_page_limit: int
+    max_provider_requests: int
+    crux_queries_per_minute: int
 
 
 class PerformanceRunRead(BaseModel):
@@ -136,3 +140,35 @@ class PerformanceLatestList(BaseModel):
     offset: int
     measured_page_count: int
     field_available_page_count: int
+    field_available_phone_page_count: int
+    field_available_desktop_page_count: int
+
+
+class PerformanceMetricPresentation(BaseModel):
+    key: str
+    label: str
+    value: float
+    unit: str
+    formatted_value: str
+    assessment: Literal["good", "needs_improvement", "poor"] | None = None
+    histogram: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PageSpeedAuditPresentation(BaseModel):
+    audit_id: str
+    title: str
+    description: str | None = None
+    display_value: str | None = None
+    score: float | None = None
+    savings_ms: float | None = None
+    savings_bytes: float | None = None
+
+
+class PerformanceObservationPresentation(BaseModel):
+    observation: PerformanceObservationRead
+    metrics: list[PerformanceMetricPresentation]
+    opportunities: list[PageSpeedAuditPresentation] = Field(default_factory=list)
+    diagnostics: list[PageSpeedAuditPresentation] = Field(default_factory=list)
+    origin_context: PerformanceObservationRead | None = None
+    origin_metrics: list[PerformanceMetricPresentation] = Field(default_factory=list)
+    presentation_error: str | None = None
