@@ -1,5 +1,38 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("product workspace shell is stable across desktop, tablet, and mobile", async ({ page }) => {
+  await mockApi(page);
+  const screenshotDir = process.env.WORKSPACE_SCREENSHOTS_DIR;
+
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/sites/3/pages?search=pricing");
+  await expect(page.getByRole("navigation", { name: "Site workspace" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Pages", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("combobox", { name: "Current Site" })).toHaveValue("3");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/workspace-desktop.png`, fullPage: true });
+
+  await page.getByRole("button", { name: "Collapse sidebar" }).click();
+  await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+  await page.getByRole("button", { name: "Expand sidebar" }).click();
+
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(page.getByRole("complementary", { name: "Workspace navigation" }).first()).toBeVisible();
+  if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/workspace-tablet.png`, fullPage: true });
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Open navigation" })).toBeFocused();
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(page.getByRole("link", { name: "Site Settings" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/workspace-mobile.png`, fullPage: true });
+});
+
 test("Site Ledger workflow supports creation, filtering, details, inbound links, and deletion", async ({
   page,
 }) => {
@@ -8,12 +41,12 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
 
   await page.goto("/");
   await expect(page).toHaveTitle("New Scan | Site Ledger");
-  await expect(page.getByText("Site Ledger", { exact: true })).toBeVisible();
+  await expect(page.getByText("Site Ledger", { exact: true }).last()).toBeVisible();
   await expect(
     page.getByText("A historical record of your website."),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "Site Ledger home" }),
+    page.getByRole("link", { name: "Site Ledger Sites" }),
   ).toBeVisible();
   await page.getByRole("link", { name: "Sites", exact: true }).click();
   await expect(page).toHaveURL(/\/sites$/);
@@ -37,7 +70,8 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   await expect(
     page.getByRole("heading", { name: "Example Site" }),
   ).toBeVisible();
-  await page.getByRole("link", { name: "Edit site" }).click();
+  await page.getByRole("link", { name: "Site Settings" }).click();
+  await expect(page).toHaveURL(/\/sites\/3\/settings$/);
   await page.getByLabel("Maximum pages").fill("150");
   await page.getByRole("button", { name: "Save site" }).click();
   await expect(page).toHaveURL(/\/sites\/3$/);
@@ -448,7 +482,7 @@ test("AI Document Sources preserve nested evidence, provenance, history, and saf
   await page.route("**/api/ai-document-sources/7/deletion-preview", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ refresh_count: 2, snapshot_count: 6, reference_count: 10, current_inventory_origin_count: 1, unique_blob_count: 3, shared_blob_count: 1, exclusive_blob_count: 2, reclaimable_storage_bytes: 1400 }) }));
   await page.route("**/api/ai-document-sources/7", async (route) => { if (route.request().method() === "DELETE") { sourceAdded = false; await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted_source_id: 7 }) }); } else await route.fallback(); });
 
-  await page.goto("/sites/3?tab=sources");
+  await page.goto("/sites/3/ai-documents");
   await page.getByRole("button", { name: "Discover AI Document Sources" }).click();
   await expect(page.getByText("https://example.com/llms.txt")).toBeVisible();
   await expect(page.getByText("https://example.com/docs/llms.txt")).toBeVisible();
@@ -467,7 +501,7 @@ test("AI Document Sources preserve nested evidence, provenance, history, and saf
   await page.getByRole("button", { name: "Load saved content" }).click();
   await expect(page.getByText(/Exact retained content/)).toBeVisible();
   await page.getByRole("button", { name: "Copy content" }).click();
-  await page.goto("/ai-document-sources/7?tab=declared");
+  await page.goto("/sites/3/ai-documents/7?tab=declared");
   await expect(page.getByText("Current origin")).toBeVisible();
   await expect(page.getByText("Reference only")).toBeVisible();
   await page.getByRole("tab", { name: "Validation" }).click();
@@ -476,9 +510,10 @@ test("AI Document Sources preserve nested evidence, provenance, history, and saf
   await expect(page.getByText("Showing 1-2 of 2 refreshes").first()).toBeVisible();
   await expect(page.getByText("2").first()).toBeVisible();
   await page.getByRole("tab", { name: "Settings" }).click();
-  page.once("dialog", (dialog) => dialog.accept());
+  const acceptedDeletion = new Promise<void>((resolve) => page.once("dialog", async (dialog) => { await dialog.accept(); resolve(); }));
   await page.getByRole("button", { name: "Preview and delete" }).click();
-  await expect(page).toHaveURL(/\/sites\/3\?tab=sources/);
+  await acceptedDeletion;
+  await expect(page).toHaveURL(/\/sites\/3\/ai-documents/);
   await page.goto("/scans/1");
   await expect(page.getByRole("tab", { name: /Pages/i })).toBeVisible();
 });
@@ -495,12 +530,11 @@ test("Site timezone and automatic Category Rule workflow", async ({ page }) => {
   });
   await page.route("**/api/sites/3/category-rules/preview", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total_pages_evaluated: 3, matching_pages: 2, currently_assigned: 0, would_gain_automatic_support: 2, would_lose_automatic_support: 0, excluded_matches: 0, sample_matching_pages: [{ resource_id: 2, normalized_url: "https://example.com/blog/a" }], sample_non_matching_pages: [], invalid_conditions: [], evaluation_duration_ms: 2 }) }));
 
-  await page.goto("/sites/3/edit");
+  await page.goto("/sites/3/settings");
   await page.getByLabel("Time zone").fill("America/New_York");
   await page.getByRole("button", { name: "Save site" }).click();
   await expect(page).toHaveURL(/\/sites\/3$/);
-  await page.goto("/sites/3?tab=categories");
-  await page.getByRole("tab", { name: "Rules" }).click();
+  await page.goto("/sites/3/category-rules");
   await page.getByRole("button", { name: "Create Rule" }).click();
   await page.getByLabel("Rule name").fill("Blog paths");
   await page.getByLabel("Rule Category").selectOption("7");
@@ -517,7 +551,7 @@ test("deterministic Scan comparison selects direction, filters, and sorts neutra
   await mockApi(page);
   await mockComparisonApi(page);
 
-  await page.goto("/sites/3?tab=comparisons");
+  await page.goto("/sites/3/comparisons");
   await expect(page.getByLabel("Baseline Scan")).toHaveValue("1");
   await expect(page.getByLabel("Target Scan")).toHaveValue("2");
   await page.getByRole("button", { name: "Compare" }).click();

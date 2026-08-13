@@ -94,7 +94,7 @@ export function PersistentPageDetailPage() {
     <PageFrame>
       <header className="mb-5">
         <div className="mb-2 text-sm text-stone-500">
-          <Link to={`/sites/${siteId}?tab=pages`} className="underline">
+          <Link to={`/sites/${siteId}/pages`} className="underline">
             {page.data.site_name}
           </Link>{" "}
           / Pages

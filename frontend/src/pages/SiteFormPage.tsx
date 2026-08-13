@@ -17,7 +17,7 @@ import { useDocumentTitle } from "../utils/useDocumentTitle";
 type ListFields = Pick<ScopeConfig, "allowed_host_patterns" | "excluded_host_patterns" | "included_path_prefixes" | "excluded_path_prefixes" | "drop_query_parameters">;
 type ListFieldText = Record<keyof ListFields, string>;
 
-export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
+export function SiteFormPage({ mode, embedded = false }: { mode: "create" | "edit"; embedded?: boolean }) {
   const { siteId = "" } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -81,9 +81,9 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
     }
   }, [baseValidation.normalizedUrl, mode, touchedIncludedPaths]);
 
-  if (existing.isLoading) return <PageFrame><LoadingBlock label="Loading site..." /></PageFrame>;
-  if (existing.error) return <PageFrame><ErrorBanner error={existing.error} title="Could not load site" /></PageFrame>;
-  if (mode === "edit" && !existing.data) return <PageFrame><EmptyState title="Site not found" message="The saved site may have been deleted." /></PageFrame>;
+  if (existing.isLoading) return <PageFrame embedded={embedded}><LoadingBlock label="Loading site..." /></PageFrame>;
+  if (existing.error) return <PageFrame embedded={embedded}><ErrorBanner error={existing.error} title="Could not load site" /></PageFrame>;
+  if (mode === "edit" && !existing.data) return <PageFrame embedded={embedded}><EmptyState title="Site not found" message="The saved site may have been deleted." /></PageFrame>;
 
   function updateList(key: keyof ListFieldText, value: string) {
     if (key === "included_path_prefixes") setTouchedIncludedPaths(true);
@@ -101,11 +101,11 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
   }
 
   return (
-    <PageFrame>
-      <div className="mb-6">
+    <PageFrame embedded={embedded}>
+      {!embedded ? <div className="mb-6">
         <div className="mb-2 text-sm text-stone-500"><Link to="/sites" className="underline">Sites</Link> / {mode === "edit" ? "Edit" : "Create"}</div>
         <h1 className="text-2xl font-semibold">{mode === "edit" ? "Edit site" : "Create site"}</h1>
-      </div>
+      </div> : <h2 className="mb-5 text-lg font-semibold">Site Settings</h2>}
       <form onSubmit={submit} className="space-y-5">
         <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -163,8 +163,8 @@ export function SiteFormPage({ mode }: { mode: "create" | "edit" }) {
   );
 }
 
-function PageFrame({ children }: { children: React.ReactNode }) {
-  return <section className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">{children}</section>;
+function PageFrame({ children, embedded = false }: { children: React.ReactNode; embedded?: boolean }) {
+  return <section className={embedded ? "max-w-5xl" : "mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8"}>{children}</section>;
 }
 
 function TextArea({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (value: string) => void }) {

@@ -33,7 +33,7 @@ import { useTableSort } from "../utils/useTableSort";
 const tabItems = ["overview", "tree", "files", "declared", "validation", "history", "settings"];
 
 export function AiDocumentSourcePage() {
-  const { sourceId = "" } = useParams();
+  const { sourceId = "", siteId } = useParams();
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "overview";
   const queryClient = useQueryClient();
@@ -45,7 +45,7 @@ export function AiDocumentSourcePage() {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["ai-source", sourceId] }),
   });
   const cancel = useMutation({ mutationFn: (id: number) => cancelSourceRefresh(String(id)), onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["ai-source", sourceId] }) });
-  const remove = useMutation({ mutationFn: () => deleteAiDocumentSource(sourceId), onSuccess: () => navigate(`/sites/${source.data?.website_property_id}?tab=sources`) });
+  const remove = useMutation({ mutationFn: () => deleteAiDocumentSource(sourceId), onSuccess: () => navigate(`/sites/${source.data?.website_property_id}/ai-documents`) });
 
   if (source.isLoading) return <PageFrame><LoadingBlock label="Loading AI Document Source..." /></PageFrame>;
   if (source.error) return <PageFrame><ErrorBanner error={source.error} title="Could not load AI Document Source" /></PageFrame>;
@@ -54,7 +54,7 @@ export function AiDocumentSourcePage() {
   return <PageFrame>
     <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
       <div className="min-w-0">
-        <div className="mb-2 text-sm text-stone-500"><Link className="underline" to={`/sites/${source.data.website_property_id}?tab=sources`}>{source.data.site_name}</Link> / Sources / AI Document Source</div>
+        <div className="mb-2 text-sm text-stone-500"><Link className="underline" to={`/sites/${source.data.website_property_id}/ai-documents`}>{source.data.site_name}</Link> / AI Documents / Source</div>
         <h1 className="truncate text-2xl font-semibold">{source.data.name}</h1>
         <div className="mt-2 flex flex-wrap items-center gap-2"><StatusBadge status={source.data.last_refresh_status ?? "never_refreshed"} label={formatStatus(source.data.last_refresh_status ?? "never refreshed")} /><span className="max-w-3xl truncate font-mono text-xs text-stone-600">{source.data.entry_url}</span></div>
       </div>
@@ -68,8 +68,8 @@ export function AiDocumentSourcePage() {
     <Tabs tabs={tabItems.map((id) => ({ id, label: id === "declared" ? "Declared URLs" : id[0].toUpperCase() + id.slice(1) }))} active={tab} onChange={(next) => setParams((current) => { const copy = new URLSearchParams(current); copy.set("tab", next); return copy; })} />
     <div className="mt-5">
       {tab === "overview" ? <Overview source={source.data} /> : null}
-      {tab === "tree" ? <Tree sourceId={sourceId} refreshId={source.data.latest_refresh_id} /> : null}
-      {tab === "files" ? <Files sourceId={sourceId} refreshId={source.data.latest_refresh_id} /> : null}
+      {tab === "tree" ? <Tree sourceId={sourceId} refreshId={source.data.latest_refresh_id} siteId={siteId} /> : null}
+      {tab === "files" ? <Files sourceId={sourceId} refreshId={source.data.latest_refresh_id} siteId={siteId} /> : null}
       {tab === "declared" ? <Declared sourceId={sourceId} refreshId={source.data.latest_refresh_id} /> : null}
       {tab === "validation" ? <Validation sourceId={sourceId} refreshId={source.data.latest_refresh_id} /> : null}
       {tab === "history" ? <History sourceId={sourceId} /> : null}
@@ -98,15 +98,15 @@ function Overview({ source }: { source: Awaited<ReturnType<typeof getAiDocumentS
   </div>;
 }
 
-function Tree({ sourceId, refreshId }: { sourceId: string; refreshId: number | null }) {
+function Tree({ sourceId, refreshId, siteId }: { sourceId: string; refreshId: number | null; siteId?: string }) {
   const query = useQuery({ queryKey: ["ai-tree", sourceId, refreshId], queryFn: () => getAiDocumentTree(sourceId, refreshId!), enabled: refreshId != null });
   if (!refreshId) return <EmptyState title="No refresh evidence" message="Refresh this Source to build its document graph." />;
   if (query.isLoading) return <LoadingBlock label="Loading document tree..." />;
   if (query.error) return <ErrorBanner error={query.error} title="Could not load document tree" />;
-  return <section className="rounded-md border border-stone-200 bg-white shadow-sm"><ul className="divide-y divide-stone-100">{query.data?.items.map(({ snapshot, parent_count, cycle }) => <li key={snapshot.id} className="flex flex-wrap items-center gap-3 px-4 py-3" style={{ paddingLeft: `${Math.min(snapshot.parent_depth_min, 10) * 20 + 16}px` }}><span className="font-mono text-xs">{snapshot.final_url ?? snapshot.requested_url}</span><span className="text-xs text-stone-500">{formatStatus(snapshot.document_kind)}</span>{parent_count > 1 ? <span className="text-xs text-blue-700">{parent_count} parents</span> : null}{cycle ? <span className="text-xs text-amber-800">Cycle</span> : null}{snapshot.raw_sha256 ? <Link className="text-xs underline" to={`/ai-document-snapshots/${snapshot.id}`}>Saved evidence</Link> : null}</li>)}</ul></section>;
+  return <section className="rounded-md border border-stone-200 bg-white shadow-sm"><ul className="divide-y divide-stone-100">{query.data?.items.map(({ snapshot, parent_count, cycle }) => <li key={snapshot.id} className="flex flex-wrap items-center gap-3 px-4 py-3" style={{ paddingLeft: `${Math.min(snapshot.parent_depth_min, 10) * 20 + 16}px` }}><span className="font-mono text-xs">{snapshot.final_url ?? snapshot.requested_url}</span><span className="text-xs text-stone-500">{formatStatus(snapshot.document_kind)}</span>{parent_count > 1 ? <span className="text-xs text-blue-700">{parent_count} parents</span> : null}{cycle ? <span className="text-xs text-amber-800">Cycle</span> : null}{snapshot.raw_sha256 ? <Link className="text-xs underline" to={evidenceHref(siteId, snapshot.id)}>Saved evidence</Link> : null}</li>)}</ul></section>;
 }
 
-function Files({ sourceId, refreshId }: { sourceId: string; refreshId: number | null }) {
+function Files({ sourceId, refreshId, siteId }: { sourceId: string; refreshId: number | null; siteId?: string }) {
   const [params, setParams] = useSearchParams();
   const pagination = useUrlPagination({ prefix: "ai_files" });
   const queryParams = new URLSearchParams({ limit: String(pagination.limit), offset: String(pagination.offset) });
@@ -120,8 +120,12 @@ function Files({ sourceId, refreshId }: { sourceId: string; refreshId: number | 
   const controls = query.data ? <PaginatedTableControls total={query.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="file" isLoading={query.isFetching && !query.isLoading} /> : null;
   return <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
     <div className="mb-4 grid gap-3 md:grid-cols-3"><input aria-label="Search AI document files" placeholder="Search URL or title" value={params.get("file_search") ?? ""} onChange={(event) => setFilter(setParams, "file_search", event.target.value, "ai_files_offset")} className="rounded-md border border-stone-300 px-3 py-2 text-sm" /><select aria-label="Document kind" value={params.get("file_kind") ?? ""} onChange={(event) => setFilter(setParams, "file_kind", event.target.value, "ai_files_offset")} className="rounded-md border border-stone-300 px-3 py-2 text-sm"><option value="">All document kinds</option><option value="markdown_document">Markdown</option><option value="llms_index">AI indexes</option><option value="llms_full">Corpus documents</option><option value="openapi_specification">OpenAPI</option><option value="asyncapi_specification">AsyncAPI</option></select><select aria-label="Change state" value={params.get("file_change") ?? ""} onChange={(event) => setFilter(setParams, "file_change", event.target.value, "ai_files_offset")} className="rounded-md border border-stone-300 px-3 py-2 text-sm"><option value="">All change states</option><option value="new">New</option><option value="changed">Changed</option><option value="unchanged">Unchanged</option></select></div>
-    {query.isLoading ? <LoadingBlock label="Loading saved files..." /> : null}{query.error ? <ErrorBanner error={query.error} title="Could not load saved files" /> : null}{controls}<div className="overflow-x-auto"><table className="mt-4 min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{[["url", "URL"], ["role", "Role"], ["kind", "Kind"], ["status", "Status"], ["mime", "MIME"], ["size", "Size"], ["hash", "Hash"], ["parents", "Parents"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={fileSort.sort?.column ?? null} direction={fileSort.sort?.direction ?? null} onChange={fileSort.changeSort} />)}<th className="px-3 py-2 font-medium">Evidence</th></tr></thead><tbody>{fileSort.sortedItems.map((item) => <tr key={item.id} className="border-t border-stone-100"><td className="max-w-sm truncate px-3 py-2 font-mono text-xs">{item.final_url ?? item.requested_url}</td><td className="px-3 py-2">{formatStatus(item.document_role)}</td><td className="px-3 py-2">{formatStatus(item.document_kind)}</td><td className="px-3 py-2">{item.http_status ?? item.fetch_state}</td><td className="px-3 py-2">{item.normalized_mime_type ?? "Unknown"}</td><td className="px-3 py-2">{formatBytes(item.raw_byte_size)}</td><td className="max-w-28 truncate px-3 py-2 font-mono text-xs">{item.raw_sha256 ?? "Not retained"}</td><td className="px-3 py-2">{item.parent_count}</td><td className="px-3 py-2">{item.raw_sha256 ? <Link className="underline" to={`/ai-document-snapshots/${item.id}`}>Open</Link> : "Unavailable"}</td></tr>)}</tbody></table></div>{controls ? <div className="mt-4">{controls}</div> : null}
+    {query.isLoading ? <LoadingBlock label="Loading saved files..." /> : null}{query.error ? <ErrorBanner error={query.error} title="Could not load saved files" /> : null}{controls}<div className="overflow-x-auto"><table className="mt-4 min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{[["url", "URL"], ["role", "Role"], ["kind", "Kind"], ["status", "Status"], ["mime", "MIME"], ["size", "Size"], ["hash", "Hash"], ["parents", "Parents"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={fileSort.sort?.column ?? null} direction={fileSort.sort?.direction ?? null} onChange={fileSort.changeSort} />)}<th className="px-3 py-2 font-medium">Evidence</th></tr></thead><tbody>{fileSort.sortedItems.map((item) => <tr key={item.id} className="border-t border-stone-100"><td className="max-w-sm truncate px-3 py-2 font-mono text-xs">{item.final_url ?? item.requested_url}</td><td className="px-3 py-2">{formatStatus(item.document_role)}</td><td className="px-3 py-2">{formatStatus(item.document_kind)}</td><td className="px-3 py-2">{item.http_status ?? item.fetch_state}</td><td className="px-3 py-2">{item.normalized_mime_type ?? "Unknown"}</td><td className="px-3 py-2">{formatBytes(item.raw_byte_size)}</td><td className="max-w-28 truncate px-3 py-2 font-mono text-xs">{item.raw_sha256 ?? "Not retained"}</td><td className="px-3 py-2">{item.parent_count}</td><td className="px-3 py-2">{item.raw_sha256 ? <Link className="underline" to={evidenceHref(siteId, item.id)}>Open</Link> : "Unavailable"}</td></tr>)}</tbody></table></div>{controls ? <div className="mt-4">{controls}</div> : null}
   </section>;
+}
+
+function evidenceHref(siteId: string | undefined, snapshotId: number) {
+  return siteId ? `/sites/${siteId}/ai-documents/evidence/${snapshotId}` : `/ai-document-snapshots/${snapshotId}`;
 }
 
 function Declared({ sourceId, refreshId }: { sourceId: string; refreshId: number | null }) {

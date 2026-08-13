@@ -11,7 +11,7 @@ import { formatBytes, formatDate, formatStatus } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 
 export function AiDocumentEvidencePage() {
-  const { snapshotId = "" } = useParams();
+  const { snapshotId = "", siteId } = useParams();
   const [loadContent, setLoadContent] = useState(false);
   const snapshot = useQuery({ queryKey: ["ai-document", snapshotId], queryFn: () => getAiDocumentSnapshot(snapshotId) });
   const content = useQuery({ queryKey: ["ai-document-content", snapshotId], queryFn: () => getAiDocumentContent(snapshotId), enabled: loadContent });
@@ -20,7 +20,7 @@ export function AiDocumentEvidencePage() {
   if (snapshot.error || !snapshot.data) return <PageFrame><ErrorBanner error={snapshot.error ?? new Error("Saved evidence not found")} title="Could not load saved evidence" /></PageFrame>;
   const item = snapshot.data;
   return <PageFrame>
-    <div className="mb-5"><div className="mb-2 text-sm text-stone-500">{item.source_id ? <Link className="underline" to={`/ai-document-sources/${item.source_id}`}>AI Document Source</Link> : "AI Document Source"} / Saved evidence</div><h1 className="text-2xl font-semibold">{item.parsed_title ?? formatStatus(item.document_kind)}</h1><p className="mt-2 break-all font-mono text-xs text-stone-600">{item.final_url ?? item.requested_url}</p><div className="mt-3 flex flex-wrap gap-2"><a href={item.final_url ?? item.requested_url} target="_blank" rel="noreferrer" className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium">Open live document</a><a href={aiDocumentDownloadUrl(snapshotId)} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium">Download saved version</a>{content.data ? <CopyButton value={content.data} label="Copy content" /> : null}</div></div>
+    <div className="mb-5"><div className="mb-2 text-sm text-stone-500">{item.source_id ? <Link className="underline" to={siteId ? `/sites/${siteId}/ai-documents/${item.source_id}` : `/ai-document-sources/${item.source_id}`}>AI Document Source</Link> : "AI Document Source"} / Saved evidence</div><h1 className="text-2xl font-semibold">{item.parsed_title ?? formatStatus(item.document_kind)}</h1><p className="mt-2 break-all font-mono text-xs text-stone-600">{item.final_url ?? item.requested_url}</p><div className="mt-3 flex flex-wrap gap-2"><a href={item.final_url ?? item.requested_url} target="_blank" rel="noreferrer" className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium">Open live document</a><a href={aiDocumentDownloadUrl(snapshotId)} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium">Download saved version</a>{content.data ? <CopyButton value={content.data} label="Copy content" /> : null}</div></div>
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm"><DefinitionList items={[
       { label: "Requested URL", value: item.requested_url, copyValue: item.requested_url },
       { label: "Final URL", value: item.final_url, copyValue: item.final_url },

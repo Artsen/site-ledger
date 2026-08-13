@@ -20,7 +20,7 @@ import { inputClass } from "../components/ui/styles";
 import { ScanGraphView } from "../features/graph/ScanGraphView";
 import type { Job, WorkerHealth } from "../types/jobs";
 import type { Page, RenderedObservationIndexItem, Scan, ScanSeed, Snapshot } from "../types/scans";
-import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, hostnameFromUrl, isTerminalStatus, plural } from "../utils/format";
+import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, isTerminalStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
 import { useTableSort } from "../utils/useTableSort";
@@ -146,7 +146,7 @@ export function ScanDetailPage() {
     <PageFrame>
       <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <div className="mb-2 text-sm text-stone-500">Scans / {scan.data.website_property_name ?? hostnameFromUrl(scan.data.starting_url)}</div>
+          <div className="mb-2 text-sm text-stone-500">{scan.data.website_property_id ? <><Link className="underline" to={`/sites/${scan.data.website_property_id}/scans`}>{scan.data.website_property_name ?? "Site"}</Link> / </> : null}<Link className="underline" to="/scans">Scans</Link> / {scan.data.website_property_id ? "Saved Site observation" : "Ad hoc observation"}</div>
           <h1 className="truncate text-xl font-semibold text-stone-950">{scan.data.starting_url}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <StatusBadge status={scan.data.status} />
