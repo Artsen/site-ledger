@@ -8,6 +8,7 @@ import {
   FileStack,
   FolderKanban,
   GitCompareArrows,
+  Gauge,
   Globe2,
   ListTree,
   Network,
@@ -27,6 +28,7 @@ export type SiteArea =
   | "inventory"
   | "ai-documents"
   | "comparisons"
+  | "performance"
   | "graph"
   | "categories"
   | "category-rules"
@@ -68,6 +70,7 @@ export const siteNavigation: SiteNavigationGroup[] = [
     label: "Analyze",
     items: [
       { area: "comparisons", label: "Comparisons", icon: GitCompareArrows, segment: "comparisons" },
+      { area: "performance", label: "Performance", icon: Gauge, segment: "performance" },
       { area: "graph", label: "Graph", icon: Network, segment: "graph" },
     ],
   },
@@ -101,6 +104,7 @@ export function siteAreaFromPath(pathname: string): SiteArea {
   if (segment === "pages") return "pages";
   if (segment === "resources") return "resources";
   if (segment === "comparisons") return "comparisons";
+  if (segment === "performance") return "performance";
   return allSiteItems.find((item) => item.segment === segment)?.area ?? "overview";
 }
 

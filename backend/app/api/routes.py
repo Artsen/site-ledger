@@ -1857,6 +1857,7 @@ def _job_read(job: BackgroundJob, health: WorkerHealth) -> JobRead:
         scan_id=job.scan_id,
         source_refresh_id=job.source_refresh_id,
         scan_comparison_id=job.scan_comparison_id,
+        performance_run_id=job.performance_run_id,
         website_property_id=job.website_property_id,
         dedupe_key=job.dedupe_key,
         payload_json=job.payload_json,

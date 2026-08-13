@@ -27,6 +27,7 @@ observations from separate scans without erasing the evidence captured by each s
 - Classifies individual link occurrences by source-DOM role with explicit rule provenance.
 - Stores exact HTML responses as compressed, content-addressed evidence.
 - Extracts versioned deterministic Page outlines and direct source-text sections from retained HTML.
+- Collects immutable PageSpeed lab and CrUX field observations on demand with exact provider payloads.
 - Records page metadata, redirect chains, errors, and inbound/outgoing link provenance.
 - Uses conditional HTTP revalidation and deterministic parsed-result reuse when safe.
 - Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
@@ -36,8 +37,8 @@ observations from separate scans without erasing the evidence captured by each s
 - Supports scan, source, Site, and background Activity lifecycle management.
 
 Site Ledger does not perform browser-only crawling, Resource-body storage, complete website change
-detection, visual regression, accessibility or performance audits, analytics correlation, or AI
-findings.
+detection, visual regression, accessibility audits, performance regression detection, analytics
+correlation, or AI findings.
 
 ## Core Product Model
 
@@ -52,6 +53,8 @@ findings.
   observations.
 - **Graph:** A scan-specific representation of observed Pages and links.
 - **Activity:** Durable background execution and worker status.
+- **Performance observation:** External PageSpeed lab or CrUX field evidence collected independently
+  of a Scan.
 
 See [Product vision](docs/product-vision.md) for the broader model and roadmap.
 See [Resource Inventory](docs/resource-inventory.md) for classification, provenance, and storage
@@ -62,6 +65,8 @@ See [Structured Page Content](docs/structured-page-content.md) for source-text e
 historical preparation, and Content-tab semantics.
 See [Page Category Rules](docs/page-category-rules.md) and
 [Site display timezones](docs/site-timezones.md) for mutable Site organization and presentation.
+See [Performance observations](docs/performance-observations.md) for external provider evidence,
+security, collection limits, and workspace semantics.
 
 ## Architecture Overview
 
@@ -107,6 +112,16 @@ npm ci
 Runtime databases, static HTML, rendered DOM, and screenshots are written under data/ and ignored
 by Git.
 
+To enable on-demand Performance collection, set the Google API key only in the backend process
+environment before starting both API and worker:
+
+~~~powershell
+$env:SITE_LEDGER_GOOGLE_API_KEY="your-local-key"
+~~~
+
+The normal run cap is 10 Pages and the backend retains an absolute hard maximum of 25 Pages per run.
+Collection is serial and manual. Scheduling and CrUX History import are not implemented.
+
 ## Running Locally
 
 Run the API:
@@ -129,6 +144,8 @@ Historical HTML can prepare structured Page content with
 `uv run python -m app.structured_content build-missing --site-id 1 --limit 500` from `backend`.
 Category Rule performance can be measured with
 `uv run python -m app.category_rule_benchmark`.
+Performance history queries can be measured with
+`uv run python -m app.performance_benchmark`.
 
 Run the frontend in a third terminal:
 

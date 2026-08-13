@@ -137,6 +137,7 @@ export function SiteGraphPage() {
 const legacyAreas: Record<string, SiteArea> = {
   overview: "overview", scans: "scans", pages: "pages", resources: "resources", sources: "sources",
   inventory: "inventory", comparisons: "comparisons", categories: "categories", notes: "notes", graph: "graph",
+  performance: "performance",
 };
 
 export function LegacySiteRedirect() {

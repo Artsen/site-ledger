@@ -13,7 +13,14 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import is_transient_database_lock
-from app.models import BackgroundJob, PageCategoryRule, PageCategoryRuleRun, Scan, SourceRefresh
+from app.models import (
+    BackgroundJob,
+    PageCategoryRule,
+    PageCategoryRuleRun,
+    PerformanceRun,
+    Scan,
+    SourceRefresh,
+)
 from app.services import background_jobs
 from app.services.category_rules import create_followup_evaluation, reconcile_site
 from app.services.job_types import (
@@ -22,12 +29,14 @@ from app.services.job_types import (
     JOB_STATUS_COMPLETED_WITH_ERRORS,
     JOB_STATUS_FAILED,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
+    JOB_TYPE_PERFORMANCE_RUN,
     JOB_TYPE_SCAN,
     JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
     JOB_TYPE_STRUCTURED_CONTENT_BUILD,
 )
+from app.services.performance_collection import execute_performance_run, mark_performance_run_failed
 from app.services.scan_comparisons import (
     ComparisonBuildCancelled,
     execute_comparison_build,
@@ -390,6 +399,41 @@ class StructuredContentBuildJobHandler:
         )
 
 
+class PerformanceRunJobHandler:
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
+        self.session_factory = session_factory
+
+    async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
+        run_id = job.performance_run_id or int(job.payload_json.get("performance_run_id", 0))
+        if not run_id:
+            raise ValueError("Performance job is missing performance_run_id.")
+        run = await asyncio.to_thread(
+            execute_performance_run,
+            self.session_factory,
+            run_id,
+            should_cancel=context.check_cancelled,
+            progress=lambda current, total, counters: context.progress(
+                phase="collecting",
+                current_operation="Collecting external Performance evidence",
+                current=current,
+                total=total,
+                unit="provider requests",
+                counters=counters,
+            ),
+        )
+        if run.status == "cancelled":
+            raise JobCancelled("Performance run cancelled by user.")
+        return HandlerResult(
+            status=(JOB_STATUS_COMPLETED_WITH_ERRORS if run.failed_count else JOB_STATUS_COMPLETED),
+            result_json={
+                "performance_run_id": run.id,
+                "ready": run.ready_count,
+                "unavailable": run.unavailable_count,
+                "failed": run.failed_count,
+            },
+        )
+
+
 class JobHandlerRegistry:
     def __init__(self, handlers: dict[str, JobHandler]):
         self.handlers = handlers
@@ -414,6 +458,7 @@ def build_handler_registry(
             JOB_TYPE_STRUCTURED_CONTENT_BUILD: StructuredContentBuildJobHandler(
                 session_factory, store
             ),
+            JOB_TYPE_PERFORMANCE_RUN: PerformanceRunJobHandler(session_factory),
         }
     )
 
@@ -534,6 +579,11 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 "cancelled",
                 "Comparison build cancelled by user.",
             )
+        elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
+            run = db.get(PerformanceRun, job.performance_run_id)
+            if run:
+                run.status = "cancelled"
+                run.finished_at = now
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -575,6 +625,12 @@ def _mark_domain_interrupted(
                 reason,
                 "Worker interrupted during comparison build.",
             )
+        elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
+            run = db.get(PerformanceRun, job.performance_run_id)
+            if run:
+                run.status = "failed"
+                run.finished_at = now
+                run.error_summary = "Worker interrupted during Performance collection."
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -619,6 +675,8 @@ def _mark_domain_failed(
                 type(exc).__name__,
                 str(exc),
             )
+        elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
+            mark_performance_run_failed(db, job.performance_run_id, exc)
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:

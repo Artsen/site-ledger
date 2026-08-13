@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,16 @@ class Settings(BaseSettings):
     html_storage_root: Path = Path("../data/html")
     ai_document_storage_root: Path = Path("../data/ai-documents")
     rendered_artifact_storage_root: Path = Path("../data/rendered")
+    performance_payload_storage_root: Path = Path("../data/performance")
+    google_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SITE_LEDGER_GOOGLE_API_KEY", "SCANNER_GOOGLE_API_KEY"),
+    )
+    performance_provider_timeout_seconds: float = 90.0
+    performance_provider_max_response_bytes: int = 12 * 1024 * 1024
+    performance_provider_max_attempts: int = 3
+    performance_default_page_limit: int = 10
+    performance_hard_page_limit: int = 25
     crawler_user_agent: str = "WebsiteScanner/0.1"
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
@@ -46,6 +56,18 @@ class Settings(BaseSettings):
             raise ValueError("JOB_PROGRESS_MIN_INTERVAL_SECONDS cannot be negative.")
         if self.job_event_limit_per_job < 1:
             raise ValueError("JOB_EVENT_LIMIT_PER_JOB must be positive.")
+        if self.performance_provider_timeout_seconds <= 0:
+            raise ValueError("PERFORMANCE_PROVIDER_TIMEOUT_SECONDS must be positive.")
+        if self.performance_provider_max_response_bytes < 1:
+            raise ValueError("PERFORMANCE_PROVIDER_MAX_RESPONSE_BYTES must be positive.")
+        if self.performance_provider_max_attempts < 1:
+            raise ValueError("PERFORMANCE_PROVIDER_MAX_ATTEMPTS must be positive.")
+        if self.performance_hard_page_limit < 1:
+            raise ValueError("PERFORMANCE_HARD_PAGE_LIMIT must be positive.")
+        if not 1 <= self.performance_default_page_limit <= self.performance_hard_page_limit:
+            raise ValueError(
+                "PERFORMANCE_DEFAULT_PAGE_LIMIT must be between 1 and the hard Page limit."
+            )
         return self
 
 

@@ -5,6 +5,7 @@ import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "
 import type { Job, JobList, WorkerHealth } from "../types/jobs";
 import type { AiDeletePreview, AiDiscoveryCandidate, AiDocumentReference, AiDocumentRefresh, AiDocumentSnapshot, AiDocumentSource, AiDocumentSettings, AiValidation, Paginated } from "../types/aiDocuments";
 import type { ComparisonLink, ComparisonPage, ComparisonResource, ComparisonResultList, OccurrenceDiff, PageChangeHistory, ScanComparisonBuild, ScanComparisonList, ScanComparisonOverview, SourceDiff } from "../types/comparisons";
+import type { PerformanceObservation, PerformanceObservationList, PerformanceProviderCapabilities, PerformanceRun, PerformanceRunDetail, PerformanceRunList, PerformanceRunPayload } from "../types/performance";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -202,6 +203,22 @@ export const renderedArtifactUrl = (id: number) => `${API_BASE}/api/rendered-art
 export const listJobs = (query = "") => request<JobList>(`/api/jobs${query}`);
 export const getJob = (jobId: string) => request<Job>(`/api/jobs/${jobId}`);
 export const getWorkerHealth = () => request<WorkerHealth>("/api/jobs/worker-health");
+export const getPerformanceProviders = (siteId: string) => request<PerformanceProviderCapabilities>(`/api/sites/${siteId}/performance/providers`);
+export const createPerformanceRun = (siteId: string, payload: PerformanceRunPayload) => request<PerformanceRun>(`/api/sites/${siteId}/performance-runs`, { method: "POST", body: JSON.stringify(payload) });
+export const listPerformanceRuns = (siteId: string, query = "") => request<PerformanceRunList>(`/api/sites/${siteId}/performance-runs${query}`);
+export const getPerformanceRun = (siteId: string, runId: string, query = "") => request<PerformanceRunDetail>(`/api/sites/${siteId}/performance-runs/${runId}${query}`);
+export const cancelPerformanceRun = (siteId: string, runId: string) => request<PerformanceRun>(`/api/sites/${siteId}/performance-runs/${runId}/cancel`, { method: "POST" });
+export const getLatestPerformance = (siteId: string, query = "") => request<PerformanceObservationList>(`/api/sites/${siteId}/performance/latest${query}`);
+export const getPagePerformance = (siteId: string, resourceId: string, query = "") => request<PerformanceObservationList>(`/api/sites/${siteId}/pages/${resourceId}/performance${query}`);
+export const getPageLatestPerformance = (siteId: string, resourceId: string) => request<PerformanceObservationList>(`/api/sites/${siteId}/pages/${resourceId}/performance/latest`);
+export const getPerformanceObservation = (siteId: string, observationId: number) => request<PerformanceObservation>(`/api/sites/${siteId}/performance-observations/${observationId}`);
+export const performancePayloadUrl = (observationId: number) => `${API_BASE}/api/performance-observations/${observationId}/payload`;
+
+export async function getPerformancePayload(observationId: number): Promise<string> {
+  const response = await fetch(performancePayloadUrl(observationId));
+  if (!response.ok) throw errorFromResponse(response.status, await response.text());
+  return response.text();
+}
 
 export async function getHtml(snapshotId: string): Promise<string> {
   const response = await fetch(`${API_BASE}/api/snapshots/${snapshotId}/html`);

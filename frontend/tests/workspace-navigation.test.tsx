@@ -42,6 +42,7 @@ describe("workspace navigation contract", () => {
     expect(siteIdFromPath("/sites/3/pages/92")).toBe("3");
     expect(siteAreaFromPath("/sites/3/pages/92")).toBe("pages");
     expect(siteAreaFromPath("/sites/3/comparisons/11/resources/9")).toBe("comparisons");
+    expect(siteAreaFromPath("/sites/3/performance/runs/12")).toBe("performance");
     expect(siteAreaFromPath("/sites/3/edit")).toBe("settings");
     expect(isSiteAreaActive("/sites/3/resources/7", 3, "resources")).toBe(true);
     expect(isSiteAreaActive("/sites/3/resources/7", 3, "overview")).toBe(false);
@@ -52,6 +53,7 @@ describe("workspace navigation contract", () => {
     expect(switchSiteHref("/sites/3/comparisons/11/resources/9", 8)).toBe("/sites/8/comparisons");
     expect(switchSiteHref("/sites/3", 8)).toBe("/sites/8");
     expect(siteAreaHref(8, "category-rules")).toBe("/sites/8/category-rules");
+    expect(switchSiteHref("/sites/3/performance/runs/12", 8)).toBe("/sites/8/performance");
   });
 
   it("persists desktop collapse preference", async () => {
@@ -59,6 +61,14 @@ describe("workspace navigation contract", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Collapse sidebar" }));
     expect(window.localStorage.getItem("site-ledger.sidebar-collapsed")).toBe("true");
     expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
+  });
+
+  it("shows Performance under Analyze with an accessible collapsed label", async () => {
+    renderShell("/sites/3/performance");
+    const links = await screen.findAllByRole("link", { name: "Performance" });
+    expect(links.length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    expect(screen.getByRole("link", { name: "Performance" })).toHaveAttribute("title", "Performance");
   });
 
   it("ignores an invalid persisted collapse preference", () => {

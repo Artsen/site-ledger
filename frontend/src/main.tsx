@@ -17,6 +17,9 @@ const AiDocumentSourcePage = lazyNamed(() => import("./pages/AiDocumentSourcePag
 const SiteWorkspaceLayout = lazyNamed(() => import("./pages/site-workspace/SiteWorkspaceLayout"), "SiteWorkspaceLayout");
 const SiteFormPage = lazyNamed<{ mode: "create" | "edit"; embedded?: boolean }>(() => import("./pages/SiteFormPage"), "SiteFormPage");
 const ResourceDetailPage = lazyNamed<{ scope: "site" | "scan" }>(() => import("./pages/ResourceDetailPage"), "ResourceDetailPage");
+const SitePerformancePage = lazyNamed(() => import("./pages/PerformanceWorkspace"), "SitePerformancePage");
+const PerformanceRunPage = lazyNamed(() => import("./pages/PerformanceWorkspace"), "PerformanceRunPage");
+const PerformanceEvidencePage = lazyNamed(() => import("./pages/PerformanceWorkspace"), "PerformanceEvidencePage");
 
 function lazyWorkspacePage(name: keyof typeof import("./pages/site-workspace/SiteWorkspacePages")) {
   return lazyNamed(() => import("./pages/site-workspace/SiteWorkspacePages"), name);
@@ -64,6 +67,9 @@ const router = createBrowserRouter([
           { path: "ai-documents/evidence/:snapshotId", element: <AiDocumentEvidencePage /> },
           { path: "ai-documents/:sourceId", element: <AiDocumentSourcePage /> },
           { path: "comparisons", element: <SiteComparisonsPage /> },
+          { path: "performance", element: <SitePerformancePage /> },
+          { path: "performance/runs/:runId", element: <PerformanceRunPage /> },
+          { path: "performance/evidence/:observationId", element: <PerformanceEvidencePage /> },
           { path: "comparisons/:comparisonId/pages/:resourceId", element: <PageComparisonDetailPage /> },
           { path: "comparisons/:comparisonId/resources/:resourceId", element: <ResourceComparisonDetailPage /> },
           { path: "comparisons/:comparisonId/links/:sourceResourceId/:targetResourceId", element: <LinkComparisonDetailPage /> },

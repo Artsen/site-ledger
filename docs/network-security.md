@@ -31,6 +31,15 @@ Static response bodies remain streamed and bounded by observed body bytes. `Cont
 early rejection hint only. Caller `Authorization`, `Cookie`, and `Proxy-Authorization` headers are
 rejected, cookie state is cleared between hops, and sensitive response headers are not retained.
 
+## Trusted provider boundary
+
+PageSpeed and CrUX collection does not use `SafeHttpFetcher` because it sends a backend-only API key
+to fixed trusted Google endpoints, never to a Site-controlled URL. Provider adapters define HTTPS
+hosts in code, disable redirects and ambient proxies with `trust_env=False`, apply explicit timeouts
+and streamed body limits, and sanitize failures. User input cannot select the provider host. The API
+key is excluded from persisted request descriptors, logs, checksums, and API responses. See
+[Performance observations](performance-observations.md).
+
 ## Chromium boundary
 
 Chromium requests are intercepted before navigation. URL and complete DNS-answer policy is applied
@@ -57,6 +66,7 @@ remains `1`. Historical observations retain their original versions and byte sem
 | Static HTTP | Async complete-answer policy | Yes | Streamed body bytes | Resolver and OS routing trust |
 | Sitemap/Source fetch | Same SafeHttpFetcher policy | Yes | Streamed body/decompression limits | Resolver and OS routing trust |
 | AI Document fetch | Same SafeHttpFetcher policy | Yes | Per-document and aggregate limits | Resolver and OS routing trust |
+| PageSpeed / CrUX | Fixed trusted HTTPS providers | Provider-managed | Streamed response bytes | Google API availability and quota |
 | Chromium main navigation | Async route validation | No | Observed encoded bytes and duration | Chromium DNS TOCTOU; event overshoot |
 | Chromium subresource | Async route validation | No | Observed encoded bytes | Chromium DNS TOCTOU; event overshoot |
 

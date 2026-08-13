@@ -222,6 +222,15 @@ Shared table pagination conventions and URL parameter isolation are documented i
 
 Stored HTML is rendered only as escaped text. The raw HTML endpoint returns text/plain.
 
+## External Performance Evidence
+
+Performance collection is independent of Scan execution. A durable `PerformanceRun` invokes fixed
+PageSpeed and CrUX adapters, stores exact compressed provider payloads, and creates immutable,
+versioned `PerformanceObservation` rows associated with a Site and, for URL targets, an existing
+persistent Page `WebResource`. Lab and field evidence remain separate. Latest summaries are query
+views over history and do not mutate Page or Scan records. See
+[Performance observations](performance-observations.md).
+
 ## Portability And Compatibility
 
 SQLAlchemy services avoid SQLite-only behavior where a normal portable solution exists. The content
@@ -241,7 +250,7 @@ crawl behavior, or break operator configuration.
 ## Deferred Areas
 
 Resource-body storage, environment comparison,
-findings, accessibility and performance observations, analytics integrations, semantic analysis,
+findings, accessibility observations, performance regression interpretation, analytics integrations, semantic analysis,
 investigation workflow, scheduling, notifications, authentication, and multi-user permissions are
 future direction.
 
