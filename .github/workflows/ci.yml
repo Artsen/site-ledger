@@ -43,6 +43,8 @@ jobs:
         run: uv lock --check
       - name: Sync backend dependencies
         run: uv sync --extra dev --locked
+      - name: Install backend Chromium
+        run: uv run --extra dev --locked playwright install --with-deps chromium
       - name: Run backend tests
         run: uv run --extra dev --locked pytest
       - name: Run Ruff

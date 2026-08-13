@@ -20,7 +20,12 @@ from app.crawler.safe_fetch import (
     connect_error_type,
 )
 from app.crawler.scope import ScopeConfig, ScopeEngine
-from app.crawler.security import UnsafeDestinationError, validate_public_destination
+from app.crawler.secure_transport import PinnedAsyncHTTPTransport
+from app.crawler.security import (
+    DestinationResolutionError,
+    UnsafeDestinationError,
+    validate_public_destination,
+)
 from app.crawler.url_normalizer import NormalizedUrl
 from app.models import (
     ResourceOccurrence,
@@ -139,15 +144,21 @@ class StaticPageCrawler:
         self._update_counts(scan, len(seen), len(fetched), len(queue))
         self.db.commit()
 
+        connection_limits = httpx.Limits(
+            max_connections=max(2, config.concurrent_requests_per_host),
+            max_keepalive_connections=max(2, config.concurrent_requests_per_host),
+        )
         client = httpx.AsyncClient(
             follow_redirects=False,
             max_redirects=config.max_redirects,
             timeout=config.request_timeout_seconds,
-            transport=self.transport,
-            limits=httpx.Limits(
-                max_connections=max(2, config.concurrent_requests_per_host),
-                max_keepalive_connections=max(2, config.concurrent_requests_per_host),
+            transport=self.transport
+            or PinnedAsyncHTTPTransport(
+                allow_private_networks=config.allow_private_networks,
+                limits=connection_limits,
             ),
+            limits=connection_limits,
+            trust_env=False,
         )
 
         try:
@@ -288,7 +299,6 @@ class StaticPageCrawler:
     ) -> tuple[ResourceSnapshot, list[Any], list[Any]]:
         resource = self._resource(item.normalized)
         try:
-            await validate_public_destination(item.requested_url, config.allow_private_networks)
             request_headers = representation_headers(config.user_agent)
             fingerprint = request_variant_fingerprint(request_headers)
             candidate = (
@@ -318,6 +328,7 @@ class StaticPageCrawler:
                 redirect_validator=lambda url: _validate_redirect(scope, url),
                 destination_validator=validate_public_destination,
                 client=client,
+                connection_pinning=self.transport is None,
             )
             result = await fetcher.get(item.requested_url, headers=fetch_headers)
             if candidate is not None:
@@ -535,6 +546,8 @@ class StaticPageCrawler:
             return self._record_failure(scan, item, connect_error_type(exc), str(exc)), [], []
         except (httpx.ReadError, httpx.RemoteProtocolError) as exc:
             return self._record_failure(scan, item, connect_error_type(exc), str(exc)), [], []
+        except DestinationResolutionError as exc:
+            return self._record_failure(scan, item, "dns_error", str(exc)), [], []
         except UnsafeDestinationError as exc:
             return self._record_failure(scan, item, "unsafe_destination", str(exc)), [], []
         except httpx.InvalidURL as exc:

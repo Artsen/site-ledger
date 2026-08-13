@@ -26,7 +26,7 @@ python -m app.browser_check
 ```
 
 Run the bounded local fixture benchmark with `python -m app.render_benchmark`. It reports capture
-duration, declared network bytes, bounded event counts, and artifact bytes without contacting an
+duration, observed encoded network bytes, bounded event counts, and artifact bytes without contacting an
 external website.
 
 The worker reports package and Chromium availability in its capability metadata. API requests and
@@ -45,11 +45,15 @@ and a fresh non-persistent context for every Page.
 - No cookies, authorization values, request bodies, response bodies, or persistent browser profile
   are supplied or stored.
 - Sensitive query values and credential-bearing headers are removed before event persistence.
+- Chromium is launched without ambient proxy inheritance.
 
-The request and total network byte budgets use declared response lengths as early warnings and
-evidence limits. Browser engines do not provide a portable pre-body byte cutoff for every encoded
-response; the wall-clock limit and bounded event/artifact persistence remain the hard worker and
-storage controls.
+Resource and total network budgets use Chromium CDP observed encoded-byte events, not declared
+`Content-Length`. At a crossing, later requests are blocked and active page loading is stopped.
+Enforcement can overshoot by the bytes Chromium transfers before reporting the next event. The
+wall-clock limit remains an independent hard worker bound.
+
+Python validation does not pin Chromium's independently resolved connection. Browser capture retains
+a documented DNS rebinding boundary; see [Network security](network-security.md).
 
 ## Evidence and retention
 

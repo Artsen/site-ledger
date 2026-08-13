@@ -156,7 +156,10 @@ reference-aware so shared evidence remains available to other scans.
 The crawler is an SSRF boundary:
 
 - Only HTTP and HTTPS destinations are accepted.
-- Loopback, link-local, and private network destinations are blocked by default.
+- Only complete globally routable DNS answer sets are accepted by default; mixed public/private,
+  loopback, link-local, private, and shared/CGNAT destinations are blocked.
+- Static sockets connect to the validated address while preserving HTTP Host, TLS SNI, and
+  certificate verification. Ambient proxy environment variables are ignored.
 - Redirect destinations are revalidated before each request.
 - Cookies and user credentials are not forwarded.
 - Request timeout, redirect, response-size, Page, and depth limits are enforced.
@@ -167,11 +170,15 @@ The crawler is an SSRF boundary:
 - Scanned HTML is parsed as data and never executed in the application.
 - Browser requests are intercepted before navigation and every HTTP redirect or subresource
   destination is checked against the network policy.
+- Browser byte budgets use observed Chromium transfer and actively stop loading after a limit;
+  Chromium still has a documented DNS validation/connection TOCTOU boundary.
 - Browser contexts are non-persistent, service workers and unsafe methods are blocked, and no
   credentials are supplied.
 
 Authenticated browser capture is not supported. Private-network access remains disabled by
 default and must be deliberately enabled in scan scope.
+
+See [Network security](docs/network-security.md) for guarantees and residual risks.
 
 ## Quality Checks
 

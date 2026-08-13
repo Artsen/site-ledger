@@ -63,7 +63,7 @@ async def run() -> None:
                     "capture_state": result.state,
                     "duration_ms": result.duration_ms,
                     "network_entries": len(result.network),
-                    "declared_network_bytes": result.total_network_bytes,
+                    "observed_network_bytes": result.total_network_bytes,
                     "console_messages": len(result.console),
                     "page_errors": len(result.page_errors),
                     "artifact_count": len(result.artifacts),

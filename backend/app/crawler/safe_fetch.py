@@ -7,7 +7,8 @@ from urllib.parse import urljoin
 import httpx
 
 from app.crawler.resource_classification import classify_response
-from app.crawler.security import validate_public_destination
+from app.crawler.secure_transport import PinnedAsyncHTTPTransport
+from app.crawler.security import validate_destination_url, validate_public_destination
 
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 ALLOWED_CALLER_HEADERS = {
@@ -27,7 +28,7 @@ SENSITIVE_RESPONSE_HEADERS = {
 }
 
 RedirectValidator = Callable[[str], Awaitable[tuple[bool, str | None, str | None, str | None]]]
-DestinationValidator = Callable[[str, bool], Awaitable[None]]
+DestinationValidator = Callable[[str, bool], Awaitable[Any]]
 
 
 @dataclass(frozen=True)
@@ -67,12 +68,18 @@ class SafeHttpFetcher:
         redirect_validator: RedirectValidator | None = None,
         destination_validator: DestinationValidator = validate_public_destination,
         client: httpx.AsyncClient | None = None,
+        connection_pinning: bool | None = None,
     ):
         self.limits = limits
         self.transport = transport
         self.redirect_validator = redirect_validator
         self.destination_validator = destination_validator
         self.client = client
+        self.connection_pinning = (
+            transport is None and client is None
+            if connection_pinning is None
+            else connection_pinning
+        )
 
     async def get(self, url: str, headers: dict[str, str] | None = None) -> SafeFetchResult:
         started = monotonic()
@@ -92,7 +99,11 @@ class SafeHttpFetcher:
                 follow_redirects=False,
                 max_redirects=self.limits.max_redirects,
                 timeout=self.limits.timeout_seconds,
-                transport=self.transport,
+                transport=self.transport
+                or PinnedAsyncHTTPTransport(
+                    allow_private_networks=self.limits.allow_private_networks
+                ),
+                trust_env=False,
             ) as client:
                 (
                     response,
@@ -124,7 +135,7 @@ class SafeHttpFetcher:
         redirect_chain: list[dict[str, Any]] = []
 
         for _hop in range(self.limits.max_redirects + 1):
-            await self.destination_validator(current_url, self.limits.allow_private_networks)
+            await self._validate_destination(current_url)
             client.cookies.clear()
             async with client.stream("GET", current_url, headers=request_headers) as response:
                 if response.status_code not in REDIRECT_STATUSES:
@@ -196,13 +207,22 @@ class SafeHttpFetcher:
                         _sanitized_response_headers(response.headers),
                         redirect_chain,
                     )
-                await self.destination_validator(resolved_url, self.limits.allow_private_networks)
+                await self._validate_destination(resolved_url)
                 seen_redirects.add(resolved_url)
                 current_url = resolved_url
 
         raise RedirectFailureError(
             "too_many_redirects", "Redirect limit exceeded", current_url, None, None, redirect_chain
         )
+
+    async def _validate_destination(self, url: str) -> None:
+        if self.connection_pinning:
+            validate_destination_url(url)
+            return
+        if self.transport is not None and self.limits.allow_private_networks:
+            validate_destination_url(url)
+            return
+        await self.destination_validator(url, self.limits.allow_private_networks)
 
     async def _read_classified_response(
         self, response: httpx.Response, redirect_chain: list[dict[str, Any]]
