@@ -65,6 +65,7 @@ class CrawlItem:
     normalized: NormalizedUrl
     requested_url: str
     depth: int
+    policy_key: str
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,7 @@ class StaticPageCrawler:
         self._resource_cache: dict[str, WebResource] = {}
         self._discovered_resource_ids: set[int] = set()
         self._resource_reference_occurrence_count = 0
+        self._normalization_version = "url-normalization-v1"
 
     async def run(self, scan: Scan) -> None:
         await self._execute(scan, finalize=True)
@@ -121,8 +123,9 @@ class StaticPageCrawler:
         self._resource_cache.clear()
         self._discovered_resource_ids.clear()
         self._resource_reference_occurrence_count = 0
+        self._normalization_version = scan.url_normalization_version
         config = ScopeConfig.from_dict(scan.scope_config)
-        scope = ScopeEngine(config, scan.starting_url)
+        scope = ScopeEngine(config, scan.starting_url, scan.url_normalization_version)
         initial = scope.evaluate(scan.starting_url)
         if initial.normalized is None or not initial.in_scope:
             message = initial.exclusion_reason or "Starting URL is out of scope"
@@ -136,9 +139,9 @@ class StaticPageCrawler:
         if finalize:
             scan.status = "running"
             scan.started_at = datetime.now(UTC)
-        queue = self._initial_queue(scan, initial.normalized)
+        queue = self._initial_queue(scan, initial.normalized, scope)
         retry_queue: deque[RetryWork] = deque()
-        seen = {item.normalized.normalized_url for item in queue}
+        seen = {item.policy_key for item in queue}
         fetched: set[str] = set()
         had_errors = False
         self._update_counts(scan, len(seen), len(fetched), len(queue))
@@ -220,7 +223,7 @@ class StaticPageCrawler:
                     )
                     self._mark_seed(scan.id, item.normalized.normalized_url, "queued")
                 else:
-                    fetched.add(item.normalized.normalized_url)
+                    fetched.add(item.policy_key)
                     if decision.retryable:
                         scan.static_retry_exhausted_count += 1
                     if canonical.error_type:
@@ -607,16 +610,18 @@ class StaticPageCrawler:
                 discover
                 and result.in_scope
                 and result.normalized is not None
-                and result.normalized.normalized_url not in seen
+                and result.site_policy_key not in seen
                 and item.depth + 1 <= config.max_depth
                 and len(seen) < config.max_pages
             ):
-                seen.add(result.normalized.normalized_url)
+                policy_key = result.site_policy_key or result.normalized.normalized_url
+                seen.add(policy_key)
                 queue.append(
                     CrawlItem(
                         result.normalized,
                         result.normalized.normalized_url,
                         item.depth + 1,
+                        policy_key,
                     )
                 )
 
@@ -787,7 +792,11 @@ class StaticPageCrawler:
         cached = self._resource_cache.get(normalized.normalized_url)
         if cached is not None:
             return cached
-        resource = get_or_create_resource(self.db, normalized)
+        resource = get_or_create_resource(
+            self.db,
+            normalized,
+            normalization_version=self._normalization_version,
+        )
         self._resource_cache[normalized.normalized_url] = resource
         return resource
 
@@ -797,7 +806,9 @@ class StaticPageCrawler:
         scan.fetched_count = fetched
         scan.queued_count = queued
 
-    def _initial_queue(self, scan: Scan, initial: NormalizedUrl) -> deque[CrawlItem]:
+    def _initial_queue(
+        self, scan: Scan, initial: NormalizedUrl, scope: ScopeEngine
+    ) -> deque[CrawlItem]:
         seeds = list(
             self.db.scalars(
                 select(ScanSeed)
@@ -806,7 +817,7 @@ class StaticPageCrawler:
             )
         )
         if not seeds:
-            return deque([CrawlItem(initial, initial.normalized_url, 0)])
+            return deque([CrawlItem(initial, initial.normalized_url, 0, scope.policy_key(initial))])
         queue: deque[CrawlItem] = deque()
         for seed in seeds:
             if not seed.normalized_url:
@@ -824,8 +835,17 @@ class StaticPageCrawler:
                 )
             except ValueError:
                 continue
-            queue.append(CrawlItem(normalized, seed.requested_url, seed.depth))
-        return queue or deque([CrawlItem(initial, initial.normalized_url, 0)])
+            queue.append(
+                CrawlItem(
+                    normalized,
+                    seed.requested_url,
+                    seed.depth,
+                    scope.policy_key(normalized),
+                )
+            )
+        return queue or deque(
+            [CrawlItem(initial, initial.normalized_url, 0, scope.policy_key(initial))]
+        )
 
     def _mark_seed(self, scan_id: int, normalized_url: str, state: str) -> None:
         seed = self.db.scalar(

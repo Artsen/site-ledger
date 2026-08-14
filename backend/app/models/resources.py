@@ -34,6 +34,9 @@ class Scan(Base):
     starting_url: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), index=True, default="queued")
     scope_config: Mapped[dict[str, Any]] = mapped_column(JSON)
+    url_normalization_version: Mapped[str] = mapped_column(
+        String(64), default="url-normalization-v1", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -132,6 +135,9 @@ class WebResource(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     resource_type: Mapped[str] = mapped_column(String(32), default="page")
+    normalization_version: Mapped[str] = mapped_column(
+        String(64), default="url-normalization-v1", index=True
+    )
     normalized_url: Mapped[str] = mapped_column(Text, nullable=False)
     scheme: Mapped[str] = mapped_column(String(16), index=True)
     host: Mapped[str] = mapped_column(String(255), index=True)
@@ -154,9 +160,107 @@ class WebResource(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("resource_type", "normalized_url", name="uq_resource_type_url"),
-        Index("ux_web_resources_normalized_url", "normalized_url", unique=True),
+        UniqueConstraint(
+            "normalization_version",
+            "normalized_url",
+            name="uq_web_resource_version_url",
+        ),
+        Index(
+            "ix_web_resources_version_host",
+            "normalization_version",
+            "host",
+        ),
     )
+
+
+class UrlIdentityMigration(Base):
+    __tablename__ = "url_identity_migrations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    implementation_version: Mapped[str] = mapped_column(String(64))
+    reconciliation_schema_version: Mapped[str] = mapped_column(String(64))
+    source_normalization_version: Mapped[str] = mapped_column(String(64))
+    target_normalization_version: Mapped[str] = mapped_column(String(64))
+    reconciliation_manifest_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    reconciliation_source_fingerprint: Mapped[str] = mapped_column(String(64))
+    operation_plan_sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    counts_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    backup_metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    pre_migration_fingerprint: Mapped[str] = mapped_column(String(64))
+    post_migration_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    post_migration_write_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    mappings: Mapped[list["UrlIdentityMigrationMapping"]] = relationship(
+        back_populates="migration", cascade="all, delete-orphan"
+    )
+    aliases: Mapped[list["WebResourceAlias"]] = relationship(
+        back_populates="migration", cascade="all, delete-orphan"
+    )
+
+
+class UrlIdentityState(Base):
+    __tablename__ = "url_identity_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    active_normalization_version: Mapped[str] = mapped_column(String(64))
+    reconciliation_required: Mapped[bool] = mapped_column(default=True)
+    active_migration_id: Mapped[int | None] = mapped_column(
+        ForeignKey("url_identity_migrations.id", ondelete="SET NULL")
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (CheckConstraint("id = 1", name="ck_url_identity_state_singleton"),)
+
+
+class UrlIdentityMigrationMapping(Base):
+    __tablename__ = "url_identity_migration_mappings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    migration_id: Mapped[int] = mapped_column(
+        ForeignKey("url_identity_migrations.id", ondelete="CASCADE"), index=True
+    )
+    old_resource_id: Mapped[int] = mapped_column(Integer, index=True)
+    new_resource_id: Mapped[int] = mapped_column(
+        ForeignKey("web_resources.id", ondelete="RESTRICT"), index=True
+    )
+    mapping_kind: Mapped[str] = mapped_column(String(32), index=True)
+    candidate_identity_hash: Mapped[str | None] = mapped_column(String(64))
+    is_primary: Mapped[bool] = mapped_column(default=False)
+    source_normalization_version: Mapped[str] = mapped_column(String(64))
+    target_normalization_version: Mapped[str] = mapped_column(String(64))
+
+    migration: Mapped[UrlIdentityMigration] = relationship(back_populates="mappings")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "migration_id",
+            "old_resource_id",
+            "new_resource_id",
+            name="uq_url_identity_migration_mapping",
+        ),
+    )
+
+
+class WebResourceAlias(Base):
+    __tablename__ = "web_resource_aliases"
+
+    legacy_resource_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_resource_id: Mapped[int] = mapped_column(
+        ForeignKey("web_resources.id", ondelete="RESTRICT"), index=True
+    )
+    migration_id: Mapped[int] = mapped_column(
+        ForeignKey("url_identity_migrations.id", ondelete="CASCADE"), index=True
+    )
+    alias_reason: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    migration: Mapped[UrlIdentityMigration] = relationship(back_populates="aliases")
 
 
 class ContentBlob(Base):

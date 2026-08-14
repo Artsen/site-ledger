@@ -192,6 +192,7 @@ from app.services.source_queries import (
     list_sources,
 )
 from app.services.source_refresh import create_robots_discovery_refresh, create_source_refresh
+from app.services.url_identity import active_url_normalization_version
 from app.storage.artifact_store import ArtifactNotFoundError, LocalArtifactStore
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
@@ -323,6 +324,7 @@ def create_scan(payload: ScanCreate, db: DbSession) -> Scan:
         starting_url=payload.starting_url,
         status="queued",
         scope_config=payload.scope_config.model_dump(),
+        url_normalization_version=active_url_normalization_version(db),
     )
     db.add(scan)
     db.flush()

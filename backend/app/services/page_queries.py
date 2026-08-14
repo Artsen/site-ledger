@@ -27,6 +27,7 @@ from app.schemas.scans import (
     PersistentPageList,
     PersistentPageRead,
 )
+from app.services.url_identity import resolve_resource_id
 
 
 def list_site_pages(
@@ -105,8 +106,11 @@ def get_site_page(db: Session, site_id: int, resource_id: int) -> PersistentPage
     site = db.get(WebsiteProperty, site_id)
     if site is None:
         return None
+    resolved_id = resolve_resource_id(db, resource_id)
+    if resolved_id is None:
+        return None
     row = db.execute(
-        _site_page_query(site_id).where(SitePage.resource_id == resource_id)
+        _site_page_query(site_id).where(SitePage.resource_id == resolved_id)
     ).one_or_none()
     if row is None:
         return None
@@ -130,10 +134,13 @@ def list_page_observations(
     limit: int = 50,
     offset: int = 0,
 ) -> PageObservationList | None:
+    resolved_id = resolve_resource_id(db, resource_id)
+    if resolved_id is None:
+        return None
     if db.get(WebsiteProperty, site_id) is None or not db.scalar(
         select(SitePage.id).where(
             SitePage.website_property_id == site_id,
-            SitePage.resource_id == resource_id,
+            SitePage.resource_id == resolved_id,
         )
     ):
         return None
@@ -144,7 +151,7 @@ def list_page_observations(
         .outerjoin(WebsiteProperty, Scan.website_property_id == WebsiteProperty.id)
         .outerjoin(artifact, ResourceSnapshot.parse_artifact_id == artifact.id)
         .outerjoin(RenderedObservation, RenderedObservation.snapshot_id == ResourceSnapshot.id)
-        .where(ResourceSnapshot.resource_id == resource_id)
+        .where(ResourceSnapshot.resource_id == resolved_id)
     )
     if scope == "site":
         query = query.where(Scan.website_property_id == site_id)

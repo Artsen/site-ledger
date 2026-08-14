@@ -243,8 +243,8 @@ def page_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> AccessibilityObservationList:
-    _page(db, site_id, resource_id)
-    return page_accessibility_history(db, site_id, resource_id, limit=limit, offset=offset)
+    resolved_id = _page(db, site_id, resource_id)
+    return page_accessibility_history(db, site_id, resolved_id, limit=limit, offset=offset)
 
 
 @router.get(
@@ -252,8 +252,8 @@ def page_history(
     response_model=AccessibilityObservationList,
 )
 def page_latest(site_id: int, resource_id: int, db: DbSession) -> AccessibilityObservationList:
-    _page(db, site_id, resource_id)
-    return page_latest_accessibility(db, site_id, resource_id)
+    resolved_id = _page(db, site_id, resource_id)
+    return page_latest_accessibility(db, site_id, resolved_id)
 
 
 @router.get(
@@ -355,6 +355,8 @@ def _site(db: Session, site_id: int) -> None:
         raise HTTPException(404, "Site not found")
 
 
-def _page(db: Session, site_id: int, resource_id: int) -> None:
-    if find_site_page(db, site_id, resource_id) is None:
+def _page(db: Session, site_id: int, resource_id: int) -> int:
+    page = find_site_page(db, site_id, resource_id)
+    if page is None:
         raise HTTPException(404, "Page not found")
+    return page.resource_id

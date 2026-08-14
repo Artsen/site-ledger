@@ -121,7 +121,7 @@ async def test_sitemap_refresh_persists_entries_and_current_membership(db_sessio
     assert refresh.status == "completed_with_errors"
     entries = db_session.query(UrlSourceEntry).order_by(UrlSourceEntry.id).all()
     assert len(entries) == 3
-    assert entries[0].normalized_url == "https://example.com/a"
+    assert entries[0].normalized_url == "https://example.com/a?utm_source=x"
     assert entries[0].validation_state == "valid"
     assert entries[1].scope_decision == "external"
     assert entries[2].validation_state == "invalid"

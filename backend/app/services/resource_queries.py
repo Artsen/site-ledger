@@ -25,6 +25,7 @@ from app.schemas.resources import (
     ResourceOccurrenceRead,
     ResourceSummary,
 )
+from app.services.url_identity import resolve_resource_id
 
 ResourceSort = Literal[
     "url",
@@ -242,8 +243,11 @@ def site_resource_summary(db: Session, site_id: int) -> ResourceSummary | None:
 
 
 def get_scan_resource(db: Session, scan_id: int, resource_id: int) -> ResourceDetail | None:
+    resolved_id = resolve_resource_id(db, resource_id)
+    if resolved_id is None:
+        return None
     query = _resource_aggregate(_evidence_query(scan_id=scan_id)).where(
-        WebResource.id == resource_id
+        WebResource.id == resolved_id
     )
     listed = _execute_inventory(db, query, "url", "asc", 1, 0)
     if not listed.items:
@@ -259,8 +263,11 @@ def get_scan_resource(db: Session, scan_id: int, resource_id: int) -> ResourceDe
 
 
 def get_site_resource(db: Session, site_id: int, resource_id: int) -> ResourceDetail | None:
+    resolved_id = resolve_resource_id(db, resource_id)
+    if resolved_id is None:
+        return None
     query = _resource_aggregate(_evidence_query(site_id=site_id)).where(
-        WebResource.id == resource_id
+        WebResource.id == resolved_id
     )
     listed = _execute_inventory(db, query, "url", "asc", 1, 0)
     if not listed.items:
@@ -284,6 +291,9 @@ def list_resource_occurrences(
     limit: int = 50,
     offset: int = 0,
 ) -> ResourceOccurrenceList:
+    resolved_id = resolve_resource_id(db, resource_id)
+    if resolved_id is None:
+        return ResourceOccurrenceList(items=[], total=0, limit=limit, offset=offset)
     source = aliased(ResourceSnapshot)
     anchor = (
         select(
@@ -312,7 +322,7 @@ def list_resource_occurrences(
             source.scan_id.label("scan_id"),
         )
         .join(source, source.id == ResourceOccurrence.source_snapshot_id)
-        .where(ResourceOccurrence.target_resource_id == resource_id)
+        .where(ResourceOccurrence.target_resource_id == resolved_id)
     )
     embedded = (
         select(
@@ -341,7 +351,7 @@ def list_resource_occurrences(
             source.scan_id.label("scan_id"),
         )
         .join(source, source.id == ResourceReferenceOccurrence.source_snapshot_id)
-        .where(ResourceReferenceOccurrence.target_resource_id == resource_id)
+        .where(ResourceReferenceOccurrence.target_resource_id == resolved_id)
     )
     combined = union_all(anchor, embedded).subquery()
     query = select(combined)

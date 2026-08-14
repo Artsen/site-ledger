@@ -17,7 +17,7 @@ def create_scan_seeds(
     source_ids: list[int] | None = None,
 ) -> None:
     config = ScopeConfig.from_dict(scan.scope_config)
-    scope = ScopeEngine(config, scan.starting_url)
+    scope = ScopeEngine(config, scan.starting_url, scan.url_normalization_version)
     seeds_by_url: dict[str, ScanSeed] = {}
 
     _add_seed(
@@ -89,10 +89,18 @@ def _add_seed(
 ) -> ScanSeed | None:
     result = scope.evaluate(requested_url)
     normalized_url = result.normalized.normalized_url if result.normalized else None
-    key = normalized_url or f"invalid:{entry.id if entry else raw_url}"
+    key = result.site_policy_key or normalized_url or f"invalid:{entry.id if entry else raw_url}"
     seed = seeds_by_url.get(key)
     if seed is None:
-        resource = get_or_create_resource(db, result.normalized) if result.normalized else None
+        resource = (
+            get_or_create_resource(
+                db,
+                result.normalized,
+                normalization_version=scan.url_normalization_version,
+            )
+            if result.normalized
+            else None
+        )
         queued_count = len([item for item in seeds_by_url.values() if item.queue_state == "queued"])
         queue_state = "queued" if result.in_scope else "rejected"
         if max_queued is not None and queue_state == "queued" and queued_count >= max_queued:

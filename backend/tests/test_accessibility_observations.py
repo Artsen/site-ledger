@@ -477,9 +477,10 @@ async def test_full_system_api_job_chromium_and_evidence_persistence(
 
 
 class _FakeBrowserRenderer:
-    def __init__(self, config: ScopeConfig, starting_url: str):
+    def __init__(self, config: ScopeConfig, starting_url: str, normalization_version: str):
         self.config = config
         self.starting_url = starting_url
+        self.normalization_version = normalization_version
 
     async def __aenter__(self) -> "_FakeBrowserRenderer":
         return self

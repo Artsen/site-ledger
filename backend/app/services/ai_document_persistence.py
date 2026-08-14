@@ -21,6 +21,7 @@ from app.models import (
     UrlSourceEntry,
     WebResource,
 )
+from app.services.url_identity import active_url_normalization_version
 from app.storage.ai_document_store import LocalAiDocumentStore
 
 AI_DOCUMENT_WRITE_BATCH_SIZE = 400
@@ -33,8 +34,9 @@ def _chunks(items: list[T], size: int = AI_DOCUMENT_WRITE_BATCH_SIZE) -> Iterabl
 
 
 class AiDocumentResourceResolver:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, normalization_version: str | None = None):
         self.db = db
+        self.normalization_version = normalization_version or active_url_normalization_version(db)
         self.cache: dict[str, WebResource] = {}
         self.peak_batch_size = 0
 
@@ -52,7 +54,12 @@ class AiDocumentResourceResolver:
             self.peak_batch_size = max(self.peak_batch_size, len(batch))
             urls = [item.normalized_url for item in batch]
             existing = list(
-                self.db.scalars(select(WebResource).where(WebResource.normalized_url.in_(urls)))
+                self.db.scalars(
+                    select(WebResource).where(
+                        WebResource.normalization_version == self.normalization_version,
+                        WebResource.normalized_url.in_(urls),
+                    )
+                )
             )
             self.cache.update({item.normalized_url: item for item in existing})
             missing = [item for item in batch if item.normalized_url not in self.cache]
@@ -61,6 +68,7 @@ class AiDocumentResourceResolver:
                     [
                         {
                             "resource_type": "page",
+                            "normalization_version": self.normalization_version,
                             "normalized_url": item.normalized_url,
                             "scheme": item.scheme,
                             "host": item.host,
@@ -71,13 +79,18 @@ class AiDocumentResourceResolver:
                         for item in missing
                     ]
                 )
-                self.db.execute(statement.on_conflict_do_nothing(index_elements=["normalized_url"]))
+                self.db.execute(
+                    statement.on_conflict_do_nothing(
+                        index_elements=["normalization_version", "normalized_url"]
+                    )
+                )
                 created = list(
                     self.db.scalars(
                         select(WebResource).where(
+                            WebResource.normalization_version == self.normalization_version,
                             WebResource.normalized_url.in_(
                                 [item.normalized_url for item in missing]
-                            )
+                            ),
                         )
                     )
                 )

@@ -8,6 +8,7 @@ from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate, WebsitePropertyUpdate
 from app.services.scan_seeds import create_scan_seeds
 from app.services.site_urls import normalize_site_base_url
+from app.services.url_identity import active_url_normalization_version
 
 
 class DuplicateSiteError(ValueError):
@@ -156,6 +157,7 @@ def create_scan_from_site(
         starting_url=site.base_url,
         status="queued",
         scope_config=scope_config.model_dump(),
+        url_normalization_version=active_url_normalization_version(db),
     )
     db.add(scan)
     db.flush()

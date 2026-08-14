@@ -699,14 +699,12 @@ def list_runs(
 def category_provenance(
     db: Session, site_id: int, resource_id: int
 ) -> CategoryProvenanceList | None:
-    page = db.scalar(
-        select(SitePage).where(
-            SitePage.website_property_id == site_id, SitePage.resource_id == resource_id
-        )
-    )
+    from app.services.site_pages import find_site_page
+
+    page = find_site_page(db, site_id, resource_id)
     if page is None:
         return None
-    resource = db.get(WebResource, resource_id)
+    resource = db.get(WebResource, page.resource_id)
     assignments = list(
         db.scalars(
             select(PageCategoryAssignment).where(PageCategoryAssignment.site_page_id == page.id)
@@ -798,11 +796,9 @@ def category_provenance(
 def set_automatic_exclusion(
     db: Session, site_id: int, resource_id: int, payload: AutomaticExclusionPayload
 ) -> CategoryProvenanceList | None:
-    page = db.scalar(
-        select(SitePage).where(
-            SitePage.website_property_id == site_id, SitePage.resource_id == resource_id
-        )
-    )
+    from app.services.site_pages import find_site_page
+
+    page = find_site_page(db, site_id, resource_id)
     if page is None:
         return None
     _require_category(db, site_id, payload.category_id)
@@ -822,17 +818,15 @@ def set_automatic_exclusion(
         )
     queue_evaluation(db, site_id, "manual_recalculate")
     db.commit()
-    return category_provenance(db, site_id, resource_id)
+    return category_provenance(db, site_id, page.resource_id)
 
 
 def remove_automatic_exclusion(
     db: Session, site_id: int, resource_id: int, category_id: int
 ) -> CategoryProvenanceList | None:
-    page = db.scalar(
-        select(SitePage).where(
-            SitePage.website_property_id == site_id, SitePage.resource_id == resource_id
-        )
-    )
+    from app.services.site_pages import find_site_page
+
+    page = find_site_page(db, site_id, resource_id)
     if page is None:
         return None
     db.execute(
@@ -843,7 +837,7 @@ def remove_automatic_exclusion(
     )
     queue_evaluation(db, site_id, "manual_recalculate")
     db.commit()
-    return category_provenance(db, site_id, resource_id)
+    return category_provenance(db, site_id, page.resource_id)
 
 
 def _rule(db: Session, site_id: int, rule_id: int) -> PageCategoryRule | None:
