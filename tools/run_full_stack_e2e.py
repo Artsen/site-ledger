@@ -5,12 +5,15 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import uuid
+from contextlib import closing
 from pathlib import Path
 from typing import IO, Any
 
@@ -71,8 +74,16 @@ def main() -> None:
     manifest: dict[str, Any] = {
         "workspace_id": workspace_id,
         "workspace": str(workspace),
-        "ports": {"fixture": fixture_port, "backend": backend_port, "frontend": frontend_port},
-        "urls": {"fixture": fixture_url, "backend": backend_url, "frontend": frontend_url},
+        "ports": {
+            "fixture": fixture_port,
+            "backend": backend_port,
+            "frontend": frontend_port,
+        },
+        "urls": {
+            "fixture": fixture_url,
+            "backend": backend_url,
+            "frontend": frontend_url,
+        },
         "status": "starting",
     }
     python_env = os.environ.copy()
@@ -95,6 +106,14 @@ def main() -> None:
             env=python_env,
             log=logs / "migration.log",
         )
+        with closing(sqlite3.connect(workspace / "site-ledger.db")) as connection:
+            active_url_version = connection.execute(
+                "SELECT active_normalization_version FROM url_identity_state WHERE id = 1"
+            ).fetchone()[0]
+        if active_url_version != "url-normalization-v2":
+            raise RuntimeError(
+                f"fresh Golden Path database used unexpected URL identity: {active_url_version}"
+            )
         children.append(
             Child(
                 "fixture",
@@ -216,7 +235,11 @@ def main() -> None:
         )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest.update(
-            {"status": "passed", "duration_seconds": round(time.monotonic() - started, 3)}
+            {
+                "status": "passed",
+                "duration_seconds": round(time.monotonic() - started, 3),
+                "active_url_normalization_version": active_url_version,
+            }
         )
         manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -239,7 +262,7 @@ def main() -> None:
         for child in reversed(children):
             child.stop()
         if not args.keep_workspace:
-            shutil.rmtree(workspace)
+            _remove_workspace(workspace)
         else:
             print(f"Golden Path workspace: {workspace}", file=sys.stderr)
 
@@ -258,7 +281,13 @@ def _free_ports(count: int) -> list[int]:
 def _run(command: list[str], *, cwd: Path, env: dict[str, str], log: Path) -> None:
     with log.open("w", encoding="utf-8") as output:
         completed = subprocess.run(
-            command, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT, text=True
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
         )
     if completed.returncode:
         raise RuntimeError(
@@ -278,7 +307,7 @@ def _wait_url(url: str, children: list[Child], timeout: float = 45) -> bytes:
         try:
             with urllib.request.urlopen(url, timeout=2) as response:
                 return response.read()
-        except Exception as exc:  # Readiness retries intentionally include transient HTTP errors.
+        except (OSError, TimeoutError, urllib.error.URLError) as exc:
             last_error = exc
             time.sleep(0.25)
     raise TimeoutError(f"Timed out waiting for {url}: {last_error}")
@@ -310,6 +339,18 @@ def _copy_diagnostics(workspace: Path, destination: Path) -> None:
     if target.exists():
         shutil.rmtree(target)
     shutil.copytree(workspace, target)
+
+
+def _remove_workspace(workspace: Path) -> None:
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            shutil.rmtree(workspace)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
 
 
 if __name__ == "__main__":
