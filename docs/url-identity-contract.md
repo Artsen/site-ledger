@@ -8,8 +8,10 @@ Scan derivatives all refer to it. URL normalization is therefore a compatibility
 display cleanup. A false equivalence can combine evidence and human metadata from semantically
 different resources; changing the key later can require a split rather than a simple string update.
 
-The production contract is explicitly named `url-normalization-v1`. Naming it does not endorse
-every transformation and does not change existing output.
+The historical contract is `url-normalization-v1`; the current contract is
+`url-normalization-v2`. `WebResource` identity is the global pair
+`(normalization_version, normalized_url)`. Existing populated databases remain V1 until the
+guarded reconciliation migration activates V2, while fresh empty databases start on V2.
 
 ## Current V1 Algorithm
 
@@ -64,8 +66,10 @@ serialization is not proof that an arbitrary HTTP query's ordering and spelling 
 ## Site-Specific Query Suppression
 
 `drop_query_parameters` is copied into Site and Scan scope. Matching is case-sensitive and supports
-exact keys plus prefix wildcards whose configuration ends in `*`. Dropping occurs after form-style
-query parsing. V1 then sorts and re-encodes all survivors.
+exact keys plus prefix wildcards whose configuration ends in `*`. V1 applies it during global
+normalization. V2 never does: production V2 first creates the Site-independent global identity,
+then computes an ephemeral Site policy key for queue and Source candidate suppression. The exact
+V2 URL that was observed remains `WebResource.normalized_url`.
 
 Source entries and seed origins can retain raw spellings, but the resulting `WebResource` is global
 across Sites. Two Sites can therefore apply different suppression policies while competing for one
@@ -106,10 +110,10 @@ derivatives. SitePage owner/workflow, categories, exclusions, and notes are muta
 state. During a split, requested/resolved URL provenance can often assign immutable evidence and
 relationships mechanically. Existing human state generally cannot say which new Page was intended.
 
-## Candidate V2 Principles
+## Production V2
 
-`tools/url_identity_audit.py` contains an analysis-only conservative reference. It is not imported
-by production runtime. Its principles are:
+Production `normalize_url_v2` is byte-for-byte behaviorally equivalent to the conservative
+reference reviewed in PRs #27 and #29. It:
 
 - lowercase scheme and IDNA hostname, remove only the scheme's default port, and remove fragment;
 - uppercase percent-escape hex and decode unreserved octets, while retaining encoded dots until
@@ -119,11 +123,10 @@ by production runtime. Its principles are:
 - remove literal dot segments under RFC 3986 without first decoding encoded dots;
 - preserve query component order, repeated-value order, key-only versus blank, empty components,
   plus versus percent-space, and reserved escapes;
-- apply configured drops deterministically without sorting or rewriting surviving components;
 - reject credential-bearing candidate identities instead of silently discarding userinfo.
 
-The candidate deliberately favors separate identity when server semantics are unknown. It is a
-migration-analysis hypothesis, not a production promise.
+It deliberately favors separate identity when server semantics are unknown. Site query suppression
+is applied only to the separate policy key. V1 remains available for historical scans and databases.
 
 ## Audit Method
 
@@ -176,39 +179,23 @@ No affected Performance or Accessibility observation was found. The synthetic be
 WebResources and 50,000 evidence rows completed in 1.278 seconds, then 1.005 seconds, with identical
 aggregate output; elapsed time is informational and not a CI gate.
 
-## Future Migration Phases
+## Migration And Activation
 
-1. Freeze and name V1 semantics.
-2. Introduce reviewed V2 code behind an explicit compatibility boundary.
-3. Compute candidates from every retained provenance field without mutation.
-4. Classify unchanged, re-key, split, merge, and ambiguous identities.
-5. Abort automation for candidate merges, insufficient evidence, or ambiguous workspace splits.
-6. Create resources and reassign only mechanically attributable immutable evidence.
-7. Reconcile mutable SitePage/workflow state explicitly.
-8. Rebuild affected projections and comparisons under versioned provenance.
-9. Verify foreign keys, evidence counts, and deterministic checksums.
-10. Only then make V2 the default for new observations.
+The database singleton `UrlIdentityState` is authoritative. Schema upgrade backfills existing
+resources and scans as V1 and leaves a populated database in `reconciliation_required`; no identity
+or observation is rewritten by Alembic. A fresh database with no resources activates V2 directly.
+New scans copy the active version into `Scan.url_normalization_version`, and all identities created
+for that scan use it. Source and accessibility work use the active database version; no additional
+durable provenance column was added because WebResource plus Scan and migration provenance answer
+the durable identity questions without duplicating state.
 
-PR #29 implements the non-production reconciliation workflow described in
-[`url-identity-reconciliation.md`](url-identity-reconciliation.md). Its
-`url-identity-reconciliation-v1` manifest is a decision/planning contract, not a URL normalization
-version. Candidate V2 remains reference-only and production continues to use
-`url-normalization-v1`.
-
-Candidate V2 syntactic normalization should be Site-independent. Site-specific
-`drop_query_parameters` belongs in Site crawl/source policy and must not redefine a globally unique
-`WebResource`. PR #30 should separate suppressed crawl-candidate dedupe from the global syntactic
-identity lookup; continuing to apply Site-specific drops before global lookup would preserve the
-cross-Site contradiction identified by this audit.
-
-Any semantic change requires `url-normalization-v2`. A future design should decide whether the
-version belongs on WebResource creation provenance, each Scan's copied scope, parser/source
-artifacts, and projection/comparison algorithm identities. Migration provenance needs its own
-version. These persistence decisions are intentionally not implemented here.
+The guarded executor and rollback boundary are documented in
+[`url-identity-migration.md`](url-identity-migration.md). Grandfathered V1 rows remain legitimate
+historical identities. A V2 row with the same normalized string can coexist and must not silently
+reuse the V1 row. Explicit retired-ID aliases resolve direct resources first, then a recorded alias.
 
 ## Non-Goals
 
-This contract does not change production normalization, re-key/split/merge any WebResource, add a
-migration, rewrite evidence, alter Scan projection/comparison versions, change parser semantics,
-or add product UI. It does not infer equivalence from redirects, suppress WordPress or unknown
-query values, or address Performance/Accessibility UX.
+This contract does not infer equivalence from redirects, suppress WordPress or unknown query
+values, rewrite exact evidence, alter Scan projection/comparison versions, change parser semantics,
+or add product UI. Live retained migration remains a separate explicit operator action.

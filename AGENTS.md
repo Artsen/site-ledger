@@ -414,8 +414,12 @@ Do not disable checks or weaken tests to force passing results.
 - Never commit secrets, credentials, local databases, captured HTML, build output, or dependency
   caches.
 - Use the Artsen repository-local Git identity for commits in this repository.
-- URL identity migration is fail-closed; candidate V2 remains reference-only until reconciliation
-  and disposable simulation pass.
+- Global WebResource identity is `(normalization_version, normalized_url)`; every URL lookup must
+  include the version. V1 historical identities remain legitimate and must not be reused as V2.
+- V2 is Site-independent. Site query suppression is crawl/source policy and must never redefine a
+  global V2 identity.
+- Existing populated databases remain V1 until verified migration activation; fresh databases use
+  V2. Operator decisions must never be guessed and candidate merges fail closed.
 - Reassign immutable evidence only from retained requested/resolved identity provenance. Provider
   targets, final URLs, and redirects do not redefine Page ownership.
 - Never guess split Page workspace state. Keep insufficient provenance explicit and prefer an honest
@@ -424,6 +428,7 @@ Do not disable checks or weaken tests to force passing results.
   stale manifest.
 - Real identity migration requires no active mutating jobs, a verified SQLite backup plus content
   store inventory, and post-migration invariants. Rebuild projections/comparisons from evidence.
+- Full manifests are sensitive local artifacts. Migration must not rewrite immutable evidence bytes.
 
 ## Pull Request Format
 

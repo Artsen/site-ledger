@@ -7,10 +7,10 @@ become 44 candidate V2 identities. Every split has mutable `SitePage` state, so 
 migration would have to invent which Page owns human metadata. Another 309 query identities have no
 attributable original spelling. They are unknown history, not known corruption.
 
-`tools/url_identity_reconcile.py` turns that evidence into a local, reviewable workflow. It does not
-change `normalize_url`, import candidate V2 into runtime, add an API or product UI, run from Alembic,
-or mutate the retained database. Its schema is `url-identity-reconciliation-v1`; this is separate
-from the inactive `url-normalization-v2-candidate-reference-only` algorithm.
+`tools/url_identity_reconcile.py` turns that evidence into a local, reviewable workflow. Its schema
+remains `url-identity-reconciliation-v1`. Production V2 now uses the exact audited candidate
+semantics, but reconciliation still does not mutate the retained database and remains separate from
+the guarded `url-identity-migration-v1` executor.
 
 ```mermaid
 flowchart TD
@@ -21,7 +21,7 @@ flowchart TD
     P --> B[SQLite backup copy]
     B --> S[Simulate operations on copy only]
     S --> I[Verify FKs, counts, uniqueness, evidence hashes]
-    I --> F[Future PR 30 implementation]
+    I --> F[Guarded migration executor]
 ```
 
 ## Local Commands
@@ -122,9 +122,14 @@ exact V2 observations create new identities. `SAFE_ONE_TO_ONE_REKEY` applies onl
 evidence proves one candidate and cannot conceal a split. `REQUIRE_REVIEW` applies when alternatives
 exist but historical rows cannot be attributed. Never construct an original URL not retained.
 
-PR #30 should persist a compact migration record containing source/target versions, manifest
+PR #30 persists a compact migration record containing source/target versions, manifest
 checksum, timing/counts, and old-to-new mappings. A legacy normalization marker plus resource
 alias/retirement mapping should represent grandfathering and deep links without claiming equivalence.
+
+PR #30 implements that model. Because the schema head changes, use the migration tool's `rebase`
+command before preflight. Decisions carry only when group semantics and workspace hashes are
+unchanged; added or changed groups become unresolved. See
+[`url-identity-migration.md`](url-identity-migration.md).
 
 ## Plan And Disposable Simulation
 
