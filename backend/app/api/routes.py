@@ -192,7 +192,10 @@ from app.services.source_queries import (
     list_sources,
 )
 from app.services.source_refresh import create_robots_discovery_refresh, create_source_refresh
-from app.services.url_identity import active_url_normalization_version
+from app.services.url_identity import (
+    active_url_normalization_version,
+    inspect_url_identity_state,
+)
 from app.storage.artifact_store import ArtifactNotFoundError, LocalArtifactStore
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
@@ -220,8 +223,17 @@ ResourceSortParam = Literal[
 
 
 @router.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health(db: DbSession) -> dict[str, object]:
+    identity = inspect_url_identity_state(db)
+    return {
+        "status": "maintenance_required" if identity.maintenance_required else "ok",
+        "url_identity": {
+            "active_version": identity.active_normalization_version,
+            "maintenance_required": identity.maintenance_required,
+            "migration_id": identity.active_migration_id,
+            "migration_status": identity.migration_status,
+        },
+    }
 
 
 @router.get("/jobs/worker-health", response_model=WorkerHealth)

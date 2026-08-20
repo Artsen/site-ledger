@@ -34,6 +34,7 @@ from app.services.job_types import (
     TERMINAL_JOB_STATUSES,
     ensure_transition,
 )
+from app.services.url_identity import inspect_url_identity_state
 
 
 class StaleLeaseError(RuntimeError):
@@ -267,6 +268,8 @@ def claim_next_job(
     lease_seconds: float,
     now: datetime | None = None,
 ) -> ClaimedJob | None:
+    if inspect_url_identity_state(db).maintenance_required:
+        return None
     now = now or datetime.now(UTC)
     candidate = db.scalar(
         select(BackgroundJob)

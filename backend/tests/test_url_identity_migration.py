@@ -9,9 +9,35 @@ from types import ModuleType
 
 import pytest
 from alembic.config import Config
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import Session, sessionmaker
 
 from alembic import command
 from app.config import get_settings
+from app.crawler.url_normalizer import (
+    URL_NORMALIZATION_V1_VERSION,
+    URL_NORMALIZATION_V2_VERSION,
+    normalize_url_v1,
+    normalize_url_v2,
+)
+from app.database import get_db
+from app.main import create_app
+from app.models import (
+    BackgroundJob,
+    JobEvent,
+    Scan,
+    UrlIdentityMigration,
+    UrlIdentityState,
+    WebResource,
+)
+from app.services.background_jobs import claim_next_job, enqueue_scan_job
+from app.services.repositories import get_or_create_resource
+from app.services.url_identity import (
+    UrlIdentityMaintenanceRequired,
+    ensure_url_identity_state,
+    inspect_url_identity_state,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -290,3 +316,327 @@ def test_rollback_rejects_a_different_valid_database_backup(tmp_path: Path) -> N
             result["migration_id"],
             migrate.ROLLBACK_CONFIRMATION,
         )
+
+
+def _add_migration(db: Session, status: str) -> UrlIdentityMigration:
+    migration = UrlIdentityMigration(
+        implementation_version="url-identity-migration-v1",
+        reconciliation_schema_version="url-identity-reconciliation-v1",
+        source_normalization_version=URL_NORMALIZATION_V1_VERSION,
+        target_normalization_version=URL_NORMALIZATION_V2_VERSION,
+        reconciliation_manifest_sha256="a" * 64,
+        reconciliation_source_fingerprint="b" * 64,
+        operation_plan_sha256="c" * 64,
+        status=status,
+        counts_json={},
+        backup_metadata_json={},
+        pre_migration_fingerprint="d" * 64,
+    )
+    db.add(migration)
+    db.flush()
+    return migration
+
+
+def _set_runtime_state(
+    db: Session,
+    *,
+    version: str,
+    reconciliation_required: bool,
+    migration_status: str | None = None,
+) -> UrlIdentityState:
+    state = ensure_url_identity_state(db)
+    migration = _add_migration(db, migration_status) if migration_status is not None else None
+    state.active_normalization_version = version
+    state.reconciliation_required = reconciliation_required
+    state.active_migration_id = migration.id if migration is not None else None
+    db.commit()
+    return state
+
+
+@pytest.mark.parametrize(
+    ("version", "reconciliation_required", "migration_status", "maintenance_required"),
+    [
+        (URL_NORMALIZATION_V1_VERSION, True, None, False),
+        (URL_NORMALIZATION_V2_VERSION, False, None, False),
+        (URL_NORMALIZATION_V2_VERSION, False, "completed", False),
+        (URL_NORMALIZATION_V1_VERSION, True, "applying", True),
+        (URL_NORMALIZATION_V1_VERSION, True, "rebuilding", True),
+        (URL_NORMALIZATION_V1_VERSION, True, "future-status", True),
+        (URL_NORMALIZATION_V1_VERSION, True, "completed", True),
+        (URL_NORMALIZATION_V2_VERSION, False, "rebuilding", True),
+        ("url-normalization-future", False, None, True),
+    ],
+)
+def test_runtime_state_machine_fails_closed(
+    db_session: Session,
+    version: str,
+    reconciliation_required: bool,
+    migration_status: str | None,
+    maintenance_required: bool,
+) -> None:
+    _set_runtime_state(
+        db_session,
+        version=version,
+        reconciliation_required=reconciliation_required,
+        migration_status=migration_status,
+    )
+
+    status = inspect_url_identity_state(db_session)
+
+    assert status.maintenance_required is maintenance_required
+    assert status.migration_status == migration_status
+
+
+def test_missing_active_migration_provenance_fails_closed(db_session: Session) -> None:
+    state = ensure_url_identity_state(db_session)
+    state.active_normalization_version = URL_NORMALIZATION_V1_VERSION
+    state.reconciliation_required = True
+    state.active_migration_id = 123
+    db_session.commit()
+
+    status = inspect_url_identity_state(db_session)
+
+    assert status.maintenance_required is True
+    assert status.migration_status == "missing"
+    assert status.maintenance_reason == "active_migration_missing"
+
+
+def test_completed_migration_with_inconsistent_version_provenance_fails_closed(
+    db_session: Session,
+) -> None:
+    state = _set_runtime_state(
+        db_session,
+        version=URL_NORMALIZATION_V2_VERSION,
+        reconciliation_required=False,
+        migration_status="completed",
+    )
+    migration = db_session.get(UrlIdentityMigration, state.active_migration_id)
+    assert migration is not None
+    migration.target_normalization_version = URL_NORMALIZATION_V1_VERSION
+    db_session.commit()
+
+    status = inspect_url_identity_state(db_session)
+
+    assert status.maintenance_required is True
+    assert status.maintenance_reason == "inconsistent_identity_state"
+
+
+def test_resource_creation_and_worker_claim_fail_without_mutation_during_maintenance(
+    db_session: Session,
+) -> None:
+    normalized = normalize_url_v1("https://example.com/existing")
+    existing = WebResource(
+        resource_type="page",
+        normalization_version=URL_NORMALIZATION_V1_VERSION,
+        normalized_url=normalized.normalized_url,
+        scheme=normalized.scheme,
+        host=normalized.host,
+        port=normalized.port,
+        path=normalized.path,
+        query=normalized.query,
+    )
+    scan = Scan(
+        starting_url="https://example.com/",
+        status="queued",
+        scope_config={},
+        url_normalization_version=URL_NORMALIZATION_V1_VERSION,
+    )
+    db_session.add_all([existing, scan])
+    db_session.flush()
+    job = enqueue_scan_job(db_session, scan)
+    db_session.commit()
+    _set_runtime_state(
+        db_session,
+        version=URL_NORMALIZATION_V1_VERSION,
+        reconciliation_required=True,
+        migration_status="rebuilding",
+    )
+    before = (
+        db_session.scalar(select(func.count(WebResource.id))),
+        existing.last_seen_at,
+        job.status,
+        job.worker_id,
+        job.lease_token,
+        job.attempt_count,
+        db_session.scalar(select(func.count(JobEvent.id))),
+    )
+
+    with pytest.raises(UrlIdentityMaintenanceRequired, match="rebuilding"):
+        get_or_create_resource(
+            db_session,
+            normalize_url_v1("https://example.com/new"),
+            normalization_version=URL_NORMALIZATION_V1_VERSION,
+        )
+    assert claim_next_job(db_session, worker_id="blocked-worker", lease_seconds=30) is None
+    db_session.expire_all()
+
+    assert (
+        db_session.scalar(select(func.count(WebResource.id))),
+        db_session.get(WebResource, existing.id).last_seen_at,
+        db_session.get(BackgroundJob, job.id).status,
+        db_session.get(BackgroundJob, job.id).worker_id,
+        db_session.get(BackgroundJob, job.id).lease_token,
+        db_session.get(BackgroundJob, job.id).attempt_count,
+        db_session.scalar(select(func.count(JobEvent.id))),
+    ) == before
+
+    migration = db_session.get(
+        UrlIdentityMigration, ensure_url_identity_state(db_session).active_migration_id
+    )
+    assert migration is not None
+    migration.status = "completed"
+    state = ensure_url_identity_state(db_session)
+    state.active_normalization_version = URL_NORMALIZATION_V2_VERSION
+    state.reconciliation_required = False
+    db_session.commit()
+    assert get_or_create_resource(db_session, normalize_url_v2("https://example.com/new"))
+    assert claim_next_job(db_session, worker_id="recovered-worker", lease_seconds=30) is not None
+
+
+def test_api_blocks_product_traffic_but_health_reports_maintenance(
+    db_session: Session,
+) -> None:
+    state = _set_runtime_state(
+        db_session,
+        version=URL_NORMALIZATION_V1_VERSION,
+        reconciliation_required=True,
+        migration_status="rebuilding",
+    )
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+    application = create_app(session_factory=factory)
+
+    def override_db():
+        with factory() as db:
+            yield db
+
+    application.dependency_overrides[get_db] = override_db
+    payload = {"starting_url": "https://example.com/", "scope_config": {}}
+    with TestClient(application) as client:
+        health = client.get("/api/health")
+        assert health.status_code == 200
+        assert health.json()["status"] == "maintenance_required"
+        assert health.json()["url_identity"] == {
+            "active_version": URL_NORMALIZATION_V1_VERSION,
+            "maintenance_required": True,
+            "migration_id": state.active_migration_id,
+            "migration_status": "rebuilding",
+        }
+        for method, path, json in (
+            ("get", "/api/scans", None),
+            ("post", "/api/scans", payload),
+            ("patch", "/api/sites/1", {}),
+            ("delete", "/api/scans/1", None),
+        ):
+            response = client.request(method, path, json=json)
+            assert response.status_code == 503
+            assert response.json()["detail"]["code"] == "url_identity_maintenance_required"
+
+    assert db_session.scalar(select(func.count(Scan.id))) == 0
+    assert db_session.scalar(select(func.count(BackgroundJob.id))) == 0
+
+    migration = db_session.get(UrlIdentityMigration, state.active_migration_id)
+    assert migration is not None
+    migration.status = "completed"
+    state.active_normalization_version = URL_NORMALIZATION_V2_VERSION
+    state.reconciliation_required = False
+    db_session.commit()
+    with TestClient(application) as client:
+        response = client.post("/api/scans", json=payload)
+    assert response.status_code == 202
+    assert db_session.scalar(select(func.count(Scan.id))) == 1
+    assert db_session.scalar(select(func.count(BackgroundJob.id))) == 1
+
+
+def test_real_core_commit_enters_maintenance_and_verified_rollback_recovers(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "interrupted.db"
+    backup = tmp_path / "interrupted-backup.db"
+    manifest = _prepare_executor_fixture(database)
+    backup_metadata = migrate.verified_backup(database, backup, ())
+    connection = migrate._connect(database)
+    try:
+        core = migrate._execute_core(connection, database, manifest, backup_metadata)
+    finally:
+        connection.close()
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT active_normalization_version, active_migration_id FROM url_identity_state"
+        ).fetchone() == (URL_NORMALIZATION_V1_VERSION, core["migration_id"])
+        assert (
+            connection.execute(
+                "SELECT status FROM url_identity_migrations WHERE id = ?",
+                (core["migration_id"],),
+            ).fetchone()[0]
+            == "rebuilding"
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM web_resources WHERE normalization_version = ?",
+                (URL_NORMALIZATION_V2_VERSION,),
+            ).fetchone()[0]
+            > 0
+        )
+        before_resources = connection.execute(
+            "SELECT id, normalization_version, normalized_url, last_seen_at "
+            "FROM web_resources ORDER BY id"
+        ).fetchall()
+        before_scans = connection.execute("SELECT COUNT(*) FROM scans").fetchone()[0]
+        before_jobs = connection.execute("SELECT COUNT(*) FROM background_jobs").fetchone()[0]
+
+    engine = create_engine(f"sqlite:///{database}", connect_args={"check_same_thread": False})
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    with factory() as db:
+        runtime = inspect_url_identity_state(db)
+        assert runtime.maintenance_required is True
+        with pytest.raises(UrlIdentityMaintenanceRequired, match="rebuilding"):
+            get_or_create_resource(db, normalize_url_v1("https://blocked.example/new"))
+
+    application = create_app(session_factory=factory)
+
+    def override_db():
+        with factory() as db:
+            yield db
+
+    application.dependency_overrides[get_db] = override_db
+    with TestClient(application) as client:
+        assert client.get("/api/health").json()["status"] == "maintenance_required"
+        response = client.post(
+            "/api/scans",
+            json={"starting_url": "https://example.com/", "scope_config": {}},
+        )
+        assert response.status_code == 503
+    assert migrate.status(database)["active_migration_id"] == core["migration_id"]
+
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "SELECT id, normalization_version, normalized_url, last_seen_at "
+                "FROM web_resources ORDER BY id"
+            ).fetchall()
+            == before_resources
+        )
+        assert connection.execute("SELECT COUNT(*) FROM scans").fetchone()[0] == before_scans
+        assert (
+            connection.execute("SELECT COUNT(*) FROM background_jobs").fetchone()[0] == before_jobs
+        )
+    engine.dispose()
+
+    result = migrate.rollback_migration(
+        database,
+        backup,
+        core["migration_id"],
+        migrate.ROLLBACK_CONFIRMATION,
+    )
+    assert result["status"] == "ROLLBACK_RESTORED"
+    recovered_engine = create_engine(
+        f"sqlite:///{database}", connect_args={"check_same_thread": False}
+    )
+    with Session(recovered_engine) as db:
+        runtime = inspect_url_identity_state(db)
+        assert runtime.maintenance_required is False
+        assert runtime.active_normalization_version == URL_NORMALIZATION_V1_VERSION
+        created = get_or_create_resource(db, normalize_url_v1("https://recovered.example/new"))
+        assert created.normalization_version == URL_NORMALIZATION_V1_VERSION
+    recovered_engine.dispose()

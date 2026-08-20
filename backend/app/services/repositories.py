@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.crawler.url_normalizer import NormalizedUrl
 from app.models import WebResource
-from app.services.url_identity import active_url_normalization_version
+from app.services.url_identity import require_url_identity_runtime_write
 
 
 def get_or_create_resource(
@@ -14,7 +14,8 @@ def get_or_create_resource(
     *,
     normalization_version: str | None = None,
 ) -> WebResource:
-    version = normalization_version or active_url_normalization_version(db)
+    runtime = require_url_identity_runtime_write(db)
+    version = normalization_version or runtime.active_normalization_version
     resource = db.scalar(
         select(WebResource).where(
             WebResource.normalization_version == version,

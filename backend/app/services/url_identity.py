@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
@@ -8,7 +9,30 @@ from app.crawler.url_normalizer import (
     URL_NORMALIZATION_V1_VERSION,
     URL_NORMALIZATION_V2_VERSION,
 )
-from app.models import UrlIdentityState, WebResource, WebResourceAlias
+from app.models import UrlIdentityMigration, UrlIdentityState, WebResource, WebResourceAlias
+
+
+@dataclass(frozen=True)
+class UrlIdentityRuntimeStatus:
+    active_normalization_version: str
+    reconciliation_required: bool
+    active_migration_id: int | None
+    migration_status: str | None
+    maintenance_required: bool
+    maintenance_reason: str | None
+
+
+class UrlIdentityMaintenanceRequired(RuntimeError):
+    def __init__(self, status: UrlIdentityRuntimeStatus) -> None:
+        self.migration_id = status.active_migration_id
+        self.migration_status = status.migration_status
+        self.reason = status.maintenance_reason
+        migration = self.migration_id if self.migration_id is not None else "unknown"
+        migration_status = self.migration_status or "missing"
+        super().__init__(
+            f"URL identity migration {migration} is in {migration_status!r} state; "
+            "normal writes are disabled until recovery completes."
+        )
 
 
 def ensure_url_identity_state(db: Session) -> UrlIdentityState:
@@ -35,8 +59,61 @@ def ensure_url_identity_state(db: Session) -> UrlIdentityState:
     return state
 
 
+def inspect_url_identity_state(db: Session) -> UrlIdentityRuntimeStatus:
+    state = ensure_url_identity_state(db)
+    migration_status: str | None = None
+    maintenance_reason: str | None = None
+
+    if state.active_migration_id is None:
+        healthy = (
+            state.active_normalization_version == URL_NORMALIZATION_V1_VERSION
+            and state.reconciliation_required
+        ) or (
+            state.active_normalization_version == URL_NORMALIZATION_V2_VERSION
+            and not state.reconciliation_required
+        )
+        if not healthy:
+            maintenance_reason = "inconsistent_identity_state"
+    else:
+        migration = db.get(UrlIdentityMigration, state.active_migration_id)
+        if migration is None:
+            migration_status = "missing"
+            maintenance_reason = "active_migration_missing"
+        else:
+            migration_status = migration.status
+            healthy = (
+                migration.status == "completed"
+                and migration.source_normalization_version == URL_NORMALIZATION_V1_VERSION
+                and migration.target_normalization_version == URL_NORMALIZATION_V2_VERSION
+                and state.active_normalization_version == URL_NORMALIZATION_V2_VERSION
+                and not state.reconciliation_required
+            )
+            if not healthy:
+                maintenance_reason = (
+                    "active_migration_not_completed"
+                    if migration.status != "completed"
+                    else "inconsistent_identity_state"
+                )
+
+    return UrlIdentityRuntimeStatus(
+        active_normalization_version=state.active_normalization_version,
+        reconciliation_required=state.reconciliation_required,
+        active_migration_id=state.active_migration_id,
+        migration_status=migration_status,
+        maintenance_required=maintenance_reason is not None,
+        maintenance_reason=maintenance_reason,
+    )
+
+
+def require_url_identity_runtime_write(db: Session) -> UrlIdentityRuntimeStatus:
+    status = inspect_url_identity_state(db)
+    if status.maintenance_required:
+        raise UrlIdentityMaintenanceRequired(status)
+    return status
+
+
 def active_url_normalization_version(db: Session) -> str:
-    return ensure_url_identity_state(db).active_normalization_version
+    return require_url_identity_runtime_write(db).active_normalization_version
 
 
 def resolve_resource(db: Session, requested_resource_id: int) -> WebResource | None:

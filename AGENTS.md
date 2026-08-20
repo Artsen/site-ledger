@@ -167,6 +167,12 @@ Do not rename these models or their tables for branding:
 WebResource is the persistent Page identity. ResourceSnapshot is one Page observation. Reused
 responses still create new observations and current-scan link occurrences.
 
+An active non-completed URL identity migration, missing active migration provenance, or an
+inconsistent identity state places product runtime in fail-closed maintenance mode. Runtime
+identity creation must never fall back to V1, normal API traffic must remain unavailable, and
+workers must not claim jobs until explicit recovery completes. Migration status/recovery tooling
+remains available. New resource-creation and job-claim paths must not bypass these guards.
+
 Do not rename API paths, background job types, blob keys, migration IDs, stored directories, query
 parameters, database filenames, or local-storage keys solely for product language.
 

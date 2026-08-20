@@ -72,6 +72,26 @@ attribution, re-evaluates Category Rules, and verifies evidence invariants. Runt
 affected projections and comparisons rebuild. V2 activates only after rebuild and final database
 verification. Apply restores the verified backup if any phase fails.
 
+## Interrupted Migration Recovery
+
+Core identity reconciliation and derivative rebuilding intentionally span committed phases because
+the rebuild subprocesses need to read the committed database. After core reconciliation commits,
+the active migration is `rebuilding` while the recorded active normalization version is still V1.
+An abrupt process or machine interruption in that window places the application in fail-closed URL
+identity maintenance mode; it does not make V1 safe for continued operation.
+
+During maintenance, runtime identity creation raises `UrlIdentityMaintenanceRequired`, all normal
+product API reads and mutations return HTTP 503, and workers leave queued jobs unclaimed. The
+`/api/health` diagnostic remains available and reports the active version, migration ID, and
+migration status. The migration CLI `status` and explicit recovery/rollback paths remain available.
+Missing migration provenance, unknown active statuses, and inconsistent version/status/state
+combinations are maintenance conditions and are never repaired by guessing.
+
+Normal caught migration failures continue to restore the verified backup automatically. After an
+abrupt interruption, stop product processes, inspect `status`, and use the supported recovery or
+verified rollback procedure. Once the database returns to a healthy pre-migration V1 state or a
+verified completed V2 state, API operation, identity creation, and worker claims resume.
+
 Immediate rollback is intentionally narrow. Any post-migration domain write changes the stored
 fingerprint and causes automatic rollback refusal; recovery then requires an operator-managed plan.
 Page Change History remains derived from rebuilt `scan-projection-v1` and `scan-comparison-v2`
