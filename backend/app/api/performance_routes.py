@@ -9,22 +9,35 @@ from app.database import get_db
 from app.models import BackgroundJob, PerformanceObservation, PerformanceRun, WebsiteProperty
 from app.schemas.performance import (
     PageSpeedAuditPresentation,
+    PerformanceDeleteConfirmation,
+    PerformanceDeleteResult,
     PerformanceLatestList,
+    PerformanceObservationDeletePreview,
     PerformanceObservationList,
     PerformanceObservationPresentation,
     PerformanceObservationRead,
     PerformanceProviderCapabilities,
     PerformanceProviderState,
     PerformanceRunCreate,
+    PerformanceRunDeletePreview,
     PerformanceRunDetail,
     PerformanceRunList,
     PerformanceRunRead,
+    PerformanceSiteDeletePreview,
 )
 from app.services.background_jobs import (
     enqueue_performance_run_job,
     request_cancellation,
 )
 from app.services.performance_collection import create_performance_run
+from app.services.performance_deletion import (
+    delete_performance_observation,
+    delete_performance_run,
+    preview_performance_observation_deletion,
+    preview_performance_run_deletion,
+    preview_performance_site_deletion,
+    purge_performance_site,
+)
 from app.services.performance_presentation import metric_presentations, parse_pagespeed_presentation
 from app.services.performance_providers import (
     CRUX_ADAPTER_VERSION,
@@ -140,6 +153,37 @@ def cancel_run(site_id: int, run_id: int, db: DbSession) -> PerformanceRunRead:
     return PerformanceRunRead(**result.model_dump(exclude={"observations"}))
 
 
+@router.get(
+    "/sites/{site_id}/performance-runs/{run_id}/deletion-preview",
+    response_model=PerformanceRunDeletePreview,
+)
+def run_deletion_preview(site_id: int, run_id: int, db: DbSession) -> PerformanceRunDeletePreview:
+    result = preview_performance_run_deletion(db, site_id, run_id)
+    if result is None:
+        raise HTTPException(404, "Performance run not found")
+    return result
+
+
+@router.delete("/sites/{site_id}/performance-runs/{run_id}", response_model=PerformanceDeleteResult)
+def remove_run(
+    site_id: int,
+    run_id: int,
+    payload: PerformanceDeleteConfirmation,
+    request: Request,
+    db: DbSession,
+) -> PerformanceDeleteResult:
+    store: LocalPerformancePayloadStore = request.app.state.performance_payload_store
+    try:
+        result = delete_performance_run(db, site_id, run_id, payload.confirmation, store)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Performance run not found")
+    return result
+
+
 @router.get("/sites/{site_id}/performance/latest", response_model=PerformanceLatestList)
 def latest(
     site_id: int,
@@ -202,6 +246,66 @@ def observation_detail(
     if observation is None:
         raise HTTPException(404, "Performance observation not found")
     return performance_observation_read(observation)
+
+
+@router.get(
+    "/sites/{site_id}/performance-observations/{observation_id}/deletion-preview",
+    response_model=PerformanceObservationDeletePreview,
+)
+def observation_deletion_preview(
+    site_id: int, observation_id: int, db: DbSession
+) -> PerformanceObservationDeletePreview:
+    result = preview_performance_observation_deletion(db, site_id, observation_id)
+    if result is None:
+        raise HTTPException(404, "Performance observation not found")
+    return result
+
+
+@router.delete(
+    "/sites/{site_id}/performance-observations/{observation_id}",
+    response_model=PerformanceDeleteResult,
+)
+def remove_observation(
+    site_id: int, observation_id: int, request: Request, db: DbSession
+) -> PerformanceDeleteResult:
+    store: LocalPerformancePayloadStore = request.app.state.performance_payload_store
+    try:
+        result = delete_performance_observation(db, site_id, observation_id, store)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Performance observation not found")
+    return result
+
+
+@router.get(
+    "/sites/{site_id}/performance/deletion-preview",
+    response_model=PerformanceSiteDeletePreview,
+)
+def site_deletion_preview(site_id: int, db: DbSession) -> PerformanceSiteDeletePreview:
+    result = preview_performance_site_deletion(db, site_id)
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.delete("/sites/{site_id}/performance", response_model=PerformanceDeleteResult)
+def purge_site(
+    site_id: int,
+    payload: PerformanceDeleteConfirmation,
+    request: Request,
+    db: DbSession,
+) -> PerformanceDeleteResult:
+    store: LocalPerformancePayloadStore = request.app.state.performance_payload_store
+    try:
+        result = purge_performance_site(db, site_id, payload.confirmation, store)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
 
 
 @router.get(

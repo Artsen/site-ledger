@@ -138,6 +138,26 @@ Operators may lower the limits with `SCANNER_PERFORMANCE_DEFAULT_PAGE_LIMIT`,
 `SCANNER_ACCESSIBILITY_HARD_PAGE_LIMIT`, and `SCANNER_ACCESSIBILITY_MAX_AUDIT_COUNT`. Invalid
 values fail settings validation and are never silently clamped.
 
+### Observability Payload Lifecycle
+
+Performance and Accessibility evidence is immutable while retained, with explicit hard deletion at
+observation, Run, and Site-domain scope. Original terminal Run counters remain collection history;
+separate retained/deleted counts describe current evidence. Active collection blocks deletion and
+garbage collection only in its own domain. Shared content-addressed payloads survive partial
+deletion, and database changes commit before best-effort file cleanup. Cleanup failures are visible
+warnings. Full Site deletion applies the same payload cleanup without leaking unreferenced files.
+
+Payload GC is dry-run by default:
+
+~~~powershell
+python tools/observability_payload_gc.py --domain all
+python tools/observability_payload_gc.py --domain performance --apply
+~~~
+
+GC reports referenced, unreferenced, missing, orphan, unexpected, and reclaimable storage without
+deleting unexpected-layout files. See the Performance and Accessibility evidence documentation for
+the complete retention semantics.
+
 ## Running Locally
 
 Run the API:

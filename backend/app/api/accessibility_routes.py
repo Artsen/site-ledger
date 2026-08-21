@@ -19,7 +19,10 @@ from app.database import get_db
 from app.models import AccessibilityObservation, AccessibilityRun, BackgroundJob, WebsiteProperty
 from app.schemas.accessibility import (
     AccessibilityCapabilities,
+    AccessibilityDeleteConfirmation,
+    AccessibilityDeleteResult,
     AccessibilityNodeList,
+    AccessibilityObservationDeletePreview,
     AccessibilityObservationList,
     AccessibilityObservationRead,
     AccessibilityPageSummaryList,
@@ -27,12 +30,22 @@ from app.schemas.accessibility import (
     AccessibilityRuleDetail,
     AccessibilityRuleList,
     AccessibilityRunCreate,
+    AccessibilityRunDeletePreview,
     AccessibilityRunDetail,
     AccessibilityRunList,
     AccessibilityRunRead,
+    AccessibilitySiteDeletePreview,
     AccessibilitySummary,
 )
 from app.services.accessibility_collection import create_accessibility_run
+from app.services.accessibility_deletion import (
+    delete_accessibility_observation,
+    delete_accessibility_run,
+    preview_accessibility_observation_deletion,
+    preview_accessibility_run_deletion,
+    preview_accessibility_site_deletion,
+    purge_accessibility_site,
+)
 from app.services.accessibility_queries import (
     accessibility_pages,
     accessibility_rule_detail,
@@ -143,6 +156,40 @@ def cancel_run(site_id: int, run_id: int, db: DbSession) -> AccessibilityRunRead
     result = get_accessibility_run(db, site_id, run_id, limit=1, offset=0)
     assert result is not None
     return AccessibilityRunRead(**result.model_dump(exclude={"observations"}))
+
+
+@router.get(
+    "/sites/{site_id}/accessibility-runs/{run_id}/deletion-preview",
+    response_model=AccessibilityRunDeletePreview,
+)
+def run_deletion_preview(site_id: int, run_id: int, db: DbSession) -> AccessibilityRunDeletePreview:
+    result = preview_accessibility_run_deletion(db, site_id, run_id)
+    if result is None:
+        raise HTTPException(404, "Accessibility run not found")
+    return result
+
+
+@router.delete(
+    "/sites/{site_id}/accessibility-runs/{run_id}",
+    response_model=AccessibilityDeleteResult,
+)
+def remove_run(
+    site_id: int,
+    run_id: int,
+    payload: AccessibilityDeleteConfirmation,
+    request: Request,
+    db: DbSession,
+) -> AccessibilityDeleteResult:
+    store: LocalAccessibilityPayloadStore = request.app.state.accessibility_payload_store
+    try:
+        result = delete_accessibility_run(db, site_id, run_id, payload.confirmation, store)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Accessibility run not found")
+    return result
 
 
 @router.get("/sites/{site_id}/accessibility/latest", response_model=AccessibilityObservationList)
@@ -277,6 +324,66 @@ def observation_detail(
     if observation is None:
         raise HTTPException(404, "Accessibility observation not found")
     return observation_read(observation)
+
+
+@router.get(
+    "/sites/{site_id}/accessibility-observations/{observation_id}/deletion-preview",
+    response_model=AccessibilityObservationDeletePreview,
+)
+def observation_deletion_preview(
+    site_id: int, observation_id: int, db: DbSession
+) -> AccessibilityObservationDeletePreview:
+    result = preview_accessibility_observation_deletion(db, site_id, observation_id)
+    if result is None:
+        raise HTTPException(404, "Accessibility observation not found")
+    return result
+
+
+@router.delete(
+    "/sites/{site_id}/accessibility-observations/{observation_id}",
+    response_model=AccessibilityDeleteResult,
+)
+def remove_observation(
+    site_id: int, observation_id: int, request: Request, db: DbSession
+) -> AccessibilityDeleteResult:
+    store: LocalAccessibilityPayloadStore = request.app.state.accessibility_payload_store
+    try:
+        result = delete_accessibility_observation(db, site_id, observation_id, store)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Accessibility observation not found")
+    return result
+
+
+@router.get(
+    "/sites/{site_id}/accessibility/deletion-preview",
+    response_model=AccessibilitySiteDeletePreview,
+)
+def site_deletion_preview(site_id: int, db: DbSession) -> AccessibilitySiteDeletePreview:
+    result = preview_accessibility_site_deletion(db, site_id)
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.delete("/sites/{site_id}/accessibility", response_model=AccessibilityDeleteResult)
+def purge_site(
+    site_id: int,
+    payload: AccessibilityDeleteConfirmation,
+    request: Request,
+    db: DbSession,
+) -> AccessibilityDeleteResult:
+    store: LocalAccessibilityPayloadStore = request.app.state.accessibility_payload_store
+    try:
+        result = purge_accessibility_site(db, site_id, payload.confirmation, store)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
 
 
 @router.get(

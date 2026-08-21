@@ -9,6 +9,8 @@ from app.schemas.sites import WebsitePropertyCreate, WebsitePropertyUpdate
 from app.services.scan_seeds import create_scan_seeds
 from app.services.site_urls import normalize_site_base_url
 from app.services.url_identity import active_url_normalization_version
+from app.storage.accessibility_store import LocalAccessibilityPayloadStore
+from app.storage.performance_store import LocalPerformancePayloadStore
 
 
 class DuplicateSiteError(ValueError):
@@ -72,7 +74,13 @@ def update_site(
     return site
 
 
-def delete_site(db: Session, site_id: int) -> int | None:
+def delete_site(
+    db: Session,
+    site_id: int,
+    performance_store: LocalPerformancePayloadStore | None = None,
+    accessibility_store: LocalAccessibilityPayloadStore | None = None,
+    cleanup_warnings: list[str] | None = None,
+) -> int | None:
     site = db.get(WebsiteProperty, site_id)
     if site is None:
         return None
@@ -126,6 +134,17 @@ def delete_site(db: Session, site_id: int) -> int | None:
     site_page_resource_ids = list(
         db.scalars(select(SitePage.resource_id).where(SitePage.website_property_id == site.id))
     )
+    from app.services.accessibility_deletion import (
+        cleanup_accessibility_payload_files,
+        prepare_accessibility_site_cleanup,
+    )
+    from app.services.performance_deletion import (
+        cleanup_performance_payload_files,
+        prepare_performance_site_cleanup,
+    )
+
+    performance_blobs = prepare_performance_site_cleanup(db, site.id)
+    accessibility_blobs = prepare_accessibility_site_cleanup(db, site.id)
     db.delete(site)
     db.flush()
     resource_ids = (
@@ -135,6 +154,16 @@ def delete_site(db: Session, site_id: int) -> int | None:
     )
     _delete_unreferenced_resources_after_site_delete(db, list(resource_ids))
     db.commit()
+    if performance_store is not None:
+        _deleted, warnings = cleanup_performance_payload_files(performance_store, performance_blobs)
+        if cleanup_warnings is not None:
+            cleanup_warnings.extend(warnings)
+    if accessibility_store is not None:
+        _deleted, warnings = cleanup_accessibility_payload_files(
+            accessibility_store, accessibility_blobs
+        )
+        if cleanup_warnings is not None:
+            cleanup_warnings.extend(warnings)
     return site_id
 
 

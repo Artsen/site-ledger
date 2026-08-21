@@ -1,13 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { useState } from "react";
-import { Link, useOutletContext, useParams } from "react-router-dom";
+import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 
 import {
   getAccessibilityObservation,
   getAccessibilityObservationNodes,
   getAccessibilityObservationRules,
 } from "../api/client";
+import { AccessibilityObservationDeleteAction } from "../components/observability/EvidenceDeletionActions";
 import { Button } from "../components/ui/Button";
 import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -22,6 +23,7 @@ type WorkspaceContext = { site: Site };
 
 export function AccessibilityObservationPage() {
   const { site } = useOutletContext<WorkspaceContext>();
+  const navigate = useNavigate();
   const { observationId = "" } = useParams();
   const id = Number(observationId);
   const [ruleSearch, setRuleSearch] = useState("");
@@ -78,8 +80,8 @@ export function AccessibilityObservationPage() {
   );
   return (
     <div className="space-y-5">
-      <header>
-        <Link
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div><Link
           className="text-sm underline"
           to={`/sites/${site.id}/accessibility/runs/${value.accessibility_run_id}`}
         >
@@ -95,6 +97,8 @@ export function AccessibilityObservationPage() {
           {formatStatus(value.profile)} · Audited{" "}
           {formatDate(value.observed_at)}
         </p>
+        </div>
+        <AccessibilityObservationDeleteAction siteId={String(site.id)} observationId={value.id} onDeleted={(result) => navigate(`/sites/${site.id}/accessibility/runs/${value.accessibility_run_id}`, { state: { evidenceDeletion: result } })} />
       </header>
       <section className="grid gap-px overflow-hidden rounded-md border border-stone-200 bg-stone-200 sm:grid-cols-2 lg:grid-cols-4">
         <Summary label="Profile" value={formatStatus(value.profile)} />

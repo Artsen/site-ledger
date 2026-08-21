@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import gzip
 import hashlib
-import os
-import tempfile
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import PerformancePayloadBlob
+from app.storage.observability_payloads import delete_payload, read_payload, store_payload
 
 
 class PerformancePayloadNotFoundError(FileNotFoundError):
@@ -30,40 +29,38 @@ class LocalPerformancePayloadStore:
         )
         if existing is not None:
             return existing
-        stored = gzip.compress(content, mtime=0)
-        key = f"{sha[:2]}/{sha[2:4]}/{sha}.json.gz"
-        path = self._path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".performance-")
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(stored)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+        stored = store_payload(self.root, content, temporary_prefix=".performance-")
         blob = PerformancePayloadBlob(
             sha256=sha,
-            storage_key=key,
+            storage_key=stored.storage_key,
             content_type=content_type,
             compression_type="gzip",
-            raw_byte_size=len(content),
-            stored_byte_size=len(stored),
+            raw_byte_size=stored.raw_byte_size,
+            stored_byte_size=stored.stored_byte_size,
         )
-        db.add(blob)
-        db.flush()
-        return blob
+        try:
+            with db.begin_nested():
+                db.add(blob)
+                db.flush()
+            return blob
+        except IntegrityError:
+            winner = db.scalar(
+                select(PerformancePayloadBlob).where(PerformancePayloadBlob.sha256 == sha)
+            )
+            if winner is None or winner.storage_key != stored.storage_key:
+                raise
+            return winner
 
     def read(self, blob: PerformancePayloadBlob) -> bytes:
         path = self._path(blob.storage_key)
         if not path.is_file():
             raise PerformancePayloadNotFoundError(blob.storage_key)
-        return gzip.decompress(path.read_bytes())
+        return read_payload(self.root, blob.storage_key)
+
+    def delete(self, blob: PerformancePayloadBlob) -> bool:
+        return delete_payload(self.root, blob.storage_key)
 
     def _path(self, key: str) -> Path:
-        path = (self.root / key).resolve()
-        if self.root not in path.parents:
-            raise ValueError("Unsafe performance payload storage key")
-        return path
+        from app.storage.observability_payloads import safe_payload_path
+
+        return safe_payload_path(self.root, key)
