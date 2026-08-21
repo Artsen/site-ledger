@@ -33,6 +33,7 @@ from app.models import (
     WebsiteProperty,
 )
 from app.schemas.accessibility import AccessibilityRunCreate
+from app.services.url_identity import active_url_normalization_version
 from app.storage.accessibility_store import LocalAccessibilityPayloadStore
 
 
@@ -118,8 +119,14 @@ async def execute_accessibility_run(
         run.started_at = run.started_at or datetime.now(UTC)
         tasks = _tasks(db, run)
         scope = ScopeConfig.from_dict(site.scope_config)
+        normalization_version = active_url_normalization_version(db)
+        starting_url = site.normalized_base_url
         db.commit()
-    async with BrowserRenderer(scope, site.normalized_base_url) as renderer:
+    async with BrowserRenderer(
+        scope,
+        starting_url,
+        normalization_version,
+    ) as renderer:
         for task in tasks:
             if should_cancel():
                 return _mark_cancelled(session_factory, run_id)

@@ -104,9 +104,13 @@ destinations, so its residual DNS TOCTOU is not equivalent to the pinned static 
 When a scan has no explicit allowed hosts, the exact starting hostname is derived. Sibling hosts
 and subdomains remain excluded unless explicitly configured.
 
-Normalization safely handles host casing, internationalized hosts, default ports, dot segments,
-fragments, configured tracking parameters, and deterministic query ordering. It does not lowercase
-paths, erase all trailing slashes, merge HTTP with HTTPS, or treat canonical metadata as identity.
+Global URL identity is versioned. V1 remains available for historical data; V2 preserves audited
+path and query distinctions and is Site-independent. Site `drop_query_parameters` produces only an
+ephemeral crawl/source dedupe key under V2 and never rewrites `WebResource.normalized_url`.
+
+`UrlIdentityState` gates the active runtime contract. Existing populated databases stay on V1 after
+schema preparation; fresh databases start on V2. A guarded local-only migration records provenance
+and mappings, rebuilds affected projections/comparisons, verifies invariants, then activates V2.
 
 Scope belongs to each scan. Saved-site scans copy the effective Site scope into the Scan row so
 later Site edits do not rewrite history.

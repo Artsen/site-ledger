@@ -5,10 +5,14 @@ historical evidence model.
 
 ## Identity And Association
 
-`WebResource` remains the global identity for one normalized URL. `SitePage` associates that
+`WebResource` remains the global versioned identity for one normalized URL. `SitePage` associates that
 identity with one saved `WebsiteProperty` and owns manual metadata for that Site. Overlapping Sites
 therefore share one `WebResource` while retaining separate categories, notes, owner labels, and
 workflow statuses.
+
+Resource-ID deep links resolve an existing direct `WebResource` first and consult an explicit
+`WebResourceAlias` only when that legacy ID no longer exists. Grandfathered V1 resources therefore
+remain valid Page identities and are never redirected heuristically to a V2 resource.
 
 ```mermaid
 erDiagram

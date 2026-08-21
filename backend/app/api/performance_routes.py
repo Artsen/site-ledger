@@ -164,9 +164,10 @@ def page_history(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> PerformanceObservationList:
-    if find_site_page(db, site_id, resource_id) is None:
+    page = find_site_page(db, site_id, resource_id)
+    if page is None:
         raise HTTPException(404, "Page not found")
-    return page_performance_history(db, site_id, resource_id, limit=limit, offset=offset)
+    return page_performance_history(db, site_id, page.resource_id, limit=limit, offset=offset)
 
 
 @router.get(
@@ -174,9 +175,10 @@ def page_history(
     response_model=PerformanceObservationList,
 )
 def page_latest(site_id: int, resource_id: int, db: DbSession) -> PerformanceObservationList:
-    if find_site_page(db, site_id, resource_id) is None:
+    page = find_site_page(db, site_id, resource_id)
+    if page is None:
         raise HTTPException(404, "Page not found")
-    return page_latest_performance(db, site_id, resource_id)
+    return page_latest_performance(db, site_id, page.resource_id)
 
 
 @router.get(

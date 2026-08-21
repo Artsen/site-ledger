@@ -42,7 +42,7 @@ def select_render_candidates(
             )
         )
     )
-    scope = ScopeEngine(config, scan.starting_url)
+    scope = ScopeEngine(config, scan.starting_url, scan.url_normalization_version)
     eligible = [
         item for item in snapshots if scope.evaluate(item.final_url or item.requested_url).in_scope
     ]

@@ -28,15 +28,23 @@ from url_identity_audit import (
     CandidateNormalizationError,
     _collision_reasons,
     _drop_patterns,
-    candidate_normalize_url,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / "backend"
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
+
+from app.crawler.url_normalizer import (  # noqa: E402
+    URL_NORMALIZATION_V2_VERSION,
+    normalize_url_v2,
+)
+
 DEFAULT_DATABASE = ROOT / "data" / "scanner.db"
 DEFAULT_LOCAL_DIR = ROOT / ".local" / "url-identity"
 SCHEMA_VERSION = "url-identity-reconciliation-v1"
 SOURCE_NORMALIZATION_VERSION = "url-normalization-v1"
-CANDIDATE_VERSION = "url-normalization-v2-candidate-reference-only"
+CANDIDATE_VERSION = URL_NORMALIZATION_V2_VERSION
 STATUS_UNRESOLVED = "UNRESOLVED"
 STATUS_PARTIAL = "PARTIALLY_RESOLVED"
 STATUS_READY = "READY_FOR_SIMULATION"
@@ -162,6 +170,7 @@ FINGERPRINT_COLUMNS: dict[str, tuple[str, ...]] = {
     "web_resources": (
         "id",
         "resource_type",
+        "normalization_version",
         "normalized_url",
         "scheme",
         "host",
@@ -356,8 +365,8 @@ def _scope_patterns(raw: Any) -> tuple[str, ...]:
 
 def _candidate(raw_url: str, scope: Any = None) -> str | None:
     try:
-        return candidate_normalize_url(raw_url, _scope_patterns(scope)).normalized_url
-    except CandidateNormalizationError:
+        return normalize_url_v2(raw_url).normalized_url
+    except (CandidateNormalizationError, ValueError):
         return None
 
 
@@ -1394,10 +1403,11 @@ def _insert_candidate_resource(
     source_row: sqlite3.Row,
     candidate_url: str,
 ) -> int:
-    parts = candidate_normalize_url(candidate_url)
+    parts = normalize_url_v2(candidate_url)
     columns = _columns(connection, "web_resources")
     values: dict[str, Any] = {
         "resource_type": source_row["resource_type"],
+        "normalization_version": URL_NORMALIZATION_V2_VERSION,
         "normalized_url": parts.normalized_url,
         "scheme": parts.scheme,
         "host": parts.host,
@@ -1420,9 +1430,10 @@ def _insert_candidate_resource(
 def _update_resource_identity(
     connection: sqlite3.Connection, resource_id: int, candidate_url: str
 ) -> None:
-    parts = candidate_normalize_url(candidate_url)
+    parts = normalize_url_v2(candidate_url)
     columns = _columns(connection, "web_resources")
     values = {
+        "normalization_version": URL_NORMALIZATION_V2_VERSION,
         "normalized_url": parts.normalized_url,
         "scheme": parts.scheme,
         "host": parts.host,
@@ -1917,10 +1928,15 @@ def verify_simulation(
         errors.append(f"foreign key violations: {len(fk_rows)}")
     duplicate_resources = 0
     if "web_resources" in _table_names(connection):
+        identity_columns = (
+            "normalization_version, normalized_url"
+            if "normalization_version" in _columns(connection, "web_resources")
+            else "resource_type, normalized_url"
+        )
         duplicate_resources = int(
             connection.execute(
-                "SELECT COUNT(*) FROM (SELECT resource_type, normalized_url "
-                "FROM web_resources GROUP BY resource_type, normalized_url HAVING COUNT(*) > 1)"
+                f"SELECT COUNT(*) FROM (SELECT {identity_columns} FROM web_resources "
+                f"GROUP BY {identity_columns} HAVING COUNT(*) > 1)"
             ).fetchone()[0]
         )
     if duplicate_resources:

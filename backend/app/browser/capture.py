@@ -14,6 +14,7 @@ from app.browser.config import BROWSER_POLICY_VERSION, CAPTURE_SCHEMA_VERSION, R
 from app.browser.privacy import redact_text, redact_url, sanitize_headers
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.security import validate_public_destination
+from app.crawler.url_normalizer import URL_NORMALIZATION_V1_VERSION
 
 ALLOWED_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -91,9 +92,14 @@ class ObservedByteBudget:
 
 
 class BrowserRenderer:
-    def __init__(self, config: ScopeConfig, starting_url: str):
+    def __init__(
+        self,
+        config: ScopeConfig,
+        starting_url: str,
+        normalization_version: str = URL_NORMALIZATION_V1_VERSION,
+    ):
         self.config = config
-        self.scope = ScopeEngine(config, starting_url)
+        self.scope = ScopeEngine(config, starting_url, normalization_version)
         self._playwright: Any = None
         self.browser: Any = None
         self.browser_version: str | None = None

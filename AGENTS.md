@@ -167,6 +167,12 @@ Do not rename these models or their tables for branding:
 WebResource is the persistent Page identity. ResourceSnapshot is one Page observation. Reused
 responses still create new observations and current-scan link occurrences.
 
+An active non-completed URL identity migration, missing active migration provenance, or an
+inconsistent identity state places product runtime in fail-closed maintenance mode. Runtime
+identity creation must never fall back to V1, normal API traffic must remain unavailable, and
+workers must not claim jobs until explicit recovery completes. Migration status/recovery tooling
+remains available. New resource-creation and job-claim paths must not bypass these guards.
+
 Do not rename API paths, background job types, blob keys, migration IDs, stored directories, query
 parameters, database filenames, or local-storage keys solely for product language.
 
@@ -414,8 +420,12 @@ Do not disable checks or weaken tests to force passing results.
 - Never commit secrets, credentials, local databases, captured HTML, build output, or dependency
   caches.
 - Use the Artsen repository-local Git identity for commits in this repository.
-- URL identity migration is fail-closed; candidate V2 remains reference-only until reconciliation
-  and disposable simulation pass.
+- Global WebResource identity is `(normalization_version, normalized_url)`; every URL lookup must
+  include the version. V1 historical identities remain legitimate and must not be reused as V2.
+- V2 is Site-independent. Site query suppression is crawl/source policy and must never redefine a
+  global V2 identity.
+- Existing populated databases remain V1 until verified migration activation; fresh databases use
+  V2. Operator decisions must never be guessed and candidate merges fail closed.
 - Reassign immutable evidence only from retained requested/resolved identity provenance. Provider
   targets, final URLs, and redirects do not redefine Page ownership.
 - Never guess split Page workspace state. Keep insufficient provenance explicit and prefer an honest
@@ -424,6 +434,7 @@ Do not disable checks or weaken tests to force passing results.
   stale manifest.
 - Real identity migration requires no active mutating jobs, a verified SQLite backup plus content
   store inventory, and post-migration invariants. Rebuild projections/comparisons from evidence.
+- Full manifests are sensitive local artifacts. Migration must not rewrite immutable evidence bytes.
 
 ## Pull Request Format
 

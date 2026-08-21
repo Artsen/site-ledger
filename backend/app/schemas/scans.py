@@ -75,6 +75,7 @@ class ScanRead(BaseModel):
     starting_url: str
     status: str
     scope_config: dict[str, Any]
+    url_normalization_version: str
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

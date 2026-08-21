@@ -5,11 +5,22 @@ from sqlalchemy.orm import Session
 
 from app.crawler.url_normalizer import NormalizedUrl
 from app.models import WebResource
+from app.services.url_identity import require_url_identity_runtime_write
 
 
-def get_or_create_resource(db: Session, normalized: NormalizedUrl) -> WebResource:
+def get_or_create_resource(
+    db: Session,
+    normalized: NormalizedUrl,
+    *,
+    normalization_version: str | None = None,
+) -> WebResource:
+    runtime = require_url_identity_runtime_write(db)
+    version = normalization_version or runtime.active_normalization_version
     resource = db.scalar(
-        select(WebResource).where(WebResource.normalized_url == normalized.normalized_url)
+        select(WebResource).where(
+            WebResource.normalization_version == version,
+            WebResource.normalized_url == normalized.normalized_url,
+        )
     )
     if resource:
         resource.last_seen_at = datetime.now(UTC)
@@ -17,6 +28,7 @@ def get_or_create_resource(db: Session, normalized: NormalizedUrl) -> WebResourc
         return resource
     resource = WebResource(
         resource_type="page",
+        normalization_version=version,
         normalized_url=normalized.normalized_url,
         scheme=normalized.scheme,
         host=normalized.host,

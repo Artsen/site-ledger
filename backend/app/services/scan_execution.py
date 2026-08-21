@@ -62,7 +62,7 @@ class ScanExecutionCoordinator:
         self.context.progress(phase="preparing", current_operation="Preparing scan")
         renderer: BrowserRenderer | None = None
         if config.render_mode != "none":
-            renderer = BrowserRenderer(config, scan.starting_url)
+            renderer = BrowserRenderer(config, scan.starting_url, scan.url_normalization_version)
             await renderer.__aenter__()
         try:
             scan.status = "running"

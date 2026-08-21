@@ -195,6 +195,9 @@ def list_comparison_pages(
 def get_comparison_page(
     db: Session, site_id: int, comparison_id: int, resource_id: int
 ) -> ComparisonPageRead | None:
+    from app.services.url_identity import resolve_resource_id
+
+    resource_id = resolve_resource_id(db, resource_id) or resource_id
     build = _ready_build(db, site_id, comparison_id)
     if build is None:
         return None
@@ -295,6 +298,9 @@ def list_comparison_resources(
 def get_comparison_resource(
     db: Session, site_id: int, comparison_id: int, resource_id: int
 ) -> ComparisonResourceRead | None:
+    from app.services.url_identity import resolve_resource_id
+
+    resource_id = resolve_resource_id(db, resource_id) or resource_id
     build = _ready_build(db, site_id, comparison_id)
     if build is None:
         return None
@@ -555,6 +561,9 @@ def page_change_history(
     limit: int,
     offset: int,
 ) -> PageChangeHistoryList | None:
+    from app.services.url_identity import resolve_resource_id
+
+    resource_id = resolve_resource_id(db, resource_id) or resource_id
     if not db.scalar(
         select(SitePage.id).where(
             SitePage.website_property_id == site_id, SitePage.resource_id == resource_id

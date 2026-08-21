@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Note, Scan, SitePage, WebsiteProperty
 from app.schemas.page_workspaces import NoteCreate, NoteList, NoteUpdate
+from app.services.url_identity import resolve_resource_id
 
 
 def list_notes(
@@ -90,10 +91,13 @@ def scan_exists(db: Session, scan_id: int) -> bool:
 
 
 def find_page_target(db: Session, site_id: int, resource_id: int) -> SitePage | None:
+    resolved_id = resolve_resource_id(db, resource_id)
+    if resolved_id is None:
+        return None
     return db.scalar(
         select(SitePage).where(
             SitePage.website_property_id == site_id,
-            SitePage.resource_id == resource_id,
+            SitePage.resource_id == resolved_id,
         )
     )
 

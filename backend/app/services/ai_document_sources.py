@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import get_settings
 from app.crawler.safe_fetch import FetchLimits, SafeFetchResult, SafeHttpFetcher
 from app.crawler.scope import ScopeConfig, ScopeEngine
-from app.crawler.url_normalizer import UrlNormalizationError, normalize_url
+from app.crawler.url_normalizer import UrlNormalizationError, normalize_url_for_version
 from app.models import (
     AiDocumentBlob,
     AiDocumentReference,
@@ -53,6 +53,7 @@ from app.services.source_management import (
     DuplicateSourceError,
     _delete_unreferenced_source_resources,
 )
+from app.services.url_identity import active_url_normalization_version
 from app.storage.ai_document_store import LocalAiDocumentStore
 
 
@@ -106,20 +107,27 @@ async def discover_ai_document_sources(
     if site is None:
         return None
     base = _origin(site.base_url)
+    normalization_version = active_url_normalization_version(db)
     candidates: list[tuple[str, str, str | None]] = [
         (urljoin(base, "/llms.txt"), "conventional_root", "llms-txt"),
         (urljoin(base, "/.well-known/llms.txt"), "well_known", "llms-txt"),
     ]
     root_result: SafeFetchResult | None = None
     try:
-        root_result = await _fetch(site, base, 256_000, transport)
+        root_result = await _fetch(
+            site, base, 256_000, transport, normalization_version=normalization_version
+        )
         candidates.extend(_header_candidates(root_result))
     except Exception:
         pass
     unique: dict[str, tuple[str, str | None]] = {}
     for raw_url, method, relation in candidates:
         try:
-            normalized = normalize_url(raw_url, site.base_url).normalized_url
+            normalized = normalize_url_for_version(
+                raw_url,
+                normalization_version=normalization_version,
+                base_url=site.base_url,
+            ).normalized_url
         except (UrlNormalizationError, ValueError):
             continue
         unique.setdefault(normalized, (method, relation))
@@ -134,7 +142,13 @@ async def discover_ai_document_sources(
     results: list[AiDocumentDiscoveryCandidate] = []
     for url, (method, relation) in unique.items():
         try:
-            fetched = await _fetch(site, url, 5_000_000, transport)
+            fetched = await _fetch(
+                site,
+                url,
+                5_000_000,
+                transport,
+                normalization_version=normalization_version,
+            )
             status = (
                 "found"
                 if 200 <= fetched.http_status < 300
@@ -172,7 +186,7 @@ def create_ai_document_source(
     site = db.get(WebsiteProperty, site_id)
     if site is None:
         return None
-    normalized = _in_scope_url(site, payload.entry_url)
+    normalized = _in_scope_url(site, payload.entry_url, active_url_normalization_version(db))
     if db.scalar(
         select(UrlSource.id).where(
             UrlSource.website_property_id == site.id,
@@ -222,7 +236,11 @@ def update_ai_source(
     if source is None:
         return None
     if entry_url is not None:
-        normalized = _in_scope_url(source.website_property, entry_url)
+        normalized = _in_scope_url(
+            source.website_property,
+            entry_url,
+            active_url_normalization_version(db),
+        )
         duplicate = db.scalar(
             select(UrlSource.id).where(
                 UrlSource.website_property_id == source.website_property_id,
@@ -314,11 +332,13 @@ async def execute_ai_document_refresh(
         raise ValueError("AI Document Source entry URL is missing.")
     settings = AiDocumentSettings.model_validate(source.settings_json or {})
     store = store or LocalAiDocumentStore(get_settings().ai_document_storage_root)
+    normalization_version = active_url_normalization_version(db)
     scope_engine = ScopeEngine(
         ScopeConfig.from_dict(source.website_property.scope_config),
         source.website_property.base_url,
+        normalization_version,
     )
-    resource_resolver = AiDocumentResourceResolver(db)
+    resource_resolver = AiDocumentResourceResolver(db, normalization_version)
     previous_resolver = AiDocumentPreviousSnapshotResolver(db, source.id)
     blob_resolver = AiDocumentBlobResolver(store)
     inventory = AiDocumentInventoryAccumulator()
@@ -342,10 +362,15 @@ async def execute_ai_document_refresh(
             evidence.stop_reason = "cancelled_by_user"
             break
         item = queue.popleft()
-        normalized = normalize_url(item.url, source.website_property.base_url).normalized_url
+        normalized_value = normalize_url_for_version(
+            item.url,
+            normalization_version=normalization_version,
+            base_url=source.website_property.base_url,
+        )
+        normalized = normalized_value.normalized_url
         if normalized in fetched:
             continue
-        resource = resource_resolver.resolve(normalize_url(normalized))
+        resource = resource_resolver.resolve(normalized_value)
         previous = previous_resolver.get(resource)
         headers = _conditional_headers(previous)
         try:
@@ -357,6 +382,7 @@ async def execute_ai_document_refresh(
                 headers=headers,
                 allow_external=settings.follow_external_documents,
                 should_cancel=should_cancel,
+                normalization_version=normalization_version,
             )
             stats.total_network_bytes += result.network_bytes_transferred
             if stats.total_network_bytes > settings.max_total_network_bytes:
@@ -506,9 +532,10 @@ async def execute_ai_document_refresh(
                 for parsed_ref in parsed_references:
                     try:
                         normalized_references.append(
-                            normalize_url(
+                            normalize_url_for_version(
                                 parsed_ref.resolved_url,
-                                snapshot.final_url or snapshot.requested_url,
+                                normalization_version=normalization_version,
+                                base_url=snapshot.final_url or snapshot.requested_url,
                             )
                         )
                     except (UrlNormalizationError, ValueError):
@@ -794,11 +821,12 @@ def _reference(
     raw_url = parsed_ref.raw_url
     resolved = parsed_ref.resolved_url
     try:
-        normalized = normalize_url(
-            resolved, snapshot.final_url or snapshot.requested_url
-        ).normalized_url
-        scope = scope_engine.evaluate(normalized)
-        resource = resource_resolver.resolve(normalize_url(normalized))
+        scope = scope_engine.evaluate(resolved, snapshot.final_url or snapshot.requested_url)
+        if scope.normalized is None:
+            raise UrlNormalizationError(scope.exclusion_reason or "URL is invalid")
+        normalized_value = scope.normalized
+        normalized = normalized_value.normalized_url
+        resource = resource_resolver.resolve(normalized_value)
         kind, rule = classify_ai_document(normalized, None, parent_kind="llms_index")
         forms_cycle = normalized in item.ancestors or normalized == snapshot.requested_url
         role = (
@@ -925,6 +953,7 @@ async def _fetch(
     url: str,
     max_bytes: int,
     transport: httpx.AsyncBaseTransport | None,
+    normalization_version: str,
     headers: dict[str, str] | None = None,
     allow_external: bool = False,
     timeout_seconds: float | None = None,
@@ -939,7 +968,9 @@ async def _fetch(
             allow_private_networks=config.allow_private_networks,
         ),
         transport=transport,
-        redirect_validator=lambda redirect_url: _redirect(site, redirect_url, allow_external),
+        redirect_validator=lambda redirect_url: _redirect(
+            site, redirect_url, normalization_version, allow_external
+        ),
     )
     return await fetcher.get(url, headers=headers)
 
@@ -953,6 +984,7 @@ async def _fetch_document(
     headers: dict[str, str],
     allow_external: bool,
     should_cancel: Callable[[], bool] | None,
+    normalization_version: str,
 ) -> SafeFetchResult:
     for attempt in range(settings.max_attempts):
         if should_cancel and should_cancel():
@@ -966,6 +998,7 @@ async def _fetch_document(
                 headers=headers,
                 allow_external=allow_external,
                 timeout_seconds=settings.request_timeout_seconds,
+                normalization_version=normalization_version,
             )
             if result.http_status not in {408, 425, 429, 500, 502, 503, 504}:
                 return result
@@ -979,9 +1012,14 @@ async def _fetch_document(
 
 
 async def _redirect(
-    site: WebsiteProperty, url: str, allow_external: bool = False
+    site: WebsiteProperty,
+    url: str,
+    normalization_version: str,
+    allow_external: bool = False,
 ) -> tuple[bool, str | None, str | None, str | None]:
-    result = ScopeEngine(ScopeConfig.from_dict(site.scope_config), site.base_url).evaluate(url)
+    result = ScopeEngine(
+        ScopeConfig.from_dict(site.scope_config), site.base_url, normalization_version
+    ).evaluate(url)
     if allow_external and result.normalized is not None:
         return True, None, None, result.normalized.normalized_url
     if result.normalized is None or not result.in_scope:
@@ -1021,14 +1059,15 @@ def _origin(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, "/", "", ""))
 
 
-def _in_scope_url(site: WebsiteProperty, url: str) -> str:
-    normalized = normalize_url(url, site.base_url).normalized_url
-    result = ScopeEngine(ScopeConfig.from_dict(site.scope_config), site.base_url).evaluate(
-        normalized
-    )
+def _in_scope_url(site: WebsiteProperty, url: str, normalization_version: str) -> str:
+    result = ScopeEngine(
+        ScopeConfig.from_dict(site.scope_config), site.base_url, normalization_version
+    ).evaluate(url, site.base_url)
+    if result.normalized is None:
+        raise ValueError(result.exclusion_reason or "Entry URL is invalid.")
     if not result.in_scope:
         raise ValueError(result.exclusion_reason or "Entry URL is outside Site scope.")
-    return normalized
+    return result.normalized.normalized_url
 
 
 def _mime(value: str | None) -> str | None:

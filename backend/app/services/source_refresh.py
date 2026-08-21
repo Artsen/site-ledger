@@ -18,7 +18,7 @@ from app.crawler.safe_fetch import (
 )
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.security import DestinationResolutionError, UnsafeDestinationError
-from app.crawler.url_normalizer import normalize_url
+from app.crawler.url_normalizer import normalize_url_for_version
 from app.models import SourceRefresh, UrlSource, UrlSourceEntry, WebsiteProperty
 from app.parsers.compression import (
     DecompressedResponseTooLargeError,
@@ -27,7 +27,8 @@ from app.parsers.compression import (
 )
 from app.parsers.robots import parse_sitemap_directives
 from app.parsers.sitemap import SitemapParseError, parse_sitemap_xml
-from app.services.source_management import upsert_source_entry
+from app.services.source_management import _source_policy_index, upsert_source_entry
+from app.services.url_identity import active_url_normalization_version
 from app.storage.ai_document_store import LocalAiDocumentStore
 
 
@@ -147,7 +148,10 @@ def create_robots_source(db: Session, site_id: int) -> UrlSource | None:
     if site is None:
         return None
     robots_url = _robots_url(site.base_url)
-    normalized = normalize_url(robots_url).normalized_url
+    normalized = normalize_url_for_version(
+        robots_url,
+        normalization_version=active_url_normalization_version(db),
+    ).normalized_url
     existing = db.scalar(
         select(UrlSource).where(
             UrlSource.website_property_id == site.id,
@@ -207,7 +211,14 @@ async def _refresh_robots(
 ) -> None:
     if not source.normalized_source_url:
         raise ValueError("Robots source URL is missing.")
-    result = await _fetch(source.website_property, source.normalized_source_url, limits, transport)
+    normalization_version = active_url_normalization_version(db)
+    result = await _fetch(
+        source.website_property,
+        source.normalized_source_url,
+        limits,
+        transport,
+        normalization_version,
+    )
     _raise_if_cancelled(should_cancel)
     refresh.http_status = result.http_status
     refresh.fetched_url = result.requested_url
@@ -219,7 +230,10 @@ async def _refresh_robots(
     child_count = 0
     for directive in directives[: limits.max_child_sources]:
         _raise_if_cancelled(should_cancel)
-        normalized = normalize_url(directive.resolved_url).normalized_url
+        normalized = normalize_url_for_version(
+            directive.resolved_url,
+            normalization_version=normalization_version,
+        ).normalized_url
         existing = db.scalar(
             select(UrlSource).where(
                 UrlSource.website_property_id == source.website_property_id,
@@ -270,7 +284,14 @@ async def _refresh_sitemap(
     if depth > limits.max_index_depth:
         raise ValueError("Sitemap index recursion limit exceeded.")
     seen_sources.add(source.normalized_source_url)
-    result = await _fetch(source.website_property, source.normalized_source_url, limits, transport)
+    normalization_version = active_url_normalization_version(db)
+    result = await _fetch(
+        source.website_property,
+        source.normalized_source_url,
+        limits,
+        transport,
+        normalization_version,
+    )
     _raise_if_cancelled(should_cancel)
     refresh.http_status = result.http_status
     refresh.fetched_url = result.requested_url
@@ -286,6 +307,7 @@ async def _refresh_sitemap(
     parsed = parse_sitemap_xml(content)
     if parsed.document_type == "urlset":
         seen_entries: set[str] = set()
+        policy_index = _source_policy_index(db, source, source.website_property)
         added = updated = accepted = rejected = 0
         for sitemap_url in parsed.urls:
             _raise_if_cancelled(should_cancel)
@@ -300,6 +322,7 @@ async def _refresh_sitemap(
                 sitemap_lastmod=sitemap_url.lastmod,
                 sitemap_changefreq=sitemap_url.changefreq,
                 sitemap_priority=sitemap_url.priority,
+                policy_index=policy_index,
             )
             if entry.normalized_url:
                 seen_entries.add(entry.normalized_url)
@@ -326,7 +349,10 @@ async def _refresh_sitemap(
     warnings: list[dict[str, Any]] = []
     for child in parsed.children[: limits.max_child_sources]:
         _raise_if_cancelled(should_cancel)
-        normalized = normalize_url(child.loc).normalized_url
+        normalized = normalize_url_for_version(
+            child.loc,
+            normalization_version=normalization_version,
+        ).normalized_url
         child_source = db.scalar(
             select(UrlSource).where(
                 UrlSource.website_property_id == source.website_property_id,
@@ -389,6 +415,7 @@ async def _fetch(
     url: str,
     limits: RefreshLimits,
     transport: httpx.AsyncBaseTransport | None,
+    normalization_version: str,
 ) -> SafeFetchResult:
     config = ScopeConfig.from_dict(site.scope_config)
     fetcher = SafeHttpFetcher(
@@ -400,16 +427,18 @@ async def _fetch(
             allow_private_networks=config.allow_private_networks,
         ),
         transport=transport,
-        redirect_validator=lambda redirect_url: _validate_redirect(site, redirect_url),
+        redirect_validator=lambda redirect_url: _validate_redirect(
+            site, redirect_url, normalization_version
+        ),
     )
     return await fetcher.get(url)
 
 
 async def _validate_redirect(
-    site: WebsiteProperty, url: str
+    site: WebsiteProperty, url: str, normalization_version: str
 ) -> tuple[bool, str | None, str | None, str | None]:
     config = ScopeConfig.from_dict(site.scope_config)
-    result = ScopeEngine(config, site.base_url).evaluate(url)
+    result = ScopeEngine(config, site.base_url, normalization_version).evaluate(url)
     if result.normalized is None:
         return False, result.decision, result.exclusion_reason, None
     if result.decision != "crawlable":

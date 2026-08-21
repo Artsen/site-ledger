@@ -251,6 +251,26 @@ Chromium are installed:
 uv run --project backend --extra dev --locked python tools/run_full_stack_e2e.py
 ~~~
 
+URL identity migration is an offline, local-only operator workflow. Schema upgrade alone is safe
+for an existing database and leaves V1 active. After resolving the private full reconciliation
+manifest, rebase and inspect it before any simulation:
+
+~~~powershell
+uv run --project backend --extra dev --locked python tools/url_identity_migrate.py `
+  --database data/scanner.db rebase .local/url-identity/manifest-full.json `
+  --output .local/url-identity/manifest-rebased.json
+uv run --project backend --extra dev --locked python tools/url_identity_migrate.py `
+  --database data/scanner.db status
+uv run --project backend --extra dev --locked python tools/url_identity_migrate.py `
+  --database data/scanner.db preflight .local/url-identity/manifest-rebased.json
+uv run --project backend --extra dev --locked python tools/url_identity_migrate.py `
+  --database data/scanner.db simulate .local/url-identity/manifest-rebased.json `
+  --destination .local/url-identity/simulation.db
+~~~
+
+Live apply and rollback require separate exact confirmation phrases and stopped workers. See
+[URL identity migration](docs/url-identity-migration.md). Never commit full manifests or reports.
+
 GitHub Actions runs independent `Backend`, `Frontend`, `Playwright`, and `Golden Path` checks for
 pull requests to `main` and pushes to `main`. The production npm audit blocks on high or critical findings; the full
 dependency-tree audit is reported without blocking while the remaining Vite/Vitest advisories
@@ -278,6 +298,8 @@ files when the declared dependency set changes.
 
 - [Product vision](docs/product-vision.md)
 - [Architecture](docs/architecture.md)
+- [URL identity contract](docs/url-identity-contract.md)
+- [URL identity migration](docs/url-identity-migration.md)
 - [Background jobs](docs/background-jobs.md)
 - [Website graph](docs/website-graph.md)
 - [Graph performance](docs/graph-performance.md)

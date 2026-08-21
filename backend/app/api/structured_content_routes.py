@@ -89,8 +89,8 @@ def get_page_structured_content(
     limit: int = Query(default=500, ge=1, le=2_000),
     offset: int = Query(default=0, ge=0),
 ) -> StructuredContentRead:
-    _ensure_page_exists(db, site_id, resource_id)
-    snapshot = latest_page_content_snapshot(db, site_id, resource_id)
+    resolved_id = _ensure_page_exists(db, site_id, resource_id)
+    snapshot = latest_page_content_snapshot(db, site_id, resolved_id)
     if snapshot is None:
         return StructuredContentRead(
             status="not_applicable",
@@ -115,8 +115,8 @@ def prepare_page_structured_content(
     limit: int = Query(default=500, ge=1, le=2_000),
     offset: int = Query(default=0, ge=0),
 ) -> StructuredContentRead:
-    _ensure_page_exists(db, site_id, resource_id)
-    snapshot = latest_page_content_snapshot(db, site_id, resource_id)
+    resolved_id = _ensure_page_exists(db, site_id, resource_id)
+    snapshot = latest_page_content_snapshot(db, site_id, resolved_id)
     if snapshot is None or snapshot.blob is None:
         raise HTTPException(409, "No successful retained HTML observation is available")
     store: LocalContentStore = request.app.state.content_store
@@ -128,16 +128,21 @@ def prepare_page_structured_content(
     return structured_content_for_snapshot(db, snapshot, limit=limit, offset=offset)
 
 
-def _ensure_page_exists(db: Session, site_id: int, resource_id: int) -> None:
+def _ensure_page_exists(db: Session, site_id: int, resource_id: int) -> int:
     if db.get(WebsiteProperty, site_id) is None:
         raise HTTPException(404, "Site not found")
+    from app.services.url_identity import resolve_resource_id
+
+    resolved_id = resolve_resource_id(db, resource_id)
     if (
-        db.scalar(
+        resolved_id is None
+        or db.scalar(
             select(SitePage.id).where(
                 SitePage.website_property_id == site_id,
-                SitePage.resource_id == resource_id,
+                SitePage.resource_id == resolved_id,
             )
         )
         is None
     ):
         raise HTTPException(404, "Page not found")
+    return resolved_id

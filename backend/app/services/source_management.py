@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.crawler.scope import ScopeConfig, ScopeEngine
-from app.crawler.url_normalizer import UrlNormalizationError, normalize_url
+from app.crawler.url_normalizer import UrlNormalizationError
 from app.models import (
     BackgroundJob,
     SourceRefresh,
@@ -16,6 +16,7 @@ from app.models import (
 )
 from app.schemas.sources import UrlSourceCreate, UrlSourceUpdate
 from app.services.repositories import get_or_create_resource
+from app.services.url_identity import active_url_normalization_version
 
 
 class DuplicateSourceError(ValueError):
@@ -35,7 +36,7 @@ def create_source(db: Session, site_id: int, payload: UrlSourceCreate) -> UrlSou
     if site is None:
         return None
     normalized_source_url = (
-        _normalize_source_url(payload.source_url, site) if payload.source_url else None
+        _normalize_source_url(db, payload.source_url, site) if payload.source_url else None
     )
     if normalized_source_url:
         _ensure_unique_source(db, site.id, payload.source_type, normalized_source_url)
@@ -65,7 +66,7 @@ def update_source(
     updates = payload.model_dump(exclude_unset=True)
     if "source_url" in updates:
         raw_url = updates.pop("source_url")
-        normalized = _normalize_source_url(raw_url, site) if raw_url else None
+        normalized = _normalize_source_url(db, raw_url, site) if raw_url else None
         if normalized != source.normalized_source_url and normalized:
             _ensure_unique_source(db, site.id, source.source_type, normalized, source.id)
         source.source_url = normalized
@@ -144,9 +145,17 @@ def add_manual_urls(
     source = get_or_create_manual_source(db, site)
     rows = [row.strip() for row in urls_text.splitlines() if row.strip()]
     entries: list[UrlSourceEntry] = []
+    policy_index = _source_policy_index(db, source, site)
     accepted = rejected = duplicates = 0
     for row in rows:
-        entry, state = upsert_source_entry(db, source, row, site=site, source_type="manual")
+        entry, state = upsert_source_entry(
+            db,
+            source,
+            row,
+            site=site,
+            source_type="manual",
+            policy_index=policy_index,
+        )
         entries.append(entry)
         if state == "duplicate":
             duplicates += 1
@@ -171,12 +180,26 @@ def upsert_source_entry(
     sitemap_lastmod: str | None = None,
     sitemap_changefreq: str | None = None,
     sitemap_priority: str | None = None,
+    policy_index: dict[str, UrlSourceEntry] | None = None,
 ) -> tuple[UrlSourceEntry, str]:
     config = ScopeConfig.from_dict(site.scope_config)
+    normalization_version = active_url_normalization_version(db)
     try:
-        normalized = normalize_url(raw_url, site.base_url, config.drop_query_parameters)
-        scope_result = ScopeEngine(config, site.base_url).evaluate(normalized.normalized_url)
-        resource = get_or_create_resource(db, normalized) if scope_result.in_scope else None
+        scope_result = ScopeEngine(config, site.base_url, normalization_version).evaluate(
+            raw_url, site.base_url
+        )
+        normalized = scope_result.normalized
+        if normalized is None:
+            raise UrlNormalizationError(scope_result.exclusion_reason or "URL is invalid")
+        resource = (
+            get_or_create_resource(
+                db,
+                normalized,
+                normalization_version=normalization_version,
+            )
+            if scope_result.in_scope
+            else None
+        )
         normalized_url = normalized.normalized_url
         validation_state = "valid" if scope_result.in_scope else "rejected"
         validation_message = None if scope_result.in_scope else scope_result.exclusion_reason
@@ -189,7 +212,9 @@ def upsert_source_entry(
         validation_message = str(exc)
         scope_decision = "unsupported_scheme" if "unsupported scheme" in str(exc) else "invalid_url"
 
-    existing = (
+    policy_key = scope_result.site_policy_key if normalized_url else None
+    existing = policy_index.get(policy_key) if policy_index is not None and policy_key else None
+    existing = existing or (
         db.scalar(
             select(UrlSourceEntry).where(
                 UrlSourceEntry.url_source_id == source.id,
@@ -215,6 +240,8 @@ def upsert_source_entry(
         existing.scope_decision = scope_decision
         existing.resource_id = resource_id
         db.flush()
+        if policy_index is not None and policy_key:
+            policy_index[policy_key] = existing
         return existing, "duplicate" if source_type == "manual" else "updated"
     entry = UrlSourceEntry(
         url_source_id=source.id,
@@ -233,6 +260,8 @@ def upsert_source_entry(
     )
     db.add(entry)
     db.flush()
+    if policy_index is not None and policy_key:
+        policy_index[policy_key] = entry
     return entry, "added"
 
 
@@ -245,15 +274,38 @@ def _get_site_source(db: Session, site_id: int, source_id: int) -> UrlSource | N
     )
 
 
-def _normalize_source_url(value: str | None, site: WebsiteProperty) -> str:
+def _normalize_source_url(db: Session, value: str | None, site: WebsiteProperty) -> str:
     if not value:
         raise ValueError("Source URL is required.")
     config = ScopeConfig.from_dict(site.scope_config)
-    normalized = normalize_url(value, site.base_url, config.drop_query_parameters)
-    result = ScopeEngine(config, site.base_url).evaluate(normalized.normalized_url)
+    result = ScopeEngine(config, site.base_url, active_url_normalization_version(db)).evaluate(
+        value, site.base_url
+    )
+    normalized = result.normalized
+    if normalized is None:
+        raise ValueError(result.exclusion_reason or "Source URL is invalid.")
     if not result.in_scope:
         raise ValueError(result.exclusion_reason or "Source URL is outside site scope.")
     return normalized.normalized_url
+
+
+def _source_policy_index(
+    db: Session,
+    source: UrlSource,
+    site: WebsiteProperty,
+) -> dict[str, UrlSourceEntry]:
+    config = ScopeConfig.from_dict(site.scope_config)
+    engine = ScopeEngine(config, site.base_url, active_url_normalization_version(db))
+    index: dict[str, UrlSourceEntry] = {}
+    for entry in db.scalars(
+        select(UrlSourceEntry)
+        .where(UrlSourceEntry.url_source_id == source.id)
+        .order_by(UrlSourceEntry.id)
+    ):
+        result = engine.evaluate(entry.raw_url, site.base_url)
+        if result.site_policy_key:
+            index.setdefault(result.site_policy_key, entry)
+    return index
 
 
 def _ensure_unique_source(

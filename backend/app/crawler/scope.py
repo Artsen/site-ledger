@@ -3,7 +3,14 @@ from fnmatch import fnmatchcase
 from typing import Any
 
 from app.browser.config import DEFAULTS
-from app.crawler.url_normalizer import NormalizedUrl, UrlNormalizationError, normalize_url
+from app.crawler.url_normalizer import (
+    URL_NORMALIZATION_V1_VERSION,
+    URL_NORMALIZATION_V2_VERSION,
+    NormalizedUrl,
+    UrlNormalizationError,
+    normalize_url_for_version,
+    site_url_policy_key,
+)
 
 ScopeDecision = str
 
@@ -97,14 +104,19 @@ class ScopeResult:
     in_scope: bool
     normalized: NormalizedUrl | None = None
     exclusion_reason: str | None = None
+    site_policy_key: str | None = None
 
 
 class ScopeEngine:
-    def __init__(self, config: ScopeConfig, starting_url: str):
+    def __init__(
+        self,
+        config: ScopeConfig,
+        starting_url: str,
+        normalization_version: str = URL_NORMALIZATION_V1_VERSION,
+    ):
         self.config = config
-        self.starting_url = normalize_url(
-            starting_url, drop_query_params=config.drop_query_parameters
-        )
+        self.normalization_version = normalization_version
+        self.starting_url = self._normalize(starting_url)
         if not self.config.allowed_host_patterns:
             self.config.allowed_host_patterns = [self.starting_url.host]
 
@@ -112,39 +124,83 @@ class ScopeEngine:
         self, raw_url: str, base_url: str | None = None, seen: set[str] | None = None
     ) -> ScopeResult:
         try:
-            normalized = normalize_url(raw_url, base_url, self.config.drop_query_parameters)
+            normalized = self._normalize(raw_url, base_url)
         except (UrlNormalizationError, ValueError) as exc:
             message = str(exc)
             decision = "unsupported_scheme" if "unsupported scheme" in message else "invalid_url"
             return ScopeResult(decision, False, None, message)
 
+        policy_key = self.policy_key(normalized)
         if normalized.scheme not in {"http", "https"}:
             return ScopeResult(
-                "unsupported_scheme", False, normalized, "Only HTTP and HTTPS are supported"
+                "unsupported_scheme",
+                False,
+                normalized,
+                "Only HTTP and HTTPS are supported",
+                policy_key,
             )
         if not _host_matches_any(
             normalized.host, self.config.allowed_host_patterns, self.config.follow_subdomains
         ):
             return ScopeResult(
-                "external", False, normalized, "Host is outside allowed host patterns"
+                "external",
+                False,
+                normalized,
+                "Host is outside allowed host patterns",
+                policy_key,
             )
         if _host_matches_any(normalized.host, self.config.excluded_host_patterns, True):
             return ScopeResult(
-                "excluded_host", False, normalized, "Host matched excluded host patterns"
+                "excluded_host",
+                False,
+                normalized,
+                "Host matched excluded host patterns",
+                policy_key,
             )
         if self.config.included_path_prefixes and not any(
             normalized.path.startswith(prefix) for prefix in self.config.included_path_prefixes
         ):
             return ScopeResult(
-                "excluded_path", False, normalized, "Path did not match included prefixes"
+                "excluded_path",
+                False,
+                normalized,
+                "Path did not match included prefixes",
+                policy_key,
             )
         if any(normalized.path.startswith(prefix) for prefix in self.config.excluded_path_prefixes):
-            return ScopeResult("excluded_path", False, normalized, "Path matched excluded prefixes")
-        if seen is not None and normalized.normalized_url in seen:
             return ScopeResult(
-                "already_seen", False, normalized, "URL was already queued or fetched"
+                "excluded_path",
+                False,
+                normalized,
+                "Path matched excluded prefixes",
+                policy_key,
             )
-        return ScopeResult("crawlable", True, normalized)
+        if seen is not None and policy_key in seen:
+            return ScopeResult(
+                "already_seen",
+                False,
+                normalized,
+                "URL was already queued or fetched",
+                policy_key,
+            )
+        return ScopeResult("crawlable", True, normalized, site_policy_key=policy_key)
+
+    def _normalize(self, raw_url: str, base_url: str | None = None) -> NormalizedUrl:
+        return normalize_url_for_version(
+            raw_url,
+            normalization_version=self.normalization_version,
+            base_url=base_url,
+            drop_query_params=(
+                self.config.drop_query_parameters
+                if self.normalization_version == URL_NORMALIZATION_V1_VERSION
+                else ()
+            ),
+        )
+
+    def policy_key(self, normalized: NormalizedUrl) -> str:
+        if self.normalization_version == URL_NORMALIZATION_V2_VERSION:
+            return site_url_policy_key(normalized, self.config.drop_query_parameters)
+        return normalized.normalized_url
 
 
 def _host_matches_any(host: str, patterns: list[str], follow_subdomains: bool) -> bool:

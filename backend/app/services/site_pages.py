@@ -18,6 +18,7 @@ from app.schemas.page_workspaces import (
     BulkPageMetadata,
     PageMetadataUpdate,
 )
+from app.services.url_identity import resolve_resource_id
 
 
 def ensure_site_page(
@@ -48,10 +49,13 @@ def ensure_site_page(
 
 
 def find_site_page(db: Session, site_id: int, resource_id: int) -> SitePage | None:
+    resolved_id = resolve_resource_id(db, resource_id)
+    if resolved_id is None:
+        return None
     return db.scalar(
         select(SitePage).where(
             SitePage.website_property_id == site_id,
-            SitePage.resource_id == resource_id,
+            SitePage.resource_id == resolved_id,
         )
     )
 
