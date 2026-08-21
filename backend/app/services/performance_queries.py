@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql import Select
 
@@ -40,8 +40,9 @@ def list_performance_runs(
         if job.performance_run_id is not None
     }
     health = worker_health(db, get_settings().job_worker_offline_seconds)
+    retention = _retention_counts(db, [run.id for run in runs])
     return PerformanceRunList(
-        items=[_run_read(run, jobs.get(run.id), health) for run in runs],
+        items=[_run_read(run, jobs.get(run.id), health, retention.get(run.id)) for run in runs],
         total=total,
         limit=limit,
         offset=offset,
@@ -72,7 +73,8 @@ def get_performance_run(
     )
     health = worker_health(db, get_settings().job_worker_offline_seconds)
     return PerformanceRunDetail(
-        **_run_read(run, job, health).model_dump(), observations=observations
+        **_run_read(run, job, health, _retention_counts(db, [run.id]).get(run.id)).model_dump(),
+        observations=observations,
     )
 
 
@@ -260,13 +262,45 @@ def _observation_list(
 
 
 def _run_read(
-    run: PerformanceRun, job: BackgroundJob | None, health: WorkerHealth
+    run: PerformanceRun,
+    job: BackgroundJob | None,
+    health: WorkerHealth,
+    retained: tuple[int, int, int, int] | None = None,
 ) -> PerformanceRunRead:
+    retained_total, retained_ready, retained_unavailable, retained_failed = retained or (0, 0, 0, 0)
     return PerformanceRunRead(
         **{column.name: getattr(run, column.name) for column in run.__table__.columns},
         job_id=job.id if job else None,
         presentation_status=presentation_status(job, health) if job else run.status,
+        retained_observation_count=retained_total,
+        deleted_observation_count=max(run.completed_count - retained_total, 0),
+        retained_ready_count=retained_ready,
+        retained_unavailable_count=retained_unavailable,
+        retained_failed_count=retained_failed,
+        deleted_ready_count=max(run.ready_count - retained_ready, 0),
+        deleted_unavailable_count=max(run.unavailable_count - retained_unavailable, 0),
+        deleted_failed_count=max(run.failed_count - retained_failed, 0),
     )
+
+
+def _retention_counts(db: Session, run_ids: list[int]) -> dict[int, tuple[int, int, int, int]]:
+    if not run_ids:
+        return {}
+    rows = db.execute(
+        select(
+            PerformanceObservation.performance_run_id,
+            func.count(PerformanceObservation.id),
+            func.count(case((PerformanceObservation.outcome == "ready", 1))),
+            func.count(case((PerformanceObservation.outcome == "unavailable", 1))),
+            func.count(case((PerformanceObservation.outcome == "failed", 1))),
+        )
+        .where(PerformanceObservation.performance_run_id.in_(run_ids))
+        .group_by(PerformanceObservation.performance_run_id)
+    )
+    return {
+        run_id: (total, ready, unavailable, failed)
+        for run_id, total, ready, unavailable, failed in rows
+    }
 
 
 def performance_observation_read(

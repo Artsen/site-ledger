@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
-import { Link, useOutletContext, useParams } from "react-router-dom";
+import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 
 import { getPerformanceObservationPresentation } from "../api/client";
+import { PerformanceObservationDeleteAction } from "../components/observability/EvidenceDeletionActions";
 import { DefinitionList } from "../components/ui/DefinitionList";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
@@ -18,6 +19,7 @@ type WorkspaceContext = { site: Site };
 
 export function PerformanceObservationPage() {
   const { site } = useOutletContext<WorkspaceContext>();
+  const navigate = useNavigate();
   const { observationId = "" } = useParams();
   const detail = useQuery({
     queryKey: [
@@ -53,8 +55,8 @@ export function PerformanceObservationPage() {
     observation.provider === "crux" && observation.outcome === "unavailable";
   return (
     <div className="space-y-5">
-      <header>
-        <Link
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div><Link
           className="text-sm underline"
           to={`/sites/${site.id}/performance/runs/${observation.performance_run_id}`}
         >
@@ -74,6 +76,8 @@ export function PerformanceObservationPage() {
             ? ` · ${formatCollectionPeriod(observation.provider_period_json)}`
             : ""}
         </p>
+        </div>
+        <PerformanceObservationDeleteAction siteId={String(site.id)} observationId={observation.id} onDeleted={(result) => navigate(`/sites/${site.id}/performance/runs/${observation.performance_run_id}`, { state: { evidenceDeletion: result } })} />
       </header>
       <section className="border-y border-stone-200 py-4">
         <div className="flex flex-wrap items-center gap-2">

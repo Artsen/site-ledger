@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 
 import {
   cancelPerformanceRun,
@@ -17,6 +17,7 @@ import {
   performancePayloadUrl,
 } from "../api/client";
 import { Button } from "../components/ui/Button";
+import { EvidenceDeletionNotice, PerformanceRunDeleteAction, PerformanceSiteDeleteAction, type EvidenceDeleteResult } from "../components/observability/EvidenceDeletionActions";
 import { CollectionPageSelector } from "../components/observability/CollectionPageSelector";
 import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -43,8 +44,10 @@ const RAW_RENDER_LIMIT = 200_000;
 
 export function SitePerformancePage() {
   const { site } = useOutletContext<WorkspaceContext>();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [collecting, setCollecting] = useState(false);
+  const [deletionResult, setDeletionResult] = useState<EvidenceDeleteResult | null>(null);
   const pagination = useUrlPagination({ prefix: "performance", defaultLimit: 100 });
   const requested = searchParams.get("view");
   const view: View = requested === "lab" || requested === "field" || requested === "runs" ? requested : "overview";
@@ -79,7 +82,8 @@ export function SitePerformancePage() {
       <Summary label="Desktop field coverage" value={`${fieldDesktop} / ${measuredPages} Pages`} />
     </section>
     <Tabs tabs={[{ id: "overview", label: "Overview" }, { id: "lab", label: "Lab" }, { id: "field", label: "Field" }, { id: "runs", label: "Runs", count: runs.data?.total }]} active={view} onChange={(next) => setSearchParams(next === "overview" ? {} : { view: next })} />
-    {view === "runs" ? <RunsTable siteId={String(site.id)} runs={runs.data?.items ?? []} /> : <LatestEvidence siteId={String(site.id)} data={latest.data} pagination={pagination} />}
+    <EvidenceDeletionNotice result={deletionResult ?? (location.state as { evidenceDeletion?: EvidenceDeleteResult } | null)?.evidenceDeletion ?? null} />
+    {view === "runs" ? <div className="space-y-4"><RunsTable siteId={String(site.id)} runs={runs.data?.items ?? []} onDeleted={setDeletionResult} /><section className="border-t border-stone-200 pt-4"><h2 className="font-semibold">Performance evidence lifecycle</h2><p className="mb-3 mt-1 text-sm text-stone-600">Purge all Performance evidence for this Site without deleting Pages or Accessibility evidence.</p><PerformanceSiteDeleteAction siteId={String(site.id)} onDeleted={setDeletionResult} /></section></div> : <LatestEvidence siteId={String(site.id)} data={latest.data} pagination={pagination} />}
     {collecting && capabilities.data ? <CollectPanel siteId={String(site.id)} capabilities={capabilities.data} onClose={() => setCollecting(false)} /> : null}
   </div>;
 }
@@ -123,9 +127,9 @@ function formatMetric(key: string, value: number, unit: string) {
   return `${Math.round(value)} ${unit}`;
 }
 
-function RunsTable({ siteId, runs }: { siteId: string; runs: PerformanceRun[] }) {
+function RunsTable({ siteId, runs, onDeleted }: { siteId: string; runs: PerformanceRun[]; onDeleted: (result: EvidenceDeleteResult) => void }) {
   if (!runs.length) return <EmptyState title="No Performance runs" message="Performance collection is manual and on demand." />;
-  return <div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="px-3 py-2">Run</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Progress</th><th className="hidden px-3 py-2 sm:table-cell">Results</th><th className="hidden px-3 py-2 md:table-cell">Created</th></tr></thead><tbody>{runs.map((run) => <tr key={run.id} className="border-t border-stone-100"><td className="px-3 py-2"><Link className="font-medium underline" to={`/sites/${siteId}/performance/runs/${run.id}`}>Run {run.id}</Link><span className="block text-xs text-stone-500">{run.target_count} Pages / {run.request_count} requests</span></td><td className="px-3 py-2"><StatusBadge status={run.presentation_status ?? run.status} /></td><td className="px-3 py-2 tabular-nums">{run.completed_count} / {run.request_count}</td><td className="hidden px-3 py-2 sm:table-cell">{run.ready_count} ready, {run.unavailable_count} unavailable, {run.failed_count} failed</td><td className="hidden whitespace-nowrap px-3 py-2 md:table-cell">{formatDate(run.created_at)}</td></tr>)}</tbody></table></div>;
+  return <div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="px-3 py-2">Run</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Progress</th><th className="hidden px-3 py-2 sm:table-cell">Evidence retained</th><th className="hidden px-3 py-2 md:table-cell">Created</th><th className="px-3 py-2">Actions</th></tr></thead><tbody>{runs.map((run) => <tr key={run.id} className="border-t border-stone-100"><td className="px-3 py-2"><Link className="font-medium underline" to={`/sites/${siteId}/performance/runs/${run.id}`}>Run {run.id}</Link><span className="block text-xs text-stone-500">{run.target_count} Pages / {run.request_count} collected</span></td><td className="px-3 py-2"><StatusBadge status={run.presentation_status ?? run.status} /></td><td className="px-3 py-2 tabular-nums">{run.completed_count} / {run.request_count}</td><td className="hidden px-3 py-2 sm:table-cell">{run.retained_observation_count} retained, {run.deleted_observation_count} deleted<span className="block text-xs text-stone-500">{run.retained_ready_count} ready, {run.retained_unavailable_count} unavailable, {run.retained_failed_count} failed</span></td><td className="hidden whitespace-nowrap px-3 py-2 md:table-cell">{formatDate(run.created_at)}</td><td className="px-3 py-2">{TERMINAL.has(run.status) ? <PerformanceRunDeleteAction compact siteId={siteId} runId={run.id} onDeleted={onDeleted} /> : <span className="text-xs text-stone-500" title="Cancel or wait for this run to finish before deleting it.">Active</span>}</td></tr>)}</tbody></table></div>;
 }
 
 function CollectPanel({ siteId, capabilities, onClose, initialResourceId }: { siteId: string; capabilities: PerformanceProviderCapabilities; onClose: () => void; initialResourceId?: number }) {
@@ -198,14 +202,17 @@ export function PerformanceRunPage() {
   const { site } = useOutletContext<WorkspaceContext>();
   const { runId = "" } = useParams();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
   const run = useQuery({ queryKey: ["performance-run", String(site.id), runId], queryFn: () => getPerformanceRun(String(site.id), runId, "?limit=500"), refetchInterval: (query) => query.state.data && !TERMINAL.has(query.state.data.status) ? 2_000 : false });
   const cancel = useMutation({ mutationFn: () => cancelPerformanceRun(String(site.id), runId), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["performance-run", String(site.id), runId] }) });
   if (run.isLoading) return <LoadingBlock label="Loading Performance run..." />;
   if (run.error) return <ErrorBanner error={run.error} title="Could not load Performance run" />;
   if (!run.data) return null;
   const value = run.data;
-  return <div className="space-y-5"><header className="flex flex-wrap items-start justify-between gap-3"><div><Link className="text-sm underline" to={`/sites/${site.id}/performance?view=runs`}>Performance runs</Link><h1 className="mt-1 text-xl font-semibold">Run {value.id}</h1></div>{!TERMINAL.has(value.status) ? <Button type="button" variant="danger" loading={cancel.isPending} onClick={() => cancel.mutate()}>Cancel run</Button> : null}</header>
-    <section className="rounded-md border border-stone-200 bg-white p-4"><DefinitionList items={[{ label: "Status", value: <StatusBadge status={value.presentation_status ?? value.status} /> }, { label: "Progress", value: `${value.completed_count} of ${value.request_count} requests` }, { label: "Ready", value: value.ready_count }, { label: "Unavailable", value: value.unavailable_count }, { label: "Failed", value: value.failed_count }, { label: "Created", value: formatDate(value.created_at) }, { label: "Started", value: value.started_at ? formatDate(value.started_at) : "Not started" }, { label: "Finished", value: value.finished_at ? formatDate(value.finished_at) : "In progress" }, { label: "Providers", value: value.configuration_json.providers.join(", ") }, { label: "Dimensions", value: [...value.configuration_json.pagespeed_strategies, ...value.configuration_json.crux_form_factors].join(", ") }]} />{value.error_summary ? <p className="mt-4 text-sm text-red-700">{value.error_summary}</p> : null}</section>
+  const deletionResult = (location.state as { evidenceDeletion?: EvidenceDeleteResult } | null)?.evidenceDeletion ?? null;
+  return <div className="space-y-5"><EvidenceDeletionNotice result={deletionResult} /><header className="flex flex-wrap items-start justify-between gap-3"><div><Link className="text-sm underline" to={`/sites/${site.id}/performance?view=runs`}>Performance runs</Link><h1 className="mt-1 text-xl font-semibold">Run {value.id}</h1></div>{!TERMINAL.has(value.status) ? <Button type="button" variant="danger" loading={cancel.isPending} onClick={() => cancel.mutate()}>Cancel run</Button> : <PerformanceRunDeleteAction siteId={String(site.id)} runId={value.id} onDeleted={(result) => navigate(`/sites/${site.id}/performance?view=runs`, { state: { evidenceDeletion: result } })} />}</header>
+    <section className="rounded-md border border-stone-200 bg-white p-4"><DefinitionList items={[{ label: "Status", value: <StatusBadge status={value.presentation_status ?? value.status} /> }, { label: "Collection progress", value: `${value.completed_count} of ${value.request_count} requests` }, { label: "Evidence retained", value: `${value.retained_observation_count} retained / ${value.deleted_observation_count} deleted` }, { label: "Retained outcomes", value: `${value.retained_ready_count} ready, ${value.retained_unavailable_count} unavailable, ${value.retained_failed_count} failed` }, { label: "Created", value: formatDate(value.created_at) }, { label: "Started", value: value.started_at ? formatDate(value.started_at) : "Not started" }, { label: "Finished", value: value.finished_at ? formatDate(value.finished_at) : "In progress" }, { label: "Providers", value: value.configuration_json.providers.join(", ") }, { label: "Dimensions", value: [...value.configuration_json.pagespeed_strategies, ...value.configuration_json.crux_form_factors].join(", ") }]} />{value.error_summary ? <p className="mt-4 text-sm text-red-700">{value.error_summary}</p> : null}</section>
     <ObservationTable siteId={String(site.id)} observations={value.observations.items} />
   </div>;
 }

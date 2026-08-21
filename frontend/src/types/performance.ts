@@ -34,11 +34,51 @@ export type PerformanceRun = {
   ready_count: number;
   unavailable_count: number;
   failed_count: number;
+  retained_observation_count: number;
+  deleted_observation_count: number;
+  retained_ready_count: number;
+  retained_unavailable_count: number;
+  retained_failed_count: number;
+  deleted_ready_count: number;
+  deleted_unavailable_count: number;
+  deleted_failed_count: number;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
   error_summary: string | null;
   job_id: number | null;
+};
+
+export type PerformanceObservationDeletePreview = {
+  can_delete: boolean; reason: string | null; observation_id: number; run_id: number;
+  provider: string; dimension: string; outcome: string; observed_at: string;
+  target_kind: string; requested_target: string; payload_present: boolean;
+  payload_shared: boolean; payload_reference_count: number; payload_raw_bytes: number;
+  payload_stored_bytes: number; raw_bytes_reclaimable: number; stored_bytes_reclaimable: number;
+};
+
+export type PerformanceRunDeletePreview = {
+  can_delete: boolean; reason: string | null; run_id: number; status: string;
+  created_at: string; finished_at: string | null; completed_count: number; ready_count: number;
+  unavailable_count: number; failed_count: number; retained_observation_count: number;
+  deleted_observation_count: number; payload_blobs_referenced: number; exclusive_payload_blobs: number;
+  shared_payload_blobs: number; raw_bytes_reclaimable: number; stored_bytes_reclaimable: number;
+  background_jobs_removed: number; job_events_removed: number;
+};
+
+export type PerformanceSiteDeletePreview = {
+  can_delete: boolean; reason: string | null; site_id: number; runs: number;
+  retained_observations: number; already_deleted_observations: number;
+  background_jobs_removed: number; job_events_removed: number; payload_blobs_referenced: number;
+  exclusive_payload_blobs: number; shared_payload_blobs: number; raw_bytes_reclaimable: number;
+  stored_bytes_reclaimable: number;
+};
+
+export type PerformanceDeleteResult = {
+  deleted_observation_id: number | null; deleted_run_id: number | null; purged_site_id: number | null;
+  runs_deleted: number; observations_deleted: number; background_jobs_deleted: number;
+  job_events_deleted: number; payload_blob_records_deleted: number; payload_blob_files_deleted: number;
+  raw_bytes_reclaimed: number; stored_bytes_reclaimed: number; warnings: string[];
 };
 
 export type PerformanceObservation = {

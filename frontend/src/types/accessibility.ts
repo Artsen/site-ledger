@@ -27,6 +27,12 @@ export type AccessibilityRun = {
   completed_count: number;
   ready_count: number;
   failed_count: number;
+  retained_observation_count: number;
+  deleted_observation_count: number;
+  retained_ready_count: number;
+  retained_failed_count: number;
+  deleted_ready_count: number;
+  deleted_failed_count: number;
   axe_core_version: string;
   detector_bundle_sha256: string;
   integration_version: string;
@@ -39,6 +45,40 @@ export type AccessibilityRun = {
   finished_at: string | null;
   error_summary: string | null;
   job_id: number | null;
+};
+
+export type AccessibilityObservationDeletePreview = {
+  can_delete: boolean; reason: string | null; observation_id: number; run_id: number;
+  profile: string; outcome: string; observed_at: string; requested_url: string;
+  violation_rule_count: number; incomplete_rule_count: number; rule_rows_deleted: number;
+  node_rows_deleted: number; payload_present: boolean; payload_shared: boolean;
+  payload_reference_count: number; payload_raw_bytes: number; payload_stored_bytes: number;
+  raw_bytes_reclaimable: number; stored_bytes_reclaimable: number;
+};
+
+export type AccessibilityRunDeletePreview = {
+  can_delete: boolean; reason: string | null; run_id: number; status: string;
+  created_at: string; finished_at: string | null; completed_count: number; ready_count: number;
+  failed_count: number; retained_observation_count: number; deleted_observation_count: number;
+  rule_rows_removed: number; node_rows_removed: number; payload_blobs_referenced: number;
+  exclusive_payload_blobs: number; shared_payload_blobs: number; raw_bytes_reclaimable: number;
+  stored_bytes_reclaimable: number; background_jobs_removed: number; job_events_removed: number;
+};
+
+export type AccessibilitySiteDeletePreview = {
+  can_delete: boolean; reason: string | null; site_id: number; runs: number;
+  retained_observations: number; already_deleted_observations: number; rule_rows_removed: number;
+  node_rows_removed: number; background_jobs_removed: number; job_events_removed: number;
+  payload_blobs_referenced: number; exclusive_payload_blobs: number; shared_payload_blobs: number;
+  raw_bytes_reclaimable: number; stored_bytes_reclaimable: number;
+};
+
+export type AccessibilityDeleteResult = {
+  deleted_observation_id: number | null; deleted_run_id: number | null; purged_site_id: number | null;
+  runs_deleted: number; observations_deleted: number; rule_rows_deleted: number; node_rows_deleted: number;
+  background_jobs_deleted: number; job_events_deleted: number; payload_blob_records_deleted: number;
+  payload_blob_files_deleted: number; raw_bytes_reclaimed: number; stored_bytes_reclaimed: number;
+  warnings: string[];
 };
 
 export type AccessibilityObservation = {

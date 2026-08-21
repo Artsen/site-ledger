@@ -68,6 +68,12 @@ class AccessibilityRunRead(BaseModel):
     error_summary: str | None
     job_id: int | None = None
     presentation_status: str | None = None
+    retained_observation_count: int = 0
+    deleted_observation_count: int = 0
+    retained_ready_count: int = 0
+    retained_failed_count: int = 0
+    deleted_ready_count: int = 0
+    deleted_failed_count: int = 0
 
 
 class AccessibilityObservationRead(BaseModel):
@@ -241,3 +247,87 @@ class AccessibilityRuleDetail(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class AccessibilityObservationDeletePreview(BaseModel):
+    can_delete: bool
+    reason: str | None = None
+    observation_id: int
+    run_id: int
+    profile: str
+    outcome: str
+    observed_at: datetime
+    requested_url: str
+    violation_rule_count: int
+    incomplete_rule_count: int
+    rule_rows_deleted: int
+    node_rows_deleted: int
+    payload_present: bool
+    payload_shared: bool
+    payload_reference_count: int
+    payload_raw_bytes: int
+    payload_stored_bytes: int
+    raw_bytes_reclaimable: int
+    stored_bytes_reclaimable: int
+
+
+class AccessibilityRunDeletePreview(BaseModel):
+    can_delete: bool
+    reason: str | None = None
+    run_id: int
+    status: str
+    created_at: datetime
+    finished_at: datetime | None
+    completed_count: int
+    ready_count: int
+    failed_count: int
+    retained_observation_count: int
+    deleted_observation_count: int
+    rule_rows_removed: int
+    node_rows_removed: int
+    payload_blobs_referenced: int
+    exclusive_payload_blobs: int
+    shared_payload_blobs: int
+    raw_bytes_reclaimable: int
+    stored_bytes_reclaimable: int
+    background_jobs_removed: int
+    job_events_removed: int
+
+
+class AccessibilitySiteDeletePreview(BaseModel):
+    can_delete: bool
+    reason: str | None = None
+    site_id: int
+    runs: int
+    retained_observations: int
+    already_deleted_observations: int
+    rule_rows_removed: int
+    node_rows_removed: int
+    background_jobs_removed: int
+    job_events_removed: int
+    payload_blobs_referenced: int
+    exclusive_payload_blobs: int
+    shared_payload_blobs: int
+    raw_bytes_reclaimable: int
+    stored_bytes_reclaimable: int
+
+
+class AccessibilityDeleteConfirmation(BaseModel):
+    confirmation: str
+
+
+class AccessibilityDeleteResult(BaseModel):
+    deleted_observation_id: int | None = None
+    deleted_run_id: int | None = None
+    purged_site_id: int | None = None
+    runs_deleted: int = 0
+    observations_deleted: int = 0
+    rule_rows_deleted: int = 0
+    node_rows_deleted: int = 0
+    background_jobs_deleted: int = 0
+    job_events_deleted: int = 0
+    payload_blob_records_deleted: int = 0
+    payload_blob_files_deleted: int = 0
+    raw_bytes_reclaimed: int = 0
+    stored_bytes_reclaimed: int = 0
+    warnings: list[str] = Field(default_factory=list)

@@ -435,6 +435,17 @@ Do not disable checks or weaken tests to force passing results.
 - Real identity migration requires no active mutating jobs, a verified SQLite backup plus content
   store inventory, and post-migration invariants. Rebuild projections/comparisons from evidence.
 - Full manifests are sensitive local artifacts. Migration must not rewrite immutable evidence bytes.
+- Performance and Accessibility observations are immutable while retained but may be explicitly
+  deleted by the user; terminal Run collection counters must never be rewritten by observation
+  deletion, and retention counts derive from currently retained observations.
+- Delete raw payload blobs/files only after the last retained reference. Shared payloads survive
+  partial deletion, and concurrent content-addressed inserts must reconcile to the committed winner.
+- Accessibility rule/node evidence is owned by its observation and disappears with it. Observability
+  deletion must never delete `WebResource` or `SitePage` identity or affect the other evidence domain.
+- Active collection blocks deletion and GC in that domain. Commit database deletion before
+  best-effort file removal; report cleanup failures without resurrecting evidence.
+- Full Site deletion must apply the same reference-aware observability cleanup and must not leak
+  unreferenced payload records or files.
 
 ## Pull Request Format
 
