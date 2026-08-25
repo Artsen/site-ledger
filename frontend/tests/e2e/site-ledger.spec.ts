@@ -144,6 +144,66 @@ test("Page and Inventory removal lifecycles support removed views and restoratio
   await expect(page.getByText("https://example.com/pricing")).toBeVisible();
 });
 
+test("Sources support loaded-page selection and one bulk refresh request", async ({ page }) => {
+  await mockApi(page);
+  let selectedSourceIds: number[] = [];
+  const source = (id: number, name: string, url: string) => ({
+    id,
+    website_property_id: 3,
+    parent_source_id: null,
+    root_source_id: null,
+    source_type: "sitemap",
+    name,
+    source_url: url,
+    normalized_source_url: url,
+    is_active: true,
+    discovery_mode: "configured",
+    settings_json: {},
+    last_refresh_status: "completed",
+    last_refresh_started_at: "2026-08-25T00:00:00Z",
+    last_refresh_finished_at: "2026-08-25T00:00:01Z",
+    last_successful_refresh_at: "2026-08-25T00:00:01Z",
+    last_http_status: 200,
+    last_error_type: null,
+    last_error_message: null,
+    created_at: "2026-08-25T00:00:00Z",
+    updated_at: "2026-08-25T00:00:01Z",
+    current_entry_count: 10,
+  });
+  await page.route("**/api/sites/3/sources?*", async (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          source(4, "Main sitemap", "https://example.com/sitemap.xml"),
+          source(7, "Secondary sitemap", "https://example.com/secondary.xml"),
+        ],
+        total: 2,
+        limit: 100,
+        offset: 0,
+      }),
+    }),
+  );
+  await page.route("**/api/sites/3/sources/bulk-refresh", async (route) => {
+    selectedSourceIds = (await route.request().postDataJSON()).source_ids;
+    await route.fulfill({ status: 202, contentType: "application/json", body: "[]" });
+  });
+  await page.route("**/api/jobs?*job_type=source_refresh*", async (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0, limit: 100, offset: 0 }),
+    }),
+  );
+
+  await page.goto("/sites/3/sources");
+  await page
+    .getByLabel("Select all refreshable Sources on this loaded page")
+    .check();
+  await expect(page.getByText("2 Sources selected")).toBeVisible();
+  await page.getByRole("button", { name: "Refresh selected" }).click();
+  await expect.poll(() => selectedSourceIds).toEqual([4, 7]);
+});
+
 test("observability details are human-readable before raw evidence", async ({ page }) => {
   await mockApi(page);
   for (const viewport of [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1024, height: 768 }, { width: 1440, height: 960 }]) {

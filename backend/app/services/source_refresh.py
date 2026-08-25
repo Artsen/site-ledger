@@ -19,7 +19,7 @@ from app.crawler.safe_fetch import (
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.security import DestinationResolutionError, UnsafeDestinationError
 from app.crawler.url_normalizer import normalize_url_for_version
-from app.models import SourceRefresh, UrlSource, UrlSourceEntry, WebsiteProperty
+from app.models import BackgroundJob, SourceRefresh, UrlSource, UrlSourceEntry, WebsiteProperty
 from app.parsers.compression import (
     DecompressedResponseTooLargeError,
     InvalidGzipError,
@@ -27,6 +27,8 @@ from app.parsers.compression import (
 )
 from app.parsers.robots import parse_sitemap_directives
 from app.parsers.sitemap import SitemapParseError, parse_sitemap_xml
+from app.services.background_jobs import enqueue_source_refresh_job
+from app.services.job_types import ACTIVE_JOB_STATUSES
 from app.services.source_management import _source_policy_index, upsert_source_entry
 from app.services.url_identity import active_url_normalization_version
 from app.storage.ai_document_store import LocalAiDocumentStore
@@ -70,6 +72,47 @@ def create_source_refresh(
         db.commit()
         db.refresh(refresh)
     return refresh
+
+
+def enqueue_bulk_source_refreshes(
+    db: Session, site_id: int, source_ids: list[int]
+) -> list[SourceRefresh] | None:
+    if db.get(WebsiteProperty, site_id) is None:
+        return None
+    requested_ids = list(dict.fromkeys(source_ids))
+    sources = list(
+        db.scalars(
+            select(UrlSource).where(
+                UrlSource.website_property_id == site_id,
+                UrlSource.id.in_(requested_ids),
+            )
+        )
+    )
+    if len(sources) != len(requested_ids):
+        raise ValueError("One or more Sources do not belong to this Site.")
+    active_source_ids = set(
+        db.scalars(
+            select(SourceRefresh.url_source_id)
+            .join(BackgroundJob, BackgroundJob.source_refresh_id == SourceRefresh.id)
+            .where(
+                SourceRefresh.url_source_id.in_(requested_ids),
+                BackgroundJob.status.in_(ACTIVE_JOB_STATUSES),
+            )
+        )
+    )
+    if active_source_ids:
+        raise ValueError("One or more Sources already have an active refresh job.")
+
+    sources_by_id = {source.id: source for source in sources}
+    refreshes = []
+    for source_id in requested_ids:
+        refresh = _start_refresh(db, sources_by_id[source_id], status="queued")
+        enqueue_source_refresh_job(db, refresh)
+        refreshes.append(refresh)
+    db.commit()
+    for refresh in refreshes:
+        db.refresh(refresh)
+    return refreshes
 
 
 async def execute_source_refresh(

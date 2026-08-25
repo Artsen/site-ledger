@@ -2,9 +2,17 @@ import gzip
 
 import httpx
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import ScanSeed, SiteInventorySuppression, UrlSourceEntry, WebResource
+from app.models import (
+    BackgroundJob,
+    ScanSeed,
+    SiteInventorySuppression,
+    SourceRefresh,
+    UrlSourceEntry,
+    WebResource,
+)
 from app.parsers.compression import (
     DecompressedResponseTooLargeError,
     InvalidGzipError,
@@ -32,7 +40,11 @@ from app.services.source_management import (
     upsert_source_entry,
 )
 from app.services.source_queries import list_inventory, list_scan_seeds, list_sources
-from app.services.source_refresh import discover_from_robots, refresh_source
+from app.services.source_refresh import (
+    discover_from_robots,
+    enqueue_bulk_source_refreshes,
+    refresh_source,
+)
 from app.storage.content_store import LocalContentStore
 
 
@@ -138,6 +150,48 @@ async def test_sitemap_refresh_persists_entries_and_current_membership(db_sessio
     assert entries[0].validation_state == "valid"
     assert entries[1].scope_decision == "external"
     assert entries[2].validation_state == "invalid"
+
+
+def test_bulk_source_refresh_is_deduplicated_atomic_and_queued(db_session: Session) -> None:
+    site = create_site(db_session, _site_payload())
+    first = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="First", source_url="https://example.com/first.xml"),
+    )
+    second = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Second", source_url="https://example.com/second.xml"),
+    )
+    other_site = create_site(
+        db_session,
+        WebsitePropertyCreate(
+            name="Other",
+            base_url="https://other.example/",
+            scope_config=ScopeConfigPayload(),
+        ),
+    )
+    other = create_source(
+        db_session,
+        other_site.id,
+        UrlSourceCreate(name="Other", source_url="https://other.example/sitemap.xml"),
+    )
+    assert first is not None and second is not None and other is not None
+
+    refreshes = enqueue_bulk_source_refreshes(db_session, site.id, [second.id, first.id, second.id])
+    assert refreshes is not None
+    assert [refresh.url_source_id for refresh in refreshes] == [second.id, first.id]
+    assert all(refresh.status == "queued" for refresh in refreshes)
+    assert db_session.scalar(select(func.count(BackgroundJob.id))) == 2
+
+    with pytest.raises(ValueError, match="do not belong"):
+        enqueue_bulk_source_refreshes(db_session, site.id, [first.id, other.id])
+    assert db_session.scalar(select(func.count(SourceRefresh.id))) == 2
+
+    with pytest.raises(ValueError, match="active refresh"):
+        enqueue_bulk_source_refreshes(db_session, site.id, [first.id])
+    assert db_session.scalar(select(func.count(SourceRefresh.id))) == 2
 
 
 @pytest.mark.asyncio

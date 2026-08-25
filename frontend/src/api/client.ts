@@ -107,6 +107,7 @@ export const listSources = (siteId: string, query = "") => request<UrlSourceList
 export const createSource = (siteId: string, payload: Partial<UrlSource>) => request<UrlSource>(`/api/sites/${siteId}/sources`, { method: "POST", body: JSON.stringify(payload) });
 export const deleteSource = (siteId: string, sourceId: string) => request<{ deleted_source_id: number }>(`/api/sites/${siteId}/sources/${sourceId}`, { method: "DELETE" });
 export const refreshSource = (siteId: string, sourceId: string) => request<SourceRefresh>(`/api/sites/${siteId}/sources/${sourceId}/refresh`, { method: "POST" });
+export const bulkRefreshSources = (siteId: string, sourceIds: number[]) => request<SourceRefresh[]>(`/api/sites/${siteId}/sources/bulk-refresh`, { method: "POST", body: JSON.stringify({ source_ids: sourceIds }) });
 export const discoverRobots = (siteId: string) => request<SourceRefresh>(`/api/sites/${siteId}/sources/discover-robots`, { method: "POST" });
 export const cancelSourceRefresh = (refreshId: string) => request<SourceRefresh>(`/api/source-refreshes/${refreshId}/cancel`, { method: "POST" });
 export const listSourceEntries = (siteId: string, sourceId: string, query = "") => request<UrlSourceEntryList>(`/api/sites/${siteId}/sources/${sourceId}/entries${query}`);

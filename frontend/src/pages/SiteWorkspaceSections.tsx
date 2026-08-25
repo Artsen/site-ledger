@@ -10,6 +10,7 @@ import {
 import {
   addManualUrls,
   bulkCreateInventorySuppressions,
+  bulkRefreshSources,
   bulkRestoreInventorySuppressions,
   bulkPageWorkspaceState,
   bulkPageCategories,
@@ -994,6 +995,7 @@ export function SiteRecentScansSection({
 
 export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mode?: "sources" | "ai-documents" }) {
   const queryClient = useQueryClient();
+  const [selectedSourceIds, setSelectedSourceIds] = useState<number[]>([]);
   const [sitemapUrl, setSitemapUrl] = useState("");
   const [manualUrls, setManualUrls] = useState("");
   const [aiSourceUrl, setAiSourceUrl] = useState("");
@@ -1006,7 +1008,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
     queryKey: ["jobs", "site-sources", String(site.id)],
     queryFn: () =>
       listJobs(
-        `?website_property_id=${site.id}&job_type=source_refresh&limit=50`,
+        `?website_property_id=${site.id}&job_type=source_refresh&limit=100`,
       ),
     refetchInterval: (query) =>
       query.state.data?.items.some((job) => !isTerminalStatus(job.status))
@@ -1049,6 +1051,19 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       });
       await queryClient.invalidateQueries({
         queryKey: ["inventory", String(site.id)],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["jobs", "site-sources", String(site.id)],
+      });
+    },
+  });
+  const bulkRefresh = useMutation({
+    mutationFn: (sourceIds: number[]) =>
+      bulkRefreshSources(String(site.id), sourceIds),
+    onSuccess: async () => {
+      setSelectedSourceIds([]);
+      await queryClient.invalidateQueries({
+        queryKey: ["sources", String(site.id)],
       });
       await queryClient.invalidateQueries({
         queryKey: ["jobs", "site-sources", String(site.id)],
@@ -1137,11 +1152,25 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
         ? source.source_type === "ai_document"
         : source.source_type !== "ai_document",
     ) ?? [];
+  const sourceJobStatusKey =
+    sourceJobs.data?.items
+      .map((job) => `${job.id}:${job.status}`)
+      .join("|") ?? "";
+  useEffect(() => {
+    if (!sourceJobStatusKey) return;
+    void queryClient.invalidateQueries({
+      queryKey: ["sources", String(site.id)],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ["inventory", String(site.id)],
+    });
+  }, [queryClient, site.id, sourceJobStatusKey]);
 
   return (
     <div className="space-y-5">
       {addSitemap.error ||
       refresh.error ||
+      bulkRefresh.error ||
       robots.error ||
       manual.error ||
       remove.error ||
@@ -1150,6 +1179,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
           error={
             addSitemap.error ??
             refresh.error ??
+            bulkRefresh.error ??
             robots.error ??
             manual.error ??
             remove.error ??
@@ -1230,6 +1260,20 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       </section> : null}
       <section className="rounded-md border border-stone-200 bg-white shadow-sm">
         <h2 className="p-4 text-base font-semibold">Sources</h2>
+        {selectedSourceIds.length ? (
+          <div className="flex flex-wrap items-center gap-3 border-t border-stone-200 bg-stone-50 px-4 py-3">
+            <span className="text-sm font-medium">
+              {plural(selectedSourceIds.length, "Source")} selected
+            </span>
+            <Button
+              type="button"
+              loading={bulkRefresh.isPending}
+              onClick={() => bulkRefresh.mutate(selectedSourceIds)}
+            >
+              Refresh selected
+            </Button>
+          </div>
+        ) : null}
         {sources.isLoading ? <LoadingBlock label="Loading sources..." /> : null}
         {displayedSources.length ? (
           <SourceTable
@@ -1237,6 +1281,8 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
             sources={displayedSources}
             jobs={sourceJobs.data?.items ?? []}
             workerHealth={workerHealth.data}
+            selectedSourceIds={selectedSourceIds}
+            setSelectedSourceIds={setSelectedSourceIds}
             onRefresh={(source) => refresh.mutate(source)}
             onCancel={(job) => cancelRefresh.mutate(job)}
             onDelete={(source) => {
@@ -1264,6 +1310,8 @@ function SourceTable({
   sources,
   jobs,
   workerHealth,
+  selectedSourceIds,
+  setSelectedSourceIds,
   onRefresh,
   onCancel,
   onDelete,
@@ -1272,17 +1320,39 @@ function SourceTable({
   sources: UrlSource[];
   jobs: Job[];
   workerHealth?: WorkerHealth;
+  selectedSourceIds: number[];
+  setSelectedSourceIds: (sourceIds: number[]) => void;
   onRefresh: (source: UrlSource) => void;
   onCancel: (job: Job) => void;
   onDelete: (source: UrlSource) => void;
 }) {
   const values = { source: (source: UrlSource) => source.name, type: (source: UrlSource) => source.source_type, status: (source: UrlSource) => activeSourceJob(jobs, source.id)?.presentation_status ?? source.last_refresh_status, urls: (source: UrlSource) => source.current_entry_count };
   const { sortedItems, sort, changeSort } = useTableSort(sources, values);
+  const selectableSources = sources.filter(
+    (source) => !activeSourceJob(jobs, source.id),
+  );
+  const allSelected =
+    selectableSources.length > 0 &&
+    selectableSources.every((source) => selectedSourceIds.includes(source.id));
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
+            <th className="px-3 py-2">
+              <input
+                aria-label="Select all refreshable Sources on this loaded page"
+                type="checkbox"
+                checked={allSelected}
+                onChange={(event) =>
+                  setSelectedSourceIds(
+                    event.target.checked
+                      ? selectableSources.map((source) => source.id)
+                      : [],
+                  )
+                }
+              />
+            </th>
             {[["source", "Source"], ["type", "Type"], ["status", "Status"], ["urls", "URLs"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
             <th className="px-3 py-2 font-medium">Actions</th>
           </tr>
@@ -1300,6 +1370,21 @@ function SourceTable({
                 workerHealth?.queued_work_has_worker === false);
             return (
               <tr key={source.id} className="border-t border-stone-100">
+                <td className="px-3 py-2">
+                  <input
+                    aria-label={`Select ${source.name}`}
+                    type="checkbox"
+                    disabled={Boolean(activeJob)}
+                    checked={selectedSourceIds.includes(source.id)}
+                    onChange={(event) =>
+                      setSelectedSourceIds(
+                        event.target.checked
+                          ? [...selectedSourceIds, source.id]
+                          : selectedSourceIds.filter((id) => id !== source.id),
+                      )
+                    }
+                  />
+                </td>
                 <td className="max-w-md px-3 py-2">
                   <span className="block font-medium">{source.name}</span>
                   <span className="block truncate font-mono text-xs text-stone-500">

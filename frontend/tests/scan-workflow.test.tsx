@@ -50,6 +50,7 @@ const api = vi.hoisted(() => ({
   createSource: vi.fn(),
   deleteSource: vi.fn(),
   refreshSource: vi.fn(),
+  bulkRefreshSources: vi.fn(),
   cancelSourceRefresh: vi.fn(),
   discoverRobots: vi.fn(),
   discoverAiDocumentSources: vi.fn(),
@@ -284,6 +285,7 @@ beforeEach(() => {
   api.createSource.mockResolvedValue(sourceFixture);
   api.deleteSource.mockResolvedValue({ deleted_source_id: 4 });
   api.refreshSource.mockResolvedValue(refreshFixture);
+  api.bulkRefreshSources.mockResolvedValue([refreshFixture]);
   api.cancelSourceRefresh.mockResolvedValue({ ...refreshFixture, status: "cancelled" });
   api.discoverRobots.mockResolvedValue(refreshFixture);
   api.listSourceEntries.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
@@ -673,6 +675,73 @@ describe("saved sites workflow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /inventory/i }));
     expect(await screen.findByText("https://example.com/a")).toBeInTheDocument();
+  });
+
+  it("selects Sources for one bounded bulk refresh", async () => {
+    api.listSources.mockResolvedValue({
+      items: [
+        sourceFixture,
+        {
+          ...sourceFixture,
+          id: 7,
+          name: "Secondary sitemap",
+          source_url: "https://example.com/secondary.xml",
+          normalized_source_url: "https://example.com/secondary.xml",
+        },
+      ],
+      total: 2,
+      limit: 100,
+      offset: 0,
+    });
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=sources");
+
+    const selectAll = await screen.findByLabelText(
+      "Select all refreshable Sources on this loaded page",
+    );
+    fireEvent.click(selectAll);
+    expect(screen.getByText("2 Sources selected")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh selected" }));
+
+    await waitFor(() =>
+      expect(api.bulkRefreshSources).toHaveBeenCalledWith("3", [4, 7]),
+    );
+  });
+
+  it("replaces a stale queued Source status when its job is terminal", async () => {
+    api.listSources
+      .mockResolvedValueOnce({
+        items: [{ ...sourceFixture, last_refresh_status: "queued" }],
+        total: 1,
+        limit: 100,
+        offset: 0,
+      })
+      .mockResolvedValue({
+        items: [sourceFixture],
+        total: 1,
+        limit: 100,
+        offset: 0,
+      });
+    api.listJobs.mockResolvedValue({
+      items: [
+        {
+          ...jobFixture,
+          id: 12,
+          job_type: "source_refresh",
+          source_refresh_id: 5,
+          website_property_id: 3,
+          payload_json: { source_id: 4, source_refresh_id: 5 },
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    });
+
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=sources");
+
+    await waitFor(() => expect(api.listSources.mock.calls.length).toBeGreaterThan(1));
+    expect(await screen.findByText("Completed")).toBeInTheDocument();
+    expect(screen.queryByText("Queued")).not.toBeInTheDocument();
   });
 
   it("shows persistent site pages and observation history", async () => {

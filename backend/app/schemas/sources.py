@@ -83,6 +83,10 @@ class SourceRefreshRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class BulkSourceRefreshCreate(BaseModel):
+    source_ids: list[int] = Field(min_length=1, max_length=100)
+
+
 class UrlSourceEntryRead(BaseModel):
     id: int
     url_source_id: int

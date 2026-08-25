@@ -90,6 +90,7 @@ from app.schemas.sites import (
 from app.schemas.sources import (
     BulkInventorySuppressionCreate,
     BulkInventorySuppressionRestore,
+    BulkSourceRefreshCreate,
     InventoryList,
     InventorySuppressionCreate,
     InventorySuppressionRead,
@@ -207,7 +208,11 @@ from app.services.source_queries import (
     list_source_entries,
     list_sources,
 )
-from app.services.source_refresh import create_robots_discovery_refresh, create_source_refresh
+from app.services.source_refresh import (
+    create_robots_discovery_refresh,
+    create_source_refresh,
+    enqueue_bulk_source_refreshes,
+)
 from app.services.url_identity import (
     active_url_normalization_version,
     inspect_url_identity_state,
@@ -588,6 +593,25 @@ def post_source_refresh(site_id: int, source_id: int, db: DbSession) -> SourceRe
     db.commit()
     db.refresh(refresh)
     return SourceRefreshRead.model_validate(refresh, from_attributes=True)
+
+
+@router.post(
+    "/sites/{site_id}/sources/bulk-refresh",
+    response_model=list[SourceRefreshRead],
+    status_code=202,
+)
+def post_bulk_source_refresh(
+    site_id: int, payload: BulkSourceRefreshCreate, db: DbSession
+) -> list[SourceRefreshRead]:
+    try:
+        refreshes = enqueue_bulk_source_refreshes(db, site_id, payload.source_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if refreshes is None:
+        raise HTTPException(404, "Site not found")
+    return [
+        SourceRefreshRead.model_validate(refresh, from_attributes=True) for refresh in refreshes
+    ]
 
 
 @router.post(
