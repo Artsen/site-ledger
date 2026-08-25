@@ -9,6 +9,8 @@ import {
 
 import {
   addManualUrls,
+  bulkCreateInventorySuppressions,
+  bulkRestoreInventorySuppressions,
   bulkPageWorkspaceState,
   bulkPageCategories,
   bulkPageMetadata,
@@ -1368,10 +1370,15 @@ function activeSourceJob(jobs: Job[], sourceId: number) {
   );
 }
 
+function inventoryItemKey(item: InventoryItem) {
+  return item.normalized_url ?? `raw:${String(item.sources[0]?.entry_id)}`;
+}
+
 export function SiteInventorySection({ site }: { site: Site }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const pagination = useUrlPagination({ prefix: "inventory" });
   const queryClient = useQueryClient();
+  const [selected, setSelected] = useState<string[]>([]);
   const query = new URLSearchParams();
   for (const key of [
     "search",
@@ -1389,6 +1396,24 @@ export function SiteInventorySection({ site }: { site: Site }) {
     queryKey: ["inventory", String(site.id), query.toString()],
     queryFn: () => listInventory(String(site.id), `?${query.toString()}`),
   });
+  const selectedItems =
+    inventory.data?.items.filter((item) =>
+      selected.includes(inventoryItemKey(item)),
+    ) ?? [];
+  const selectedEntryIds = selectedItems
+    .filter((item) => !item.is_suppressed)
+    .map((item) => Number(item.sources[0]?.entry_id));
+  const selectedSuppressionIds = selectedItems
+    .filter(
+      (item): item is InventoryItem & { suppression_id: number } =>
+        item.is_suppressed && item.suppression_id !== null,
+    )
+    .map((item) => item.suppression_id);
+  const refreshInventory = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["inventory", String(site.id)] });
+    await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
+    setSelected([]);
+  };
   useEffect(() => pagination.ensureValid(inventory.data?.total), [inventory.data?.total, pagination]);
   const controls = inventory.data ? <PaginatedTableControls total={inventory.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inventory URL" isLoading={inventory.isFetching && !inventory.isLoading} /> : null;
   return (
@@ -1397,13 +1422,14 @@ export function SiteInventorySection({ site }: { site: Site }) {
         <select
           aria-label="Inventory visibility"
           value={searchParams.get("visibility") ?? "active"}
-          onChange={(event) =>
+          onChange={(event) => {
+            setSelected([]);
             setSearchParam(
               setSearchParams,
               "visibility",
               event.target.value === "active" ? "" : event.target.value,
-            )
-          }
+            );
+          }}
           className="rounded-md border border-stone-300 px-3 py-2 text-sm"
         >
           <option value="active">Active</option>
@@ -1462,14 +1488,51 @@ export function SiteInventorySection({ site }: { site: Site }) {
         <ErrorBanner error={inventory.error} title="Could not load Inventory" />
       ) : null}
       {controls ? <div className="mb-4">{controls}</div> : null}
+      {selected.length ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-stone-200 bg-stone-50 p-3">
+          <span className="text-sm font-medium">
+            {plural(selected.length, "URL")} selected
+          </span>
+          {selectedEntryIds.length ? (
+            <LifecycleAction
+              label="Remove selected"
+              title={`Remove ${plural(selectedEntryIds.length, "selected URL")} from Inventory?`}
+              description="Source declarations and historical evidence remain intact. The URLs will also be skipped as Inventory-derived scan seeds."
+              confirmLabel="Remove from Inventory"
+              action={async () => {
+                await bulkCreateInventorySuppressions(
+                  String(site.id),
+                  selectedEntryIds,
+                );
+                await refreshInventory();
+              }}
+            />
+          ) : null}
+          {selectedSuppressionIds.length ? (
+            <LifecycleAction
+              label="Restore selected"
+              title={`Restore ${plural(selectedSuppressionIds.length, "selected URL")} to Inventory?`}
+              description="The URLs will return to active Inventory and Inventory-derived scan seeding."
+              confirmLabel="Restore to Inventory"
+              restore
+              action={async () => {
+                await bulkRestoreInventorySuppressions(
+                  String(site.id),
+                  selectedSuppressionIds,
+                );
+                await refreshInventory();
+              }}
+            />
+          ) : null}
+        </div>
+      ) : null}
       {inventory.data?.items.length ? (
         <InventoryTable
           siteId={site.id}
           items={inventory.data.items}
-          onChanged={async () => {
-            await queryClient.invalidateQueries({ queryKey: ["inventory", String(site.id)] });
-            await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
-          }}
+          selected={selected}
+          setSelected={setSelected}
+          onChanged={refreshInventory}
         />
       ) : !inventory.isLoading ? (
         <EmptyState
@@ -1489,19 +1552,38 @@ export function SiteInventorySection({ site }: { site: Site }) {
 function InventoryTable({
   siteId,
   items,
+  selected,
+  setSelected,
   onChanged,
 }: {
   siteId: number;
   items: InventoryItem[];
+  selected: string[];
+  setSelected: (keys: string[]) => void;
   onChanged: () => Promise<void>;
 }) {
   const values = { url: (item: InventoryItem) => item.normalized_url, sources: (item: InventoryItem) => item.source_count, scope: (item: InventoryItem) => item.scope_decision, validation: (item: InventoryItem) => item.validation_state, classification: (item: InventoryItem) => item.classification };
   const { sortedItems, sort, changeSort } = useTableSort(items, values);
+  const allSelected =
+    items.length > 0 &&
+    items.every((item) => selected.includes(inventoryItemKey(item)));
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
+            <th className="px-3 py-2">
+              <input
+                aria-label="Select all Inventory URLs on this loaded page"
+                type="checkbox"
+                checked={allSelected}
+                onChange={(event) =>
+                  setSelected(
+                    event.target.checked ? items.map(inventoryItemKey) : [],
+                  )
+                }
+              />
+            </th>
             {[["url", "URL"], ["sources", "Sources"], ["scope", "Scope"], ["validation", "Validation"], ["classification", "Classification"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
             <th className="px-3 py-2">Actions</th>
           </tr>
@@ -1515,6 +1597,21 @@ function InventoryTable({
               }
               className="border-t border-stone-100 align-top"
             >
+              <td className="px-3 py-2">
+                <input
+                  aria-label={`Select ${item.normalized_url ?? "invalid URL"}`}
+                  type="checkbox"
+                  checked={selected.includes(inventoryItemKey(item))}
+                  onChange={(event) => {
+                    const key = inventoryItemKey(item);
+                    setSelected(
+                      event.target.checked
+                        ? [...selected, key]
+                        : selected.filter((value) => value !== key),
+                    );
+                  }}
+                />
+              </td>
               <td className="max-w-xl px-3 py-2 font-mono text-xs">
                 {item.normalized_url ?? "Invalid URL"}
               </td>

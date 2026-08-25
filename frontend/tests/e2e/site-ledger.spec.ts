@@ -110,6 +110,14 @@ test("Page and Inventory removal lifecycles support removed views and restoratio
     inventorySuppressed = false;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted_suppression_id: 15 }) });
   });
+  await page.route("**/api/sites/3/inventory/suppressions/bulk", async (route) => {
+    inventorySuppressed = true;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ selected: 1, changed: 1, unchanged: 0, rejected: 0 }) });
+  });
+  await page.route("**/api/sites/3/inventory/suppressions/bulk-restore", async (route) => {
+    inventorySuppressed = false;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ selected: 1, changed: 1, unchanged: 0, rejected: 0 }) });
+  });
 
   await page.goto("/sites/3/pages");
   await page.getByRole("button", { name: "Remove", exact: true }).click();
@@ -123,12 +131,14 @@ test("Page and Inventory removal lifecycles support removed views and restoratio
   await expect(page.getByText("https://example.com/pricing")).toBeVisible();
 
   await page.goto("/sites/3/inventory");
-  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByLabel("Select all Inventory URLs on this loaded page").check();
+  await page.getByRole("button", { name: "Remove selected" }).click();
   await page.getByRole("button", { name: "Remove from Inventory" }).click();
   await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
   await page.getByLabel("Inventory visibility").selectOption("suppressed");
   await expect(page.getByText("https://example.com/pricing")).toBeVisible();
-  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await page.getByLabel("Select all Inventory URLs on this loaded page").check();
+  await page.getByRole("button", { name: "Restore selected" }).click();
   await page.getByRole("button", { name: "Restore to Inventory" }).click();
   await page.getByLabel("Inventory visibility").selectOption("active");
   await expect(page.getByText("https://example.com/pricing")).toBeVisible();

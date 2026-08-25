@@ -17,6 +17,8 @@ from app.schemas.sites import WebsitePropertyCreate
 from app.schemas.sources import UrlSourceCreate
 from app.services.inventory_lifecycle import (
     ManagedSourceEntryError,
+    bulk_create_inventory_suppressions,
+    bulk_restore_inventory_suppressions,
     create_inventory_suppression,
     delete_inventory_suppression,
     remove_manual_source_entry,
@@ -444,6 +446,62 @@ def test_inventory_suppression_remains_compatible_across_url_identity_versions(
     assert removed is not None and removed.total == 1
     assert repeated is not None and repeated.id == legacy.id
     assert db_session.query(SiteInventorySuppression).count() == 1
+
+
+def test_bulk_inventory_suppression_is_atomic_deduplicated_and_restorable(
+    db_session: Session,
+) -> None:
+    site = create_site(db_session, _site_payload())
+    _source, entries, *_ = add_manual_urls(
+        db_session,
+        site.id,
+        "https://example.com/first\nhttps://example.com/second\nhttps://example.com/third",
+    )
+    other = create_site(
+        db_session,
+        WebsitePropertyCreate(name="Other", base_url="https://other.example/"),
+    )
+    _other_source, other_entries, *_ = add_manual_urls(
+        db_session, other.id, "https://other.example/first"
+    )
+
+    created = bulk_create_inventory_suppressions(
+        db_session, site.id, [entries[0].id, entries[0].id, entries[1].id]
+    )
+    assert created is not None
+    assert (created.selected, created.changed, created.unchanged) == (2, 2, 0)
+    repeated = bulk_create_inventory_suppressions(
+        db_session, site.id, [entries[0].id, entries[1].id]
+    )
+    assert repeated is not None
+    assert (repeated.selected, repeated.changed, repeated.unchanged) == (2, 0, 2)
+    assert db_session.query(SiteInventorySuppression).count() == 2
+
+    with pytest.raises(ValueError, match="do not belong"):
+        bulk_create_inventory_suppressions(
+            db_session, site.id, [entries[2].id, other_entries[0].id]
+        )
+    assert db_session.query(SiteInventorySuppression).count() == 2
+
+    suppressions = (
+        db_session.query(SiteInventorySuppression).order_by(SiteInventorySuppression.id).all()
+    )
+    restored = bulk_restore_inventory_suppressions(
+        db_session, site.id, [suppressions[0].id, suppressions[0].id]
+    )
+    assert restored is not None
+    assert (restored.selected, restored.changed, restored.unchanged) == (1, 1, 0)
+    assert db_session.query(SiteInventorySuppression).count() == 1
+
+    other_suppression = create_inventory_suppression(db_session, other.id, other_entries[0].id)
+    assert other_suppression is not None
+    with pytest.raises(ValueError, match="do not belong"):
+        bulk_restore_inventory_suppressions(
+            db_session,
+            site.id,
+            [suppressions[1].id, other_suppression.id],
+        )
+    assert db_session.get(SiteInventorySuppression, suppressions[1].id) is not None
 
 
 def test_source_duplicate_and_deletion_resource_cleanup(db_session: Session, tmp_path) -> None:

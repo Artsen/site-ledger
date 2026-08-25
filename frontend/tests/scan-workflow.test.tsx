@@ -60,6 +60,8 @@ const api = vi.hoisted(() => ({
   listInventory: vi.fn(),
   createInventorySuppression: vi.fn(),
   deleteInventorySuppression: vi.fn(),
+  bulkCreateInventorySuppressions: vi.fn(),
+  bulkRestoreInventorySuppressions: vi.fn(),
   listSitePages: vi.fn(),
   getSitePage: vi.fn(),
   getPageStructuredContent: vi.fn(),
@@ -289,6 +291,8 @@ beforeEach(() => {
   api.removeManualSourceEntry.mockResolvedValue({});
   api.createInventorySuppression.mockResolvedValue({ id: 15 });
   api.deleteInventorySuppression.mockResolvedValue({ deleted_suppression_id: 15 });
+  api.bulkCreateInventorySuppressions.mockResolvedValue({ selected: 1, changed: 1, unchanged: 0, rejected: 0 });
+  api.bulkRestoreInventorySuppressions.mockResolvedValue({ selected: 1, changed: 1, unchanged: 0, rejected: 0 });
   api.listInventory.mockResolvedValue({ items: [inventoryFixture], total: 1, limit: 50, offset: 0 });
   api.listSitePages.mockResolvedValue({ items: [persistentPageFixture], total: 1, limit: 50, offset: 0 });
   api.getSitePage.mockResolvedValue({ page: persistentPageFixture, site_id: 3, site_name: "Example Site" });
@@ -715,6 +719,42 @@ describe("saved sites workflow", () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");
     fireEvent.change(await screen.findByLabelText("Inventory visibility"), { target: { value: "suppressed" } });
     await waitFor(() => expect(api.listInventory).toHaveBeenLastCalledWith("3", expect.stringContaining("visibility=suppressed")));
+  });
+
+  it("selects Inventory rows for bulk remove and restore", async () => {
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");
+
+    fireEvent.click(await screen.findByLabelText("Select https://example.com/a"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove selected" }));
+    expect(screen.getByRole("dialog", { name: "Remove 1 selected URL from Inventory?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove from Inventory" }));
+    await waitFor(() =>
+      expect(api.bulkCreateInventorySuppressions).toHaveBeenCalledWith("3", [6]),
+    );
+
+    cleanup();
+    api.listInventory.mockResolvedValue({
+      items: [{
+        ...inventoryFixture,
+        suppression_id: 15,
+        is_suppressed: true,
+        suppressed_at: "2026-08-25T00:00:00Z",
+      }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    renderRoute(
+      <SiteDetailPage />,
+      "/sites/:siteId",
+      "/sites/3?tab=inventory&visibility=suppressed",
+    );
+    fireEvent.click(await screen.findByLabelText("Select https://example.com/a"));
+    fireEvent.click(screen.getByRole("button", { name: "Restore selected" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore to Inventory" }));
+    await waitFor(() =>
+      expect(api.bulkRestoreInventorySuppressions).toHaveBeenCalledWith("3", [15]),
+    );
   });
 
   it("blocks saved-site scans with invalid scan-specific numeric overrides", async () => {

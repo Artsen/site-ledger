@@ -88,6 +88,8 @@ from app.schemas.sites import (
     WebsitePropertyUpdate,
 )
 from app.schemas.sources import (
+    BulkInventorySuppressionCreate,
+    BulkInventorySuppressionRestore,
     InventoryList,
     InventorySuppressionCreate,
     InventorySuppressionRead,
@@ -121,6 +123,8 @@ from app.services.graph_queries import (
 )
 from app.services.inventory_lifecycle import (
     ManagedSourceEntryError,
+    bulk_create_inventory_suppressions,
+    bulk_restore_inventory_suppressions,
     create_inventory_suppression,
     delete_inventory_suppression,
     remove_manual_source_entry,
@@ -751,6 +755,38 @@ def remove_inventory_suppression(
     if deleted is None:
         raise HTTPException(404, "Inventory suppression not found")
     return {"deleted_suppression_id": deleted}
+
+
+@router.post(
+    "/sites/{site_id}/inventory/suppressions/bulk",
+    response_model=BulkMutationResult,
+)
+def post_bulk_inventory_suppressions(
+    site_id: int, payload: BulkInventorySuppressionCreate, db: DbSession
+) -> BulkMutationResult:
+    try:
+        result = bulk_create_inventory_suppressions(db, site_id, payload.entry_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.post(
+    "/sites/{site_id}/inventory/suppressions/bulk-restore",
+    response_model=BulkMutationResult,
+)
+def post_bulk_inventory_suppression_restore(
+    site_id: int, payload: BulkInventorySuppressionRestore, db: DbSession
+) -> BulkMutationResult:
+    try:
+        result = bulk_restore_inventory_suppressions(db, site_id, payload.suppression_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
 
 
 @router.get("/sites/{site_id}/page-categories", response_model=PageCategoryList)

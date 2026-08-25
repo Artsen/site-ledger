@@ -10,6 +10,7 @@ from app.crawler.url_normalizer import (
     normalize_url_for_version,
 )
 from app.models import SiteInventorySuppression, UrlSource, UrlSourceEntry, WebsiteProperty
+from app.schemas.page_workspaces import BulkMutationResult
 from app.services.url_identity import active_url_normalization_version
 
 
@@ -72,6 +73,75 @@ def delete_inventory_suppression(db: Session, site_id: int, suppression_id: int)
     db.delete(suppression)
     db.commit()
     return suppression_id
+
+
+def bulk_create_inventory_suppressions(
+    db: Session, site_id: int, entry_ids: list[int]
+) -> BulkMutationResult | None:
+    site = db.get(WebsiteProperty, site_id)
+    if site is None:
+        return None
+    requested_ids = set(entry_ids)
+    entries = list(
+        db.scalars(
+            select(UrlSourceEntry)
+            .join(UrlSource, UrlSource.id == UrlSourceEntry.url_source_id)
+            .where(
+                UrlSource.website_property_id == site_id,
+                UrlSourceEntry.id.in_(requested_ids),
+            )
+        )
+    )
+    if len(entries) != len(requested_ids):
+        raise ValueError("One or more Inventory entries do not belong to this Site.")
+
+    identities: dict[tuple[str, str], tuple[str | None, UrlSourceEntry]] = {}
+    for entry in entries:
+        kind, value, version = inventory_suppression_identity(db, site, entry)
+        identities.setdefault((kind, value), (version, entry))
+
+    suppressions = inventory_suppression_map(db, site)
+    changed = 0
+    for (kind, value), (version, entry) in identities.items():
+        if matching_inventory_suppression(db, site, entry, suppressions) is not None:
+            continue
+        suppression = SiteInventorySuppression(
+            website_property_id=site_id,
+            target_kind=kind,
+            target_value=value,
+            normalization_version=version,
+        )
+        db.add(suppression)
+        suppressions[(kind, value)] = suppression
+        changed += 1
+    db.commit()
+    return BulkMutationResult(
+        selected=len(identities),
+        changed=changed,
+        unchanged=len(identities) - changed,
+    )
+
+
+def bulk_restore_inventory_suppressions(
+    db: Session, site_id: int, suppression_ids: list[int]
+) -> BulkMutationResult | None:
+    if db.get(WebsiteProperty, site_id) is None:
+        return None
+    requested_ids = set(suppression_ids)
+    suppressions = list(
+        db.scalars(
+            select(SiteInventorySuppression).where(
+                SiteInventorySuppression.website_property_id == site_id,
+                SiteInventorySuppression.id.in_(requested_ids),
+            )
+        )
+    )
+    if len(suppressions) != len(requested_ids):
+        raise ValueError("One or more Inventory suppressions do not belong to this Site.")
+    for suppression in suppressions:
+        db.delete(suppression)
+    db.commit()
+    return BulkMutationResult(selected=len(suppressions), changed=len(suppressions), unchanged=0)
 
 
 def remove_manual_source_entry(

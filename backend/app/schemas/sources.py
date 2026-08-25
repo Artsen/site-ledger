@@ -146,6 +146,14 @@ class InventorySuppressionCreate(BaseModel):
     entry_id: int = Field(gt=0)
 
 
+class BulkInventorySuppressionCreate(BaseModel):
+    entry_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BulkInventorySuppressionRestore(BaseModel):
+    suppression_ids: list[int] = Field(min_length=1, max_length=500)
+
+
 class InventorySuppressionRead(BaseModel):
     id: int
     website_property_id: int
