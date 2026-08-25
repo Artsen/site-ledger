@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.crawler.config import STARTING_URL_MAX_LENGTH
 from app.schemas.scans import ScopeConfigPayload
 from app.services.site_classifications import normalize_classification
 
@@ -33,7 +34,7 @@ def normalize_timezone(value: str | None) -> str | None:
 
 class WebsitePropertyBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    base_url: str = Field(min_length=1, max_length=2048)
+    base_url: str = Field(min_length=1, max_length=STARTING_URL_MAX_LENGTH)
     description: str | None = Field(default=None, max_length=5000)
     group_key: str = "Other"
     locale: str | None = Field(default=None, max_length=32)
@@ -75,7 +76,7 @@ class WebsitePropertyCreate(WebsitePropertyBase):
 
 class WebsitePropertyUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    base_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    base_url: str | None = Field(default=None, min_length=1, max_length=STARTING_URL_MAX_LENGTH)
     description: str | None = Field(default=None, max_length=5000)
     group_key: str | None = None
     locale: str | None = Field(default=None, max_length=32)

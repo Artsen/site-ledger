@@ -3,6 +3,11 @@ from fnmatch import fnmatchcase
 from typing import Any
 
 from app.browser.config import DEFAULTS
+from app.crawler.config import (
+    ScopeConfigValidationError,
+    validate_crawl_config,
+    validate_starting_url_length,
+)
 from app.crawler.url_normalizer import (
     URL_NORMALIZATION_V1_VERSION,
     URL_NORMALIZATION_V2_VERSION,
@@ -60,13 +65,15 @@ class ScopeConfig:
     render_max_total_network_bytes: int = DEFAULTS.render_max_total_network_bytes
     render_max_resource_bytes: int = DEFAULTS.render_max_resource_bytes
 
+    def __post_init__(self) -> None:
+        validate_crawl_config(self.to_dict())
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ScopeConfig":
-        config = cls()
-        for key, value in data.items():
-            if key in cls.__dataclass_fields__:
-                setattr(config, key, value)
-        return config
+        if not isinstance(data, dict):
+            raise ScopeConfigValidationError("scope_config must be an object")
+        values = {key: value for key, value in data.items() if key in cls.__dataclass_fields__}
+        return cls(**values)
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -114,6 +121,7 @@ class ScopeEngine:
         starting_url: str,
         normalization_version: str = URL_NORMALIZATION_V1_VERSION,
     ):
+        validate_starting_url_length(starting_url)
         self.config = config
         self.normalization_version = normalization_version
         self.starting_url = self._normalize(starting_url)

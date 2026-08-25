@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -56,6 +57,25 @@ LIMITS: dict[str, tuple[float, float]] = {
     "render_max_resource_bytes": (100_000, 50_000_000),
 }
 
+INTEGER_LIMIT_FIELDS = {
+    "render_max_pages",
+    "render_viewport_width",
+    "render_viewport_height",
+    "render_max_full_page_height",
+    "render_max_dom_bytes",
+    "render_max_screenshot_bytes",
+    "render_max_network_entries",
+    "render_max_console_entries",
+    "render_max_page_errors",
+    "render_max_total_network_bytes",
+    "render_max_resource_bytes",
+}
+
+STRING_LIMITS = {
+    "render_locale": 64,
+    "render_timezone": 255,
+}
+
 
 def capabilities() -> dict[str, Any]:
     return {
@@ -73,24 +93,51 @@ def capabilities() -> dict[str, Any]:
 
 def validate_render_config(values: dict[str, Any]) -> None:
     mode = values.get("render_mode", DEFAULTS.render_mode)
+    if not isinstance(mode, str):
+        raise ValueError("render_mode must be a string")
     if mode not in RENDER_MODES:
         raise ValueError(f"render_mode must be one of: {', '.join(RENDER_MODES)}")
     for name, (minimum, maximum) in LIMITS.items():
         value = values.get(name, getattr(DEFAULTS, name))
+        if name in INTEGER_LIMIT_FIELDS:
+            if type(value) is not int:
+                raise ValueError(f"{name} must be an integer")
+        elif (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"{name} must be a finite number")
         if not minimum <= value <= maximum:
             raise ValueError(f"{name} must be between {minimum:g} and {maximum:g}")
-    if mode != "none" and values.get("render_max_pages", DEFAULTS.render_max_pages) > values.get(
-        "max_pages", 100
-    ):
+    max_pages = values.get("max_pages", 100)
+    if type(max_pages) is not int:
+        raise ValueError("max_pages must be an integer")
+    if mode != "none" and values.get("render_max_pages", DEFAULTS.render_max_pages) > max_pages:
         raise ValueError("render_max_pages cannot exceed max_pages")
-    if values.get("render_color_scheme", DEFAULTS.render_color_scheme) not in {
+    color_scheme = values.get("render_color_scheme", DEFAULTS.render_color_scheme)
+    if not isinstance(color_scheme, str):
+        raise ValueError("render_color_scheme must be a string")
+    if color_scheme not in {
         "light",
         "dark",
         "no-preference",
     }:
         raise ValueError("render_color_scheme is unsupported")
-    if values.get("render_reduced_motion", DEFAULTS.render_reduced_motion) not in {
+    reduced_motion = values.get("render_reduced_motion", DEFAULTS.render_reduced_motion)
+    if not isinstance(reduced_motion, str):
+        raise ValueError("render_reduced_motion must be a string")
+    if reduced_motion not in {
         "reduce",
         "no-preference",
     }:
         raise ValueError("render_reduced_motion is unsupported")
+    capture_full_page = values.get("render_capture_full_page", DEFAULTS.render_capture_full_page)
+    if not isinstance(capture_full_page, bool):
+        raise ValueError("render_capture_full_page must be a boolean")
+    for name, max_length in STRING_LIMITS.items():
+        value = values.get(name, getattr(DEFAULTS, name))
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be a string")
+        if len(value) > max_length:
+            raise ValueError(f"{name} cannot exceed {max_length} characters")

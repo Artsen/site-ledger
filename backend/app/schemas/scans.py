@@ -4,30 +4,88 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 
 from app.browser.config import DEFAULTS, validate_render_config
+from app.crawler.config import (
+    COLLECTION_LIMITS,
+    CRAWL_LIMITS,
+    STARTING_URL_MAX_LENGTH,
+    STRING_LIMITS,
+    validate_crawl_config,
+)
 from app.schemas.page_workspaces import PageCategoryRead
 from app.schemas.projections import ProjectionMetadata
 
 
 class ScopeConfigPayload(BaseModel):
-    allowed_host_patterns: list[str] = Field(default_factory=list)
-    excluded_host_patterns: list[str] = Field(default_factory=list)
-    included_path_prefixes: list[str] = Field(default_factory=lambda: ["/"])
-    excluded_path_prefixes: list[str] = Field(default_factory=list)
+    allowed_host_patterns: list[str] = Field(
+        default_factory=list, max_length=COLLECTION_LIMITS["allowed_host_patterns"].max_items
+    )
+    excluded_host_patterns: list[str] = Field(
+        default_factory=list, max_length=COLLECTION_LIMITS["excluded_host_patterns"].max_items
+    )
+    included_path_prefixes: list[str] = Field(
+        default_factory=lambda: ["/"],
+        max_length=COLLECTION_LIMITS["included_path_prefixes"].max_items,
+    )
+    excluded_path_prefixes: list[str] = Field(
+        default_factory=list, max_length=COLLECTION_LIMITS["excluded_path_prefixes"].max_items
+    )
     follow_subdomains: bool = False
-    max_pages: int = 100
-    max_depth: int = 3
+    max_pages: int = Field(
+        default=100,
+        ge=CRAWL_LIMITS["max_pages"].minimum,
+        le=CRAWL_LIMITS["max_pages"].maximum,
+    )
+    max_depth: int = Field(
+        default=3,
+        ge=CRAWL_LIMITS["max_depth"].minimum,
+        le=CRAWL_LIMITS["max_depth"].maximum,
+    )
     respect_robots_txt: bool = False
-    request_timeout_seconds: float = 10
-    static_max_attempts: int = Field(default=2, ge=1, le=5)
-    static_retry_initial_delay_ms: int = Field(default=500, ge=0, le=60_000)
-    static_retry_max_delay_ms: int = Field(default=5000, ge=0, le=60_000)
-    max_html_response_bytes: int = 2_000_000
-    concurrent_requests_per_host: int = 2
-    delay_between_requests_ms: int = 0
-    user_agent: str = "WebsiteScanner/0.1"
-    drop_query_parameters: list[str] = Field(default_factory=list)
+    request_timeout_seconds: float = Field(
+        default=10,
+        ge=CRAWL_LIMITS["request_timeout_seconds"].minimum,
+        le=CRAWL_LIMITS["request_timeout_seconds"].maximum,
+    )
+    static_max_attempts: int = Field(
+        default=2,
+        ge=CRAWL_LIMITS["static_max_attempts"].minimum,
+        le=CRAWL_LIMITS["static_max_attempts"].maximum,
+    )
+    static_retry_initial_delay_ms: int = Field(
+        default=500,
+        ge=CRAWL_LIMITS["static_retry_initial_delay_ms"].minimum,
+        le=CRAWL_LIMITS["static_retry_initial_delay_ms"].maximum,
+    )
+    static_retry_max_delay_ms: int = Field(
+        default=5000,
+        ge=CRAWL_LIMITS["static_retry_max_delay_ms"].minimum,
+        le=CRAWL_LIMITS["static_retry_max_delay_ms"].maximum,
+    )
+    max_html_response_bytes: int = Field(
+        default=2_000_000,
+        ge=CRAWL_LIMITS["max_html_response_bytes"].minimum,
+        le=CRAWL_LIMITS["max_html_response_bytes"].maximum,
+    )
+    concurrent_requests_per_host: int = Field(
+        default=2,
+        ge=CRAWL_LIMITS["concurrent_requests_per_host"].minimum,
+        le=CRAWL_LIMITS["concurrent_requests_per_host"].maximum,
+    )
+    delay_between_requests_ms: int = Field(
+        default=0,
+        ge=CRAWL_LIMITS["delay_between_requests_ms"].minimum,
+        le=CRAWL_LIMITS["delay_between_requests_ms"].maximum,
+    )
+    user_agent: str = Field(default="WebsiteScanner/0.1", max_length=STRING_LIMITS["user_agent"])
+    drop_query_parameters: list[str] = Field(
+        default_factory=list, max_length=COLLECTION_LIMITS["drop_query_parameters"].max_items
+    )
     allow_private_networks: bool = False
-    max_redirects: int = 10
+    max_redirects: int = Field(
+        default=10,
+        ge=CRAWL_LIMITS["max_redirects"].minimum,
+        le=CRAWL_LIMITS["max_redirects"].maximum,
+    )
     enable_http_revalidation: bool = True
     enable_parse_reuse: bool = True
     render_mode: str = DEFAULTS.render_mode
@@ -54,14 +112,14 @@ class ScopeConfigPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_rendering(self) -> "ScopeConfigPayload":
-        if self.static_retry_initial_delay_ms > self.static_retry_max_delay_ms:
-            raise ValueError("static_retry_initial_delay_ms cannot exceed the maximum delay")
-        validate_render_config(self.model_dump())
+        values = self.model_dump()
+        validate_crawl_config(values)
+        validate_render_config(values)
         return self
 
 
 class ScanCreate(BaseModel):
-    starting_url: str
+    starting_url: str = Field(max_length=STARTING_URL_MAX_LENGTH)
     scope_config: ScopeConfigPayload
     website_property_id: int | None = None
 

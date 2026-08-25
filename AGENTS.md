@@ -99,6 +99,7 @@ behavior. Keep storage behind the existing content-store abstraction.
 ## Architecture Boundaries
 
 - crawler.url_normalizer owns URL normalization.
+- crawler.config owns authoritative static/general Scan bounds and runtime validation.
 - crawler.scope owns deterministic scope decisions.
 - crawler.security and crawler.safe_fetch own the SSRF and bounded-fetch boundary.
 - crawler.html_parser owns best-effort static HTML extraction.
@@ -214,9 +215,15 @@ The crawler performs breadth-first HTTP GET traversal. It must:
 - Deduplicate fetches by normalized URL.
 - Keep raw discovered, normalized, requested, and final URLs distinct.
 - Enforce Page, depth, timeout, redirect, response-size, and delay limits.
+- Reject out-of-policy configuration without clamping; API and runtime must use the same policy.
+- Revalidate persisted configuration before network or browser work. Historical reads remain
+  available without rewriting or revalidating retained Scan evidence.
 - Record external and excluded links without queueing them.
 - Preserve duplicate link occurrences and anchor provenance.
 - Treat HTTP error statuses as observations rather than crawler exceptions.
+
+New schedulers, agents, CLI commands, and internal callers must not bypass crawl or browser policy
+validation. See `docs/scan-configuration-policy.md`.
 
 A scan with Page-level failures normally completes with errors rather than failing as a whole.
 

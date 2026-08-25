@@ -148,8 +148,8 @@ class StaticPageCrawler:
         self.db.commit()
 
         connection_limits = httpx.Limits(
-            max_connections=max(2, config.concurrent_requests_per_host),
-            max_keepalive_connections=max(2, config.concurrent_requests_per_host),
+            max_connections=config.concurrent_requests_per_host,
+            max_keepalive_connections=config.concurrent_requests_per_host,
         )
         client = httpx.AsyncClient(
             follow_redirects=False,

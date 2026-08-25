@@ -8,6 +8,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
 import { inputClass } from "../components/ui/styles";
+import { scanInputLimits } from "../config/scanInputLimits";
 import type { RenderCapabilities, ScopeConfig, SiteListItem } from "../types/scans";
 import { plural } from "../utils/format";
 import { normalizeStartingUrlInput, parseLineList } from "../utils/url";
@@ -226,6 +227,7 @@ export function NewScanPage() {
             <input
               id="starting-url"
               aria-describedby="starting-url-helper starting-url-error"
+              maxLength={scanInputLimits.startingUrlMaxLength}
               value={startingUrl}
               onBlur={() => {
                 if (!urlValidation.error && startingUrl.trim() !== urlValidation.normalizedUrl) setStartingUrl(urlValidation.normalizedUrl);
@@ -238,10 +240,10 @@ export function NewScanPage() {
 
           <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field id="max-pages" label="Maximum pages" error={validation.maxPages} helper="Stop after this many pages have been fetched or skipped.">
-              <input id="max-pages" type="number" min={1} max={10000} value={numberInputValue(scope.max_pages)} onChange={(event) => updateNumber("max_pages", event.target.value)} className={inputClass(Boolean(validation.maxPages))} />
+              <input id="max-pages" type="number" min={scanInputLimits.maxPages.minimum} max={scanInputLimits.maxPages.maximum} value={numberInputValue(scope.max_pages)} onChange={(event) => updateNumber("max_pages", event.target.value)} className={inputClass(Boolean(validation.maxPages))} />
             </Field>
             <Field id="max-depth" label="Maximum depth" error={validation.maxDepth} helper="Depth 0 scans only the starting URL.">
-              <input id="max-depth" type="number" min={0} max={50} value={numberInputValue(scope.max_depth)} onChange={(event) => updateNumber("max_depth", event.target.value)} className={inputClass(Boolean(validation.maxDepth))} />
+              <input id="max-depth" type="number" min={scanInputLimits.maxDepth.minimum} max={scanInputLimits.maxDepth.maximum} value={numberInputValue(scope.max_depth)} onChange={(event) => updateNumber("max_depth", event.target.value)} className={inputClass(Boolean(validation.maxDepth))} />
             </Field>
           </div>
           <div className="mt-5 rounded-md border border-stone-200 bg-stone-50 p-3">
@@ -293,8 +295,8 @@ export function NewScanPage() {
             <RenderNumberField label="Viewport width" field="render_viewport_width" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
             <RenderNumberField label="Viewport height" field="render_viewport_height" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
             <RenderNumberField label="Device scale factor" field="render_device_scale_factor" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
-            <Field id="render-locale" label="Locale"><input id="render-locale" value={scope.render_locale} onChange={(event) => setScope({ ...scope, render_locale: event.target.value })} className={inputClass()} /></Field>
-            <Field id="render-timezone" label="Timezone"><input id="render-timezone" value={scope.render_timezone} onChange={(event) => setScope({ ...scope, render_timezone: event.target.value })} className={inputClass()} /></Field>
+            <Field id="render-locale" label="Locale"><input id="render-locale" maxLength={scanInputLimits.renderLocaleMaxLength} value={scope.render_locale} onChange={(event) => setScope({ ...scope, render_locale: event.target.value })} className={inputClass()} /></Field>
+            <Field id="render-timezone" label="Timezone"><input id="render-timezone" maxLength={scanInputLimits.renderTimezoneMaxLength} value={scope.render_timezone} onChange={(event) => setScope({ ...scope, render_timezone: event.target.value })} className={inputClass()} /></Field>
             <Field id="render-motion" label="Motion"><select id="render-motion" value={scope.render_reduced_motion} onChange={(event) => setScope({ ...scope, render_reduced_motion: event.target.value as ScopeConfig["render_reduced_motion"] })} className={inputClass()}><option value="reduce">Reduce</option><option value="no-preference">No preference</option></select></Field>
             <RenderNumberField label="Navigation timeout (seconds)" field="render_navigation_timeout_seconds" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
             <RenderNumberField label="Load timeout (seconds)" field="render_load_timeout_seconds" scope={scope} capabilities={renderCapabilities.data} onChange={setScope} />
@@ -361,7 +363,7 @@ export function NewScanPage() {
                 </span>
               </label>
               <Field id="request-timeout" label="Request timeout" error={validation.requestTimeout} helper="Seconds before a request is recorded as timed out.">
-                <input id="request-timeout" type="number" min={1} value={numberInputValue(scope.request_timeout_seconds)} onChange={(event) => updateNumber("request_timeout_seconds", event.target.value)} className={inputClass(Boolean(validation.requestTimeout))} />
+                <input id="request-timeout" type="number" min={scanInputLimits.requestTimeoutSeconds.minimum} max={scanInputLimits.requestTimeoutSeconds.maximum} step={0.1} value={numberInputValue(scope.request_timeout_seconds)} onChange={(event) => updateNumber("request_timeout_seconds", event.target.value)} className={inputClass(Boolean(validation.requestTimeout))} />
               </Field>
               <Field id="static-max-attempts" label="Maximum static attempts" error={validation.staticMaxAttempts} helper="Total requests allowed per page, including the first attempt.">
                 <input id="static-max-attempts" type="number" min={1} max={5} value={numberInputValue(scope.static_max_attempts)} onChange={(event) => updateNumber("static_max_attempts", event.target.value)} className={inputClass(Boolean(validation.staticMaxAttempts))} />
@@ -373,16 +375,16 @@ export function NewScanPage() {
                 <input id="static-retry-max-delay" type="number" min={0} max={60000} value={numberInputValue(scope.static_retry_max_delay_ms)} onChange={(event) => updateNumber("static_retry_max_delay_ms", event.target.value)} className={inputClass(Boolean(validation.staticRetryMaxDelay))} />
               </Field>
               <Field id="max-html-bytes" label="Maximum HTML response size" error={validation.maxHtmlBytes} helper="Bytes read before a page is stopped as too large.">
-                <input id="max-html-bytes" type="number" min={1} value={numberInputValue(scope.max_html_response_bytes)} onChange={(event) => updateNumber("max_html_response_bytes", event.target.value)} className={inputClass(Boolean(validation.maxHtmlBytes))} />
+                <input id="max-html-bytes" type="number" min={scanInputLimits.maxHtmlResponseBytes.minimum} max={scanInputLimits.maxHtmlResponseBytes.maximum} value={numberInputValue(scope.max_html_response_bytes)} onChange={(event) => updateNumber("max_html_response_bytes", event.target.value)} className={inputClass(Boolean(validation.maxHtmlBytes))} />
               </Field>
               <Field id="request-delay" label="Delay between requests" error={validation.requestDelay} helper="Milliseconds to wait between sequential requests.">
-                <input id="request-delay" type="number" min={0} value={numberInputValue(scope.delay_between_requests_ms)} onChange={(event) => updateNumber("delay_between_requests_ms", event.target.value)} className={inputClass(Boolean(validation.requestDelay))} />
+                <input id="request-delay" type="number" min={scanInputLimits.delayBetweenRequestsMs.minimum} max={scanInputLimits.delayBetweenRequestsMs.maximum} value={numberInputValue(scope.delay_between_requests_ms)} onChange={(event) => updateNumber("delay_between_requests_ms", event.target.value)} className={inputClass(Boolean(validation.requestDelay))} />
               </Field>
               <Field id="max-redirects" label="Maximum redirects" error={validation.maxRedirects} helper="Redirect hops allowed before stopping a request.">
-                <input id="max-redirects" type="number" min={0} value={numberInputValue(scope.max_redirects)} onChange={(event) => updateNumber("max_redirects", event.target.value)} className={inputClass(Boolean(validation.maxRedirects))} />
+                <input id="max-redirects" type="number" min={scanInputLimits.maxRedirects.minimum} max={scanInputLimits.maxRedirects.maximum} value={numberInputValue(scope.max_redirects)} onChange={(event) => updateNumber("max_redirects", event.target.value)} className={inputClass(Boolean(validation.maxRedirects))} />
               </Field>
               <Field id="user-agent" label="Custom user agent" helper="Sent with crawler requests. Do not include credentials.">
-                <input id="user-agent" value={scope.user_agent} onChange={(event) => setScope({ ...scope, user_agent: event.target.value })} className={inputClass()} />
+                <input id="user-agent" maxLength={scanInputLimits.userAgentMaxLength} value={scope.user_agent} onChange={(event) => setScope({ ...scope, user_agent: event.target.value })} className={inputClass()} />
               </Field>
             </div>
           </div>
@@ -469,15 +471,15 @@ function validateForm(_startingUrl: string, urlValidation: ReturnType<typeof nor
   }) || !scope.render_locale.trim() || !scope.render_timezone.trim() ? "One or more browser settings are outside the server-supported limits." : null;
   const validation = {
     startingUrl: urlValidation.error,
-    maxPages: validateInteger(scope.max_pages, 1, 10000, "Maximum pages must be between 1 and 10,000."),
-    maxDepth: validateInteger(scope.max_depth, 0, 50, "Maximum depth must be between 0 and 50."),
-    requestTimeout: validateNumber(scope.request_timeout_seconds, 1, 300, "Request timeout must be between 1 and 300 seconds."),
+    maxPages: validateInteger(scope.max_pages, scanInputLimits.maxPages.minimum, scanInputLimits.maxPages.maximum, "Maximum pages must be between 1 and 50,000."),
+    maxDepth: validateInteger(scope.max_depth, scanInputLimits.maxDepth.minimum, scanInputLimits.maxDepth.maximum, "Maximum depth must be between 0 and 100."),
+    requestTimeout: validateNumber(scope.request_timeout_seconds, scanInputLimits.requestTimeoutSeconds.minimum, scanInputLimits.requestTimeoutSeconds.maximum, "Request timeout must be between 0.1 and 120 seconds."),
     staticMaxAttempts: validateInteger(scope.static_max_attempts, 1, 5, "Maximum static attempts must be between 1 and 5."),
     staticRetryInitialDelay: validateInteger(scope.static_retry_initial_delay_ms, 0, 60000, "Initial retry delay must be between 0 and 60,000 milliseconds."),
     staticRetryMaxDelay: scope.static_retry_initial_delay_ms > scope.static_retry_max_delay_ms ? "Maximum retry delay must be at least the initial delay." : validateInteger(scope.static_retry_max_delay_ms, 0, 60000, "Maximum retry delay must be between 0 and 60,000 milliseconds."),
-    maxHtmlBytes: validateInteger(scope.max_html_response_bytes, 1, 100000000, "Maximum HTML response size must be at least 1 byte."),
-    requestDelay: validateInteger(scope.delay_between_requests_ms, 0, 60000, "Delay must be between 0 and 60,000 milliseconds."),
-    maxRedirects: validateInteger(scope.max_redirects, 0, 50, "Maximum redirects must be between 0 and 50."),
+    maxHtmlBytes: validateInteger(scope.max_html_response_bytes, scanInputLimits.maxHtmlResponseBytes.minimum, scanInputLimits.maxHtmlResponseBytes.maximum, "Maximum HTML response size must be between 1 and 20,000,000 bytes."),
+    requestDelay: validateInteger(scope.delay_between_requests_ms, scanInputLimits.delayBetweenRequestsMs.minimum, scanInputLimits.delayBetweenRequestsMs.maximum, "Delay must be between 0 and 60,000 milliseconds."),
+    maxRedirects: validateInteger(scope.max_redirects, scanInputLimits.maxRedirects.minimum, scanInputLimits.maxRedirects.maximum, "Maximum redirects must be between 0 and 20."),
     renderMaxPages: scope.render_mode === "none" ? null : validateInteger(scope.render_max_pages, 1, Math.min(1000, scope.max_pages), "Rendered pages must be between 1 and the scan page limit."),
     renderLimits
   };
