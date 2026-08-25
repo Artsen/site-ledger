@@ -84,6 +84,14 @@ class PerformanceRunRead(BaseModel):
     error_summary: str | None
     job_id: int | None = None
     presentation_status: str | None = None
+    retained_observation_count: int = 0
+    deleted_observation_count: int = 0
+    retained_ready_count: int = 0
+    retained_unavailable_count: int = 0
+    retained_failed_count: int = 0
+    deleted_ready_count: int = 0
+    deleted_unavailable_count: int = 0
+    deleted_failed_count: int = 0
 
 
 class PerformanceRunList(BaseModel):
@@ -172,3 +180,80 @@ class PerformanceObservationPresentation(BaseModel):
     origin_context: PerformanceObservationRead | None = None
     origin_metrics: list[PerformanceMetricPresentation] = Field(default_factory=list)
     presentation_error: str | None = None
+
+
+class PerformanceObservationDeletePreview(BaseModel):
+    can_delete: bool
+    reason: str | None = None
+    observation_id: int
+    run_id: int
+    provider: str
+    dimension: str
+    outcome: str
+    observed_at: datetime
+    target_kind: str
+    requested_target: str
+    payload_present: bool
+    payload_shared: bool
+    payload_reference_count: int
+    payload_raw_bytes: int
+    payload_stored_bytes: int
+    raw_bytes_reclaimable: int
+    stored_bytes_reclaimable: int
+
+
+class PerformanceRunDeletePreview(BaseModel):
+    can_delete: bool
+    reason: str | None = None
+    run_id: int
+    status: str
+    created_at: datetime
+    finished_at: datetime | None
+    completed_count: int
+    ready_count: int
+    unavailable_count: int
+    failed_count: int
+    retained_observation_count: int
+    deleted_observation_count: int
+    payload_blobs_referenced: int
+    exclusive_payload_blobs: int
+    shared_payload_blobs: int
+    raw_bytes_reclaimable: int
+    stored_bytes_reclaimable: int
+    background_jobs_removed: int
+    job_events_removed: int
+
+
+class PerformanceSiteDeletePreview(BaseModel):
+    can_delete: bool
+    reason: str | None = None
+    site_id: int
+    runs: int
+    retained_observations: int
+    already_deleted_observations: int
+    background_jobs_removed: int
+    job_events_removed: int
+    payload_blobs_referenced: int
+    exclusive_payload_blobs: int
+    shared_payload_blobs: int
+    raw_bytes_reclaimable: int
+    stored_bytes_reclaimable: int
+
+
+class PerformanceDeleteConfirmation(BaseModel):
+    confirmation: str
+
+
+class PerformanceDeleteResult(BaseModel):
+    deleted_observation_id: int | None = None
+    deleted_run_id: int | None = None
+    purged_site_id: int | None = None
+    runs_deleted: int = 0
+    observations_deleted: int = 0
+    background_jobs_deleted: int = 0
+    job_events_deleted: int = 0
+    payload_blob_records_deleted: int = 0
+    payload_blob_files_deleted: int = 0
+    raw_bytes_reclaimed: int = 0
+    stored_bytes_reclaimed: int = 0
+    warnings: list[str] = Field(default_factory=list)

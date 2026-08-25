@@ -465,14 +465,21 @@ def patch_site(site_id: int, payload: WebsitePropertyUpdate, db: DbSession) -> W
 
 
 @router.delete("/sites/{site_id}", response_model=SiteDeleteResult)
-def remove_site(site_id: int, db: DbSession) -> SiteDeleteResult:
+def remove_site(site_id: int, request: Request, db: DbSession) -> SiteDeleteResult:
+    warnings: list[str] = []
     try:
-        deleted = delete_site(db, site_id)
+        deleted = delete_site(
+            db,
+            site_id,
+            request.app.state.performance_payload_store,
+            request.app.state.accessibility_payload_store,
+            warnings,
+        )
     except SiteHasScansError as exc:
         raise HTTPException(409, str(exc)) from exc
     if deleted is None:
         raise HTTPException(404, "Site not found")
-    return SiteDeleteResult(deleted_site_id=deleted)
+    return SiteDeleteResult(deleted_site_id=deleted, warnings=warnings)
 
 
 @router.post("/sites/{site_id}/scans", response_model=ScanRead, status_code=202)

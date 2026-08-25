@@ -123,6 +123,27 @@ reported separately.
 Persistent Pages have a Performance tab with latest Lab Mobile/Desktop, latest Field Phone/Desktop,
 history, and a one-Page run action through the same `PerformanceRun` API.
 
+## Evidence Retention And Deletion
+
+Performance observations are immutable while retained. Users may explicitly hard-delete one
+terminal-run observation, an entire terminal Run, or all Performance evidence for one Site. An
+active Performance collection blocks Performance deletion and payload GC; Accessibility work does
+not. Deletion changes latest and history views immediately, so deleting the newest observation
+naturally exposes the previous retained observation or an empty state. Raw evidence routes return
+not found after their observation is deleted.
+
+Terminal Run collection counters remain the original collection record. Run reads separately report
+currently retained and deleted observation counts, including retained/deleted outcomes. A Run delete
+also removes its terminal BackgroundJob and JobEvent history. Site-domain purge does not delete
+Accessibility evidence, `WebResource`, or `SitePage` identity.
+
+Exact payload blobs are content-addressed and may be shared. A blob record and file are removed only
+after the last retained Performance observation reference disappears. Database deletion commits
+before best-effort file removal; a file cleanup failure is returned as a warning and never restores
+deleted evidence. Full Site deletion uses the same reference-aware cleanup. Operators can audit with
+`python tools/observability_payload_gc.py --domain performance`; add `--apply` only after reviewing
+the dry-run report and confirming no Performance collection is active.
+
 ## Measured Scale
 
 The manual `python -m app.performance_benchmark` fixture creates 5,000 Pages, 50 runs, and 15,000

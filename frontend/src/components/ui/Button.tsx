@@ -1,4 +1,4 @@
-import { ButtonHTMLAttributes, ReactNode } from "react";
+import { ButtonHTMLAttributes, forwardRef, ReactNode } from "react";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary" | "ghost" | "danger";
@@ -6,7 +6,7 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode;
 };
 
-export function Button({ variant = "secondary", loading = false, children, className = "", disabled, ...props }: ButtonProps) {
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button({ variant = "secondary", loading = false, children, className = "", disabled, ...props }, ref) {
   const variants = {
     primary: "border-neutral-900 bg-neutral-900 text-white hover:bg-neutral-700",
     secondary: "border-stone-300 bg-white text-stone-900 hover:bg-stone-50",
@@ -16,10 +16,11 @@ export function Button({ variant = "secondary", loading = false, children, class
   return (
     <button
       {...props}
+      ref={ref}
       disabled={disabled || loading}
       className={`inline-flex min-h-9 items-center justify-center rounded-md border px-3 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${variants[variant]} ${className}`}
     >
       {children}
     </button>
   );
-}
+});

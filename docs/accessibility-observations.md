@@ -150,6 +150,27 @@ Persistent Page workspaces include latest Desktop/Mobile states, immutable histo
 and a one-Page audit action through the same run API. Accessibility does not appear on Scan
 Observation pages.
 
+## Evidence Retention And Deletion
+
+Accessibility observations are immutable while retained. Users may explicitly hard-delete one
+terminal-run observation, an entire terminal Run, or all Accessibility evidence for one Site. An
+active Accessibility collection blocks Accessibility deletion and payload GC; Performance work does
+not. Deleting an observation also deletes its owned normalized rule and node evidence. Summary,
+Pages, Rules, latest, and history queries immediately derive from the retained population. Raw
+evidence disappears with its observation.
+
+Terminal Run collection counters remain the original audit record. Run reads separately report
+currently retained and deleted observations and outcomes. Run deletion also removes terminal job
+and event history. Site-domain purge leaves Performance evidence, `WebResource`, and `SitePage`
+identity intact.
+
+Exact payload blobs are content-addressed and can be shared. Shared records and files survive until
+their final retained Accessibility observation is deleted. Database deletion commits before
+best-effort file cleanup; cleanup errors are warnings and do not resurrect evidence. Full Site
+deletion uses the same reference-aware lifecycle. Operators can audit with
+`python tools/observability_payload_gc.py --domain accessibility`; `--apply` removes only safe
+unreferenced records and exact-layout orphan files after the dry run is reviewed.
+
 ## Measured Scale
 
 The manual `python -m app.accessibility_benchmark` fixture created 5,000 Pages, 20 runs, 20,000

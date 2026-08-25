@@ -104,6 +104,69 @@ test("observability details are human-readable before raw evidence", async ({ pa
   await expect(page.getByRole("heading", { name: "Raw Accessibility evidence" })).toBeVisible();
 });
 
+test("Performance observation deletion removes evidence while retaining its Run", async ({ page }) => {
+  await mockApi(page);
+  let retained = true;
+  const run = performanceRun();
+  await page.route("**/api/sites/3/performance-runs/4**", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...run, id: 4, observations: { items: retained ? [performanceObservation()] : [], total: retained ? 1 : 0, limit: 500, offset: 0 } }) }));
+  await page.route("**/api/sites/3/performance-observations/12/deletion-preview", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ can_delete: true, reason: null, observation_id: 12, run_id: 4, provider: "crux", dimension: "PHONE", outcome: "ready", observed_at: "2026-08-20T00:00:00Z", target_kind: "url", requested_target: "https://example.com/pricing", payload_present: true, payload_shared: false, payload_reference_count: 1, payload_raw_bytes: 1000, payload_stored_bytes: 500, raw_bytes_reclaimable: 1000, stored_bytes_reclaimable: 500 }) }));
+  await page.route("**/api/sites/3/performance-observations/12", async (route) => {
+    if (route.request().method() === "DELETE") { retained = false; await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted_observation_id: 12, runs_deleted: 0, observations_deleted: 1, warnings: [] }) }); return; }
+    await route.fallback();
+  });
+  await page.goto("/sites/3/performance/runs/4");
+  await page.getByRole("link", { name: "Inspect result" }).click();
+  await page.getByRole("button", { name: "Delete observation" }).click();
+  await expect(page.getByRole("dialog", { name: "Delete Performance observation" })).toBeVisible();
+  await page.getByRole("button", { name: "Delete permanently" }).click();
+  await expect(page).toHaveURL(/\/performance\/runs\/4$/);
+  await expect(page.getByRole("heading", { name: "Run 4" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Inspect result" })).toHaveCount(0);
+});
+
+test("Accessibility Run deletion requires its exact phrase and refreshes the workspace", async ({ page }) => {
+  await mockApi(page);
+  let retained = true;
+  const run = accessibilityRun();
+  await page.route("**/api/sites/3/accessibility-runs/51/deletion-preview", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ can_delete: true, reason: null, run_id: 51, status: "completed", created_at: "2026-08-20T00:00:00Z", finished_at: "2026-08-20T00:01:00Z", completed_count: 1, ready_count: 1, failed_count: 0, retained_observation_count: 1, deleted_observation_count: 0, rule_rows_removed: 1, node_rows_removed: 1, payload_blobs_referenced: 1, exclusive_payload_blobs: 1, shared_payload_blobs: 0, raw_bytes_reclaimable: 1000, stored_bytes_reclaimable: 500, background_jobs_removed: 1, job_events_removed: 2 }) }));
+  await page.route("**/api/sites/3/accessibility-runs/51**", async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/deletion-preview")) { await route.fallback(); return; }
+    if (route.request().method() === "DELETE") { retained = false; await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted_run_id: 51, runs_deleted: 1, observations_deleted: 1, warnings: [] }) }); return; }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...run, observations: { items: [accessibilityObservation()], total: 1, limit: 500, offset: 0 } }) });
+  });
+  await page.route("**/api/sites/3/accessibility-runs**", async (route) => {
+    if (new URL(route.request().url()).pathname !== "/api/sites/3/accessibility-runs") { await route.fallback(); return; }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: retained ? [run] : [], total: retained ? 1 : 0, limit: 25, offset: 0 }) });
+  });
+  await page.goto("/sites/3/accessibility/runs/51");
+  await page.getByRole("button", { name: "Delete run" }).click();
+  const confirmation = page.getByRole("textbox");
+  await confirmation.fill("DELETE ACCESSIBILITY RUN 51");
+  await page.getByRole("button", { name: "Delete permanently" }).click();
+  await expect(page).toHaveURL(/\/accessibility\?view=runs$/);
+  await expect(page.getByText("No Accessibility runs")).toBeVisible();
+});
+
+test("destructive evidence dialog remains accessible at supported widths", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/sites/3/performance-observations/12/deletion-preview", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ can_delete: true, reason: null, observation_id: 12, run_id: 4, provider: "crux", dimension: "PHONE", outcome: "ready", observed_at: "2026-08-20T00:00:00Z", target_kind: "url", requested_target: "https://example.com/pricing", payload_present: true, payload_shared: false, payload_reference_count: 1, payload_raw_bytes: 1000, payload_stored_bytes: 500, raw_bytes_reclaimable: 1000, stored_bytes_reclaimable: 500 }) }));
+  for (const width of [375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+    await page.goto("/sites/3/performance/observations/12");
+    const trigger = page.getByRole("button", { name: "Delete observation" });
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "Delete Performance observation" });
+    await expect(dialog).toBeVisible();
+    await expect(page.getByRole("button", { name: "Close deletion dialog" })).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.keyboard.press("Tab");
+    expect(await page.evaluate(() => document.querySelector('[role="dialog"]')?.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(trigger).toBeFocused();
+  }
+});
+
 test("Site Ledger workflow supports creation, filtering, details, inbound links, and deletion", async ({
   page,
 }) => {
@@ -1717,8 +1780,16 @@ function performanceObservation(overrides: Record<string, unknown> = {}) {
   return { id: 12, performance_run_id: 4, website_property_id: 3, web_resource_id: 8, provider: "crux", provider_adapter_version: "crux-provider-v1", normalization_version: "performance-normalization-v1", target_kind: "url", requested_target: "https://example.com/pricing", provider_target: "https://example.com/pricing", dimension: "PHONE", outcome: "ready", metrics_json: { lcp: { value: 2200, unit: "ms" } }, normalized_sha256: "b".repeat(64), provider_analysis_at: null, provider_period_json: null, provider_product_version: null, observed_at: "2026-08-13T12:00:00Z", error_type: null, error_message: null, page_url: "https://example.com/pricing", payload_sha256: "a".repeat(64), payload_raw_byte_size: 100, payload_stored_byte_size: 80, ...overrides };
 }
 
+function performanceRun() {
+  return { id: 41, website_property_id: 3, status: "completed", presentation_status: "completed", trigger: "site_workspace", configuration_json: { resource_ids: [8], providers: ["crux"], pagespeed_strategies: [], crux_form_factors: ["PHONE"], include_origin_crux: false }, target_count: 1, request_count: 1, completed_count: 1, ready_count: 1, unavailable_count: 0, failed_count: 0, retained_observation_count: 1, deleted_observation_count: 0, retained_ready_count: 1, retained_unavailable_count: 0, retained_failed_count: 0, deleted_ready_count: 0, deleted_unavailable_count: 0, deleted_failed_count: 0, created_at: "2026-08-20T00:00:00Z", started_at: "2026-08-20T00:00:00Z", finished_at: "2026-08-20T00:01:00Z", error_summary: null, job_id: 71 };
+}
+
 function accessibilityObservation() {
   return { id: 12, accessibility_run_id: 4, website_property_id: 3, web_resource_id: 8, requested_url: "https://example.com/pricing", final_url: "https://example.com/pricing", profile: "desktop", outcome: "ready", observed_at: "2026-08-13T12:00:00Z", axe_core_version: "4.12.1", detector_bundle_sha256: "a".repeat(64), integration_version: "accessibility-engine-v1", normalization_version: "accessibility-normalization-v1", ruleset_profile: "wcag22-aa-v1", ruleset_sha256: "b".repeat(64), browser_engine: "chromium", browser_version: "151", playwright_version: "1.55", profile_json: {}, violation_rule_count: 1, violation_node_count: 1, incomplete_rule_count: 0, incomplete_node_count: 0, pass_rule_count: 20, inapplicable_rule_count: 40, normalized_sha256: "c".repeat(64), error_type: null, error_message: null, page_url: "https://example.com/pricing", payload_sha256: "d".repeat(64), payload_raw_byte_size: 100, payload_stored_byte_size: 80 };
+}
+
+function accessibilityRun() {
+  return { id: 51, website_property_id: 3, status: "completed", presentation_status: "completed", trigger: "site_workspace", configuration_json: { resource_ids: [8], profiles: ["desktop"] }, target_count: 1, observation_count: 1, completed_count: 1, ready_count: 1, failed_count: 0, retained_observation_count: 1, deleted_observation_count: 0, retained_ready_count: 1, retained_failed_count: 0, deleted_ready_count: 0, deleted_failed_count: 0, axe_core_version: "4.12.1", detector_bundle_sha256: "a".repeat(64), integration_version: "accessibility-engine-v1", normalization_version: "accessibility-normalization-v1", ruleset_profile: "wcag22-aa-v1", ruleset_rule_count: 62, ruleset_sha256: "b".repeat(64), created_at: "2026-08-20T00:00:00Z", started_at: "2026-08-20T00:00:00Z", finished_at: "2026-08-20T00:01:00Z", error_summary: null, job_id: 81 };
 }
 
 function resourceItem(overrides: Record<string, unknown>) {

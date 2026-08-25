@@ -60,8 +60,9 @@ def list_accessibility_runs(
         if job.accessibility_run_id is not None
     }
     health = worker_health(db, get_settings().job_worker_offline_seconds)
+    retention = _retention_counts(db, [run.id for run in runs])
     return AccessibilityRunList(
-        items=[_run_read(run, jobs.get(run.id), health) for run in runs],
+        items=[_run_read(run, jobs.get(run.id), health, retention.get(run.id)) for run in runs],
         total=total,
         limit=limit,
         offset=offset,
@@ -94,7 +95,8 @@ def get_accessibility_run(
     )
     health = worker_health(db, get_settings().job_worker_offline_seconds)
     return AccessibilityRunDetail(
-        **_run_read(run, job, health).model_dump(), observations=observations
+        **_run_read(run, job, health, _retention_counts(db, [run.id]).get(run.id)).model_dump(),
+        observations=observations,
     )
 
 
@@ -636,13 +638,39 @@ def _observation_list(
 
 
 def _run_read(
-    run: AccessibilityRun, job: BackgroundJob | None, health: WorkerHealth
+    run: AccessibilityRun,
+    job: BackgroundJob | None,
+    health: WorkerHealth,
+    retained: tuple[int, int, int] | None = None,
 ) -> AccessibilityRunRead:
+    retained_total, retained_ready, retained_failed = retained or (0, 0, 0)
     return AccessibilityRunRead(
         **{column.name: getattr(run, column.name) for column in run.__table__.columns},
         job_id=job.id if job else None,
         presentation_status=presentation_status(job, health) if job else run.status,
+        retained_observation_count=retained_total,
+        deleted_observation_count=max(run.completed_count - retained_total, 0),
+        retained_ready_count=retained_ready,
+        retained_failed_count=retained_failed,
+        deleted_ready_count=max(run.ready_count - retained_ready, 0),
+        deleted_failed_count=max(run.failed_count - retained_failed, 0),
     )
+
+
+def _retention_counts(db: Session, run_ids: list[int]) -> dict[int, tuple[int, int, int]]:
+    if not run_ids:
+        return {}
+    rows = db.execute(
+        select(
+            AccessibilityObservation.accessibility_run_id,
+            func.count(AccessibilityObservation.id),
+            func.count(case((AccessibilityObservation.outcome == "ready", 1))),
+            func.count(case((AccessibilityObservation.outcome == "failed", 1))),
+        )
+        .where(AccessibilityObservation.accessibility_run_id.in_(run_ids))
+        .group_by(AccessibilityObservation.accessibility_run_id)
+    )
+    return {run_id: (total, ready, failed) for run_id, total, ready, failed in rows}
 
 
 def json_tags(value: Any) -> list[str]:

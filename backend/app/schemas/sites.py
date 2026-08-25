@@ -207,3 +207,4 @@ class SiteScanCreate(BaseModel):
 
 class SiteDeleteResult(BaseModel):
     deleted_site_id: int
+    warnings: list[str] = Field(default_factory=list)
