@@ -523,13 +523,23 @@ async def run_claimed_job(
             raise JobCancelled("Cancellation requested before job started.")
         result = await registry.get(claimed_job.job.job_type).execute(claimed_job.job, context)
         with session_factory() as db:
-            background_jobs.complete_job(
-                db,
-                job_id=claimed_job.job.id,
-                lease_token=claimed_job.lease_token,
-                status=result.status,
-                result_json=result.result_json,
-            )
+            if result.status == JOB_STATUS_FAILED:
+                result_json = result.result_json or {}
+                background_jobs.fail_job(
+                    db,
+                    job_id=claimed_job.job.id,
+                    lease_token=claimed_job.lease_token,
+                    error_type=str(result_json.get("stop_reason") or "job_failed"),
+                    error_message=str(result_json.get("fatal_error_message") or "Job failed."),
+                )
+            else:
+                background_jobs.complete_job(
+                    db,
+                    job_id=claimed_job.job.id,
+                    lease_token=claimed_job.lease_token,
+                    status=result.status,
+                    result_json=result.result_json,
+                )
     except JobCancelled as exc:
         _mark_domain_cancelled(session_factory, claimed_job.job)
         with session_factory() as db:
@@ -583,6 +593,9 @@ async def _job_heartbeat_loop(context: JobExecutionContext) -> None:
 def _scan_result(scan: Scan) -> dict[str, Any]:
     return {
         "scan_id": scan.id,
+        "status": scan.status,
+        "stop_reason": scan.stop_reason,
+        "fatal_error_message": scan.fatal_error_message,
         "discovered": scan.discovered_count,
         "fetched": scan.fetched_count,
         "failed": scan.failed_count,

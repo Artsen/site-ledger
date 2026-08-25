@@ -9,6 +9,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
 import { inputClass } from "../components/ui/styles";
+import { scanInputLimits } from "../config/scanInputLimits";
 import type { ScopeConfig, SitePayload } from "../types/scans";
 import { plural } from "../utils/format";
 import { normalizeStartingUrlInput, parseLineList } from "../utils/url";
@@ -110,7 +111,7 @@ export function SiteFormPage({ mode, embedded = false }: { mode: "create" | "edi
         <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field id="site-name" label="Name" error={validation.name}><input id="site-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} className={inputClass(Boolean(validation.name))} /></Field>
-            <Field id="site-base-url" label="Base URL" error={validation.baseUrl} helper="Use the primary URL or path that represents this website property."><input id="site-base-url" value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} className={inputClass(Boolean(validation.baseUrl))} placeholder="https://www.example.com/learn/" /></Field>
+            <Field id="site-base-url" label="Base URL" error={validation.baseUrl} helper="Use the primary URL or path that represents this website property."><input id="site-base-url" maxLength={scanInputLimits.startingUrlMaxLength} value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} className={inputClass(Boolean(validation.baseUrl))} placeholder="https://www.example.com/learn/" /></Field>
             <Field id="site-description" label="Description"><textarea id="site-description" value={form.description ?? ""} onChange={(event) => setForm({ ...form, description: event.target.value })} className={inputClass()} rows={3} /></Field>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field id="site-group" label="Group" helper="Optional. Create your own grouping label."><input id="site-group" value={form.group_key} onChange={(event) => setForm({ ...form, group_key: event.target.value })} className={inputClass()} placeholder="Marketing" /></Field>
@@ -136,16 +137,16 @@ export function SiteFormPage({ mode, embedded = false }: { mode: "create" | "edi
             <TextArea id="dropped-query-parameters" label="Dropped query parameters" value={listFields.drop_query_parameters} onChange={(value) => updateList("drop_query_parameters", value)} />
             <div className="space-y-4">
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.scope_config.follow_subdomains} onChange={(event) => setForm({ ...form, scope_config: { ...form.scope_config, follow_subdomains: event.target.checked } })} className="size-4 rounded border-stone-300" />Follow subdomains</label>
-              <NumberField id="max-pages" label="Maximum pages" value={form.scope_config.max_pages} error={validation.maxPages} onChange={(value) => updateScopeNumber("max_pages", value)} />
-              <NumberField id="max-depth" label="Maximum depth" value={form.scope_config.max_depth} error={validation.maxDepth} onChange={(value) => updateScopeNumber("max_depth", value)} />
-              <NumberField id="request-timeout" label="Request timeout" value={form.scope_config.request_timeout_seconds} error={validation.requestTimeout} onChange={(value) => updateScopeNumber("request_timeout_seconds", value)} />
-              <NumberField id="static-max-attempts" label="Maximum static attempts" value={form.scope_config.static_max_attempts} error={validation.staticMaxAttempts} onChange={(value) => updateScopeNumber("static_max_attempts", value)} />
-              <NumberField id="static-retry-initial-delay" label="Initial retry delay (ms)" value={form.scope_config.static_retry_initial_delay_ms} error={validation.staticRetryInitialDelay} onChange={(value) => updateScopeNumber("static_retry_initial_delay_ms", value)} />
-              <NumberField id="static-retry-max-delay" label="Maximum retry delay (ms)" value={form.scope_config.static_retry_max_delay_ms} error={validation.staticRetryMaxDelay} onChange={(value) => updateScopeNumber("static_retry_max_delay_ms", value)} />
-              <NumberField id="max-html-bytes" label="Maximum HTML response size" value={form.scope_config.max_html_response_bytes} error={validation.maxHtmlBytes} onChange={(value) => updateScopeNumber("max_html_response_bytes", value)} />
-              <NumberField id="request-delay" label="Delay between requests" value={form.scope_config.delay_between_requests_ms} error={validation.requestDelay} onChange={(value) => updateScopeNumber("delay_between_requests_ms", value)} />
-              <NumberField id="max-redirects" label="Maximum redirects" value={form.scope_config.max_redirects} error={validation.maxRedirects} onChange={(value) => updateScopeNumber("max_redirects", value)} />
-              <Field id="user-agent" label="User agent"><input id="user-agent" value={form.scope_config.user_agent} onChange={(event) => setForm({ ...form, scope_config: { ...form.scope_config, user_agent: event.target.value } })} className={inputClass()} /></Field>
+              <NumberField id="max-pages" label="Maximum pages" value={form.scope_config.max_pages} error={validation.maxPages} minimum={scanInputLimits.maxPages.minimum} maximum={scanInputLimits.maxPages.maximum} onChange={(value) => updateScopeNumber("max_pages", value)} />
+              <NumberField id="max-depth" label="Maximum depth" value={form.scope_config.max_depth} error={validation.maxDepth} minimum={scanInputLimits.maxDepth.minimum} maximum={scanInputLimits.maxDepth.maximum} onChange={(value) => updateScopeNumber("max_depth", value)} />
+              <NumberField id="request-timeout" label="Request timeout" value={form.scope_config.request_timeout_seconds} error={validation.requestTimeout} minimum={scanInputLimits.requestTimeoutSeconds.minimum} maximum={scanInputLimits.requestTimeoutSeconds.maximum} step={0.1} onChange={(value) => updateScopeNumber("request_timeout_seconds", value)} />
+              <NumberField id="static-max-attempts" label="Maximum static attempts" value={form.scope_config.static_max_attempts} error={validation.staticMaxAttempts} minimum={1} maximum={5} onChange={(value) => updateScopeNumber("static_max_attempts", value)} />
+              <NumberField id="static-retry-initial-delay" label="Initial retry delay (ms)" value={form.scope_config.static_retry_initial_delay_ms} error={validation.staticRetryInitialDelay} minimum={0} maximum={60_000} onChange={(value) => updateScopeNumber("static_retry_initial_delay_ms", value)} />
+              <NumberField id="static-retry-max-delay" label="Maximum retry delay (ms)" value={form.scope_config.static_retry_max_delay_ms} error={validation.staticRetryMaxDelay} minimum={0} maximum={60_000} onChange={(value) => updateScopeNumber("static_retry_max_delay_ms", value)} />
+              <NumberField id="max-html-bytes" label="Maximum HTML response size" value={form.scope_config.max_html_response_bytes} error={validation.maxHtmlBytes} minimum={scanInputLimits.maxHtmlResponseBytes.minimum} maximum={scanInputLimits.maxHtmlResponseBytes.maximum} onChange={(value) => updateScopeNumber("max_html_response_bytes", value)} />
+              <NumberField id="request-delay" label="Delay between requests" value={form.scope_config.delay_between_requests_ms} error={validation.requestDelay} minimum={scanInputLimits.delayBetweenRequestsMs.minimum} maximum={scanInputLimits.delayBetweenRequestsMs.maximum} onChange={(value) => updateScopeNumber("delay_between_requests_ms", value)} />
+              <NumberField id="max-redirects" label="Maximum redirects" value={form.scope_config.max_redirects} error={validation.maxRedirects} minimum={scanInputLimits.maxRedirects.minimum} maximum={scanInputLimits.maxRedirects.maximum} onChange={(value) => updateScopeNumber("max_redirects", value)} />
+              <Field id="user-agent" label="User agent"><input id="user-agent" maxLength={scanInputLimits.userAgentMaxLength} value={form.scope_config.user_agent} onChange={(event) => setForm({ ...form, scope_config: { ...form.scope_config, user_agent: event.target.value } })} className={inputClass()} /></Field>
               <Field id="saved-render-mode" label="Default render mode" helper="Copied into new scans; existing scans are unchanged."><select id="saved-render-mode" value={form.scope_config.render_mode} onChange={(event) => setForm({ ...form, scope_config: { ...form.scope_config, render_mode: event.target.value as ScopeConfig["render_mode"] } })} className={inputClass()}><option value="none">Static only</option><option value="starting_page">Starting page</option><option value="all_eligible">All eligible pages</option></select></Field>
               {form.scope_config.render_mode !== "none" ? <NumberField id="saved-render-max" label="Maximum rendered pages" value={form.scope_config.render_max_pages} error={validation.renderMaxPages} onChange={(value) => setForm((current) => ({ ...current, scope_config: { ...current.scope_config, render_max_pages: Number(value) } }))} /> : null}
               {renderCapabilities.error ? <div className="text-xs text-red-700">Rendering limits are currently unavailable.</div> : null}
@@ -171,8 +172,8 @@ function TextArea({ id, label, value, onChange }: { id: string; label: string; v
   return <Field id={id} label={label} helper="One value per line. Blank lines are ignored."><textarea id={id} value={value} onChange={(event) => onChange(event.target.value)} rows={5} className={`${inputClass()} font-mono text-xs leading-5`} /></Field>;
 }
 
-function NumberField({ id, label, value, error, onChange }: { id: string; label: string; value: number; error: string | null; onChange: (value: string) => void }) {
-  return <Field id={id} label={label} error={error}><input id={id} type="number" value={Number.isNaN(value) ? "" : value} onChange={(event) => onChange(event.target.value)} className={inputClass(Boolean(error))} /></Field>;
+function NumberField({ id, label, value, error, minimum, maximum, step, onChange }: { id: string; label: string; value: number; error: string | null; minimum?: number; maximum?: number; step?: number; onChange: (value: string) => void }) {
+  return <Field id={id} label={label} error={error}><input id={id} type="number" min={minimum} max={maximum} step={step} value={Number.isNaN(value) ? "" : value} onChange={(event) => onChange(event.target.value)} className={inputClass(Boolean(error))} /></Field>;
 }
 
 function ScopeSummary({ scope, baseUrl }: { scope: ScopeConfig; baseUrl: string }) {
@@ -230,15 +231,15 @@ function validate(form: SitePayload, baseValidation: ReturnType<typeof normalize
     name: form.name.trim() ? null : "Name is required.",
     baseUrl: baseValidation.error,
     locale,
-    maxPages: validateInteger(scope.max_pages, 1, 10000, "Maximum pages must be between 1 and 10,000."),
-    maxDepth: validateInteger(scope.max_depth, 0, 50, "Maximum depth must be between 0 and 50."),
-    requestTimeout: validateNumber(scope.request_timeout_seconds, 1, 300, "Request timeout must be between 1 and 300 seconds."),
+    maxPages: validateInteger(scope.max_pages, scanInputLimits.maxPages.minimum, scanInputLimits.maxPages.maximum, "Maximum pages must be between 1 and 50,000."),
+    maxDepth: validateInteger(scope.max_depth, scanInputLimits.maxDepth.minimum, scanInputLimits.maxDepth.maximum, "Maximum depth must be between 0 and 100."),
+    requestTimeout: validateNumber(scope.request_timeout_seconds, scanInputLimits.requestTimeoutSeconds.minimum, scanInputLimits.requestTimeoutSeconds.maximum, "Request timeout must be between 0.1 and 120 seconds."),
     staticMaxAttempts: validateInteger(scope.static_max_attempts, 1, 5, "Maximum static attempts must be between 1 and 5."),
     staticRetryInitialDelay: validateInteger(scope.static_retry_initial_delay_ms, 0, 60000, "Initial retry delay must be between 0 and 60,000 milliseconds."),
     staticRetryMaxDelay: scope.static_retry_initial_delay_ms > scope.static_retry_max_delay_ms ? "Maximum retry delay must be at least the initial delay." : validateInteger(scope.static_retry_max_delay_ms, 0, 60000, "Maximum retry delay must be between 0 and 60,000 milliseconds."),
-    maxHtmlBytes: validateInteger(scope.max_html_response_bytes, 1, 100000000, "Maximum HTML response size must be at least 1 byte."),
-    requestDelay: validateInteger(scope.delay_between_requests_ms, 0, 60000, "Delay must be between 0 and 60,000 milliseconds."),
-    maxRedirects: validateInteger(scope.max_redirects, 0, 50, "Maximum redirects must be between 0 and 50."),
+    maxHtmlBytes: validateInteger(scope.max_html_response_bytes, scanInputLimits.maxHtmlResponseBytes.minimum, scanInputLimits.maxHtmlResponseBytes.maximum, "Maximum HTML response size must be between 1 and 20,000,000 bytes."),
+    requestDelay: validateInteger(scope.delay_between_requests_ms, scanInputLimits.delayBetweenRequestsMs.minimum, scanInputLimits.delayBetweenRequestsMs.maximum, "Delay must be between 0 and 60,000 milliseconds."),
+    maxRedirects: validateInteger(scope.max_redirects, scanInputLimits.maxRedirects.minimum, scanInputLimits.maxRedirects.maximum, "Maximum redirects must be between 0 and 20."),
     renderMaxPages: scope.render_mode === "none" ? null : validateInteger(scope.render_max_pages, 1, Math.min(scope.max_pages, 1000), "Rendered pages must be between 1 and the maximum page count.")
   };
   return { ...validation, hasErrors: Object.values(validation).some(Boolean) };

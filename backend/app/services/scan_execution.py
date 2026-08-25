@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.browser.capture import BrowserRenderer, CaptureResult
 from app.browser.config import validate_render_config
+from app.crawler.config import ScopeConfigValidationError, validate_starting_url_length
 from app.crawler.scope import ScopeConfig
 from app.crawler.static_crawler import StaticPageCrawler
 from app.models import Scan
@@ -57,8 +58,12 @@ class ScanExecutionCoordinator:
         self.context = context
 
     async def execute(self, scan: Scan) -> ScanExecutionSummary:
-        config = ScopeConfig.from_dict(scan.scope_config)
-        validate_render_config(config.to_dict())
+        try:
+            validate_starting_url_length(scan.starting_url)
+            config = ScopeConfig.from_dict(scan.scope_config)
+            validate_render_config(config.to_dict())
+        except (ScopeConfigValidationError, ValueError) as exc:
+            return self._fail_invalid_config(scan, exc)
         self.context.progress(phase="preparing", current_operation="Preparing scan")
         renderer: BrowserRenderer | None = None
         if config.render_mode != "none":
@@ -177,6 +182,14 @@ class ScanExecutionCoordinator:
         scan.finished_at = datetime.now(UTC)
         self.db.commit()
         return ScanExecutionSummary(scan.status, static_errors, rendered_failures)
+
+    def _fail_invalid_config(self, scan: Scan, exc: ValueError) -> ScanExecutionSummary:
+        scan.status = "failed"
+        scan.stop_reason = "invalid_scope_config"
+        scan.fatal_error_message = f"Invalid Scan configuration: {exc}"
+        scan.finished_at = datetime.now(UTC)
+        self.db.commit()
+        return ScanExecutionSummary(scan.status, False, 0)
 
     @staticmethod
     def _render_counters(scan: Scan) -> dict[str, int]:
