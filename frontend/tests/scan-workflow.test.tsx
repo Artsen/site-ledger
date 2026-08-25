@@ -59,6 +59,7 @@ const api = vi.hoisted(() => ({
   addManualUrls: vi.fn(),
   removeManualSourceEntry: vi.fn(),
   listInventory: vi.fn(),
+  bulkDeleteInventoryEntries: vi.fn(),
   createInventorySuppression: vi.fn(),
   deleteInventorySuppression: vi.fn(),
   bulkCreateInventorySuppressions: vi.fn(),
@@ -291,6 +292,7 @@ beforeEach(() => {
   api.listSourceEntries.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
   api.addManualUrls.mockResolvedValue({ source: sourceFixture, items: [], accepted_count: 1, rejected_count: 1, duplicate_count: 0 });
   api.removeManualSourceEntry.mockResolvedValue({});
+  api.bulkDeleteInventoryEntries.mockResolvedValue({ selected: 2, changed: 2, unchanged: 0, rejected: 0 });
   api.createInventorySuppression.mockResolvedValue({ id: 15 });
   api.deleteInventorySuppression.mockResolvedValue({ deleted_suppression_id: 15 });
   api.bulkCreateInventorySuppressions.mockResolvedValue({ selected: 1, changed: 1, unchanged: 0, rejected: 0 });
@@ -762,7 +764,7 @@ describe("saved sites workflow", () => {
     expect(screen.getByRole("link", { name: "Open Observation" })).toBeInTheDocument();
   });
 
-  it("removes Pages and Inventory URLs through accessible lifecycle confirmations", async () => {
+  it("removes Pages and deletes Inventory Source entries through accessible confirmations", async () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages");
 
     fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
@@ -773,10 +775,10 @@ describe("saved sites workflow", () => {
 
     cleanup();
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");
-    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
-    expect(screen.getByRole("dialog", { name: "Remove this URL from Inventory?" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Remove from Inventory" }));
-    await waitFor(() => expect(api.createInventorySuppression).toHaveBeenCalledWith("3", 6));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(screen.getByRole("dialog", { name: "Delete this URL from Inventory?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete from Inventory" }));
+    await waitFor(() => expect(api.bulkDeleteInventoryEntries).toHaveBeenCalledWith("3", [6, 8]));
   });
 
   it("uses independent Page and Inventory state filters", async () => {
@@ -790,15 +792,15 @@ describe("saved sites workflow", () => {
     await waitFor(() => expect(api.listInventory).toHaveBeenLastCalledWith("3", expect.stringContaining("visibility=suppressed")));
   });
 
-  it("selects Inventory rows for bulk remove and restore", async () => {
+  it("selects Inventory rows for bulk delete and restores legacy suppressions", async () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");
 
     fireEvent.click(await screen.findByLabelText("Select https://example.com/a"));
-    fireEvent.click(screen.getByRole("button", { name: "Remove selected" }));
-    expect(screen.getByRole("dialog", { name: "Remove 1 selected URL from Inventory?" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Remove from Inventory" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    expect(screen.getByRole("dialog", { name: "Delete 1 selected URL from Inventory?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete from Inventory" }));
     await waitFor(() =>
-      expect(api.bulkCreateInventorySuppressions).toHaveBeenCalledWith("3", [6]),
+      expect(api.bulkDeleteInventoryEntries).toHaveBeenCalledWith("3", [6, 8]),
     );
 
     cleanup();

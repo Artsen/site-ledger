@@ -82,10 +82,11 @@ test("Accessibility workspace is responsive and keeps automated evidence explici
   await expect(page.getByRole("link", { name: "Accessibility" })).toHaveAttribute("aria-current", "page");
 });
 
-test("Page and Inventory removal lifecycles support removed views and restoration", async ({ page }) => {
+test("Page removal is restorable while Inventory deletion removes Source entries", async ({ page }) => {
   await mockApi(page);
   let pageState: "active" | "suppressed" = "active";
   let inventorySuppressed = false;
+  let inventoryExists = true;
 
   await page.route(/\/api\/sites\/3\/pages(?:\?.*)?$/, async (route) => {
     const requested = new URL(route.request().url()).searchParams.get("workspace_state") ?? "active";
@@ -99,7 +100,7 @@ test("Page and Inventory removal lifecycles support removed views and restoratio
   await page.route(/\/api\/sites\/3\/inventory(?:\?.*)?$/, async (route) => {
     const requested = new URL(route.request().url()).searchParams.get("visibility") ?? "active";
     const state = inventorySuppressed ? "suppressed" : "active";
-    const visible = requested === "all" || requested === state;
+    const visible = inventoryExists && (requested === "all" || requested === state);
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: visible ? [{ normalized_url: "https://example.com/pricing", resource_id: 2, source_count: 2, source_types: ["manual", "sitemap"], sources: [{ id: 4, name: "Main sitemap", type: "sitemap", entry_id: 6, raw_url: "https://example.com/pricing" }, { id: 7, name: "Manual URLs", type: "manual", entry_id: 8, raw_url: "/pricing" }], scope_decision: "crawlable", validation_state: "valid", sitemap_lastmod: null, latest_scan_status: "completed", latest_fetch_date: "2026-08-25T00:00:00Z", classification: "source_and_crawl", suppression_id: inventorySuppressed ? 15 : null, is_suppressed: inventorySuppressed, suppressed_at: inventorySuppressed ? "2026-08-25T00:00:00Z" : null }] : [], total: visible ? 1 : 0, limit: 50, offset: 0 }) });
   });
   await page.route("**/api/sites/3/inventory/suppressions", async (route) => {
@@ -118,6 +119,12 @@ test("Page and Inventory removal lifecycles support removed views and restoratio
     inventorySuppressed = false;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ selected: 1, changed: 1, unchanged: 0, rejected: 0 }) });
   });
+  await page.route("**/api/sites/3/inventory/bulk-delete", async (route) => {
+    expect((await route.request().postDataJSON()).entry_ids).toEqual([6, 8]);
+    inventoryExists = false;
+    inventorySuppressed = false;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ selected: 2, changed: 2, unchanged: 0, rejected: 0 }) });
+  });
 
   await page.goto("/sites/3/pages");
   await page.getByRole("button", { name: "Remove", exact: true }).click();
@@ -132,16 +139,11 @@ test("Page and Inventory removal lifecycles support removed views and restoratio
 
   await page.goto("/sites/3/inventory");
   await page.getByLabel("Select all Inventory URLs on this loaded page").check();
-  await page.getByRole("button", { name: "Remove selected" }).click();
-  await page.getByRole("button", { name: "Remove from Inventory" }).click();
+  await page.getByRole("button", { name: "Delete selected" }).click();
+  await page.getByRole("button", { name: "Delete from Inventory" }).click();
   await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
   await page.getByLabel("Inventory visibility").selectOption("suppressed");
-  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
-  await page.getByLabel("Select all Inventory URLs on this loaded page").check();
-  await page.getByRole("button", { name: "Restore selected" }).click();
-  await page.getByRole("button", { name: "Restore to Inventory" }).click();
-  await page.getByLabel("Inventory visibility").selectOption("active");
-  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
+  await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
 });
 
 test("Sources support loaded-page selection and one bulk refresh request", async ({ page }) => {

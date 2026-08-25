@@ -26,6 +26,7 @@ from app.schemas.sources import UrlSourceCreate
 from app.services.inventory_lifecycle import (
     ManagedSourceEntryError,
     bulk_create_inventory_suppressions,
+    bulk_delete_inventory_entries,
     bulk_restore_inventory_suppressions,
     create_inventory_suppression,
     delete_inventory_suppression,
@@ -236,6 +237,73 @@ async def test_sitemap_refresh_does_not_clear_inventory_suppression(
         offset=0,
     )
     assert active is not None and active.total == 0
+
+
+@pytest.mark.asyncio
+async def test_inventory_delete_allows_sitemap_refresh_to_recreate_without_duplicates(
+    db_session: Session,
+) -> None:
+    site = create_site(
+        db_session,
+        _site_payload(scope_config=ScopeConfigPayload(allowed_host_patterns=["example.com"])),
+    )
+    source = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Main sitemap", source_url="https://example.com/sitemap.xml"),
+    )
+    assert source is not None
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "application/xml"},
+            content=b"<urlset><url><loc>https://example.com/foo</loc></url></urlset>",
+        )
+    )
+    first_refresh = await refresh_source(db_session, site.id, source.id, transport)
+    original = db_session.query(UrlSourceEntry).one()
+    original_resource_id = original.resource_id
+    suppression = create_inventory_suppression(db_session, site.id, original.id)
+    assert suppression is not None
+
+    deleted = bulk_delete_inventory_entries(db_session, site.id, [original.id, original.id])
+    assert deleted is not None
+    assert (deleted.selected, deleted.changed, deleted.unchanged) == (1, 1, 0)
+    assert db_session.query(UrlSourceEntry).count() == 0
+    assert db_session.get(SiteInventorySuppression, suppression.id) is None
+    assert db_session.get(WebResource, original_resource_id) is not None
+
+    recreated = await refresh_source(db_session, site.id, source.id, transport)
+    recreated_entry = db_session.query(UrlSourceEntry).one()
+    assert first_refresh is not None and first_refresh.entries_added == 1
+    assert recreated is not None and recreated.entries_added == 1
+    assert recreated_entry.resource_id == original_resource_id
+
+    repeated = await refresh_source(db_session, site.id, source.id, transport)
+    assert repeated is not None
+    assert (repeated.entries_added, repeated.entries_updated) == (0, 1)
+    assert db_session.query(UrlSourceEntry).count() == 1
+
+
+def test_bulk_inventory_delete_is_atomic_across_sites(db_session: Session) -> None:
+    site = create_site(db_session, _site_payload())
+    _source, entries, *_ = add_manual_urls(
+        db_session, site.id, "https://example.com/first\nhttps://example.com/second"
+    )
+    other = create_site(
+        db_session,
+        WebsitePropertyCreate(name="Other", base_url="https://other.example/"),
+    )
+    _other_source, other_entries, *_ = add_manual_urls(
+        db_session, other.id, "https://other.example/first"
+    )
+
+    with pytest.raises(ValueError, match="do not belong"):
+        bulk_delete_inventory_entries(db_session, site.id, [entries[0].id, other_entries[0].id])
+
+    assert db_session.get(UrlSourceEntry, entries[0].id) is not None
+    assert db_session.get(UrlSourceEntry, entries[1].id) is not None
+    assert db_session.get(UrlSourceEntry, other_entries[0].id) is not None
 
 
 @pytest.mark.asyncio

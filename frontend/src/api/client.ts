@@ -113,6 +113,7 @@ export const cancelSourceRefresh = (refreshId: string) => request<SourceRefresh>
 export const listSourceEntries = (siteId: string, sourceId: string, query = "") => request<UrlSourceEntryList>(`/api/sites/${siteId}/sources/${sourceId}/entries${query}`);
 export const addManualUrls = (siteId: string, urlsText: string) => request<ManualUrlBatchResult>(`/api/sites/${siteId}/manual-urls`, { method: "POST", body: JSON.stringify({ urls_text: urlsText }) });
 export const listInventory = (siteId: string, query = "") => request<InventoryList>(`/api/sites/${siteId}/inventory${query}`);
+export const bulkDeleteInventoryEntries = (siteId: string, entryIds: number[]) => request<BulkMutationResult>(`/api/sites/${siteId}/inventory/bulk-delete`, { method: "POST", body: JSON.stringify({ entry_ids: entryIds }) });
 export const createInventorySuppression = (siteId: string, entryId: number) => request<{ id: number }>(`/api/sites/${siteId}/inventory/suppressions`, { method: "POST", body: JSON.stringify({ entry_id: entryId }) });
 export const deleteInventorySuppression = (siteId: string, suppressionId: number) => request<{ deleted_suppression_id: number }>(`/api/sites/${siteId}/inventory/suppressions/${suppressionId}`, { method: "DELETE" });
 export const bulkCreateInventorySuppressions = (siteId: string, entryIds: number[]) => request<BulkMutationResult>(`/api/sites/${siteId}/inventory/suppressions/bulk`, { method: "POST", body: JSON.stringify({ entry_ids: entryIds }) });

@@ -144,6 +144,45 @@ def bulk_restore_inventory_suppressions(
     return BulkMutationResult(selected=len(suppressions), changed=len(suppressions), unchanged=0)
 
 
+def bulk_delete_inventory_entries(
+    db: Session, site_id: int, entry_ids: list[int]
+) -> BulkMutationResult | None:
+    site = db.get(WebsiteProperty, site_id)
+    if site is None:
+        return None
+    requested_ids = set(entry_ids)
+    entries = list(
+        db.scalars(
+            select(UrlSourceEntry)
+            .join(UrlSource, UrlSource.id == UrlSourceEntry.url_source_id)
+            .where(
+                UrlSource.website_property_id == site_id,
+                UrlSourceEntry.id.in_(requested_ids),
+            )
+        )
+    )
+    if len(entries) != len(requested_ids):
+        raise ValueError("One or more Inventory entries do not belong to this Site.")
+
+    suppressions = inventory_suppression_map(db, site)
+    matching_suppressions = {
+        suppression.id: suppression
+        for entry in entries
+        if (suppression := matching_inventory_suppression(db, site, entry, suppressions))
+        is not None
+    }
+    for suppression in matching_suppressions.values():
+        db.delete(suppression)
+    for entry in entries:
+        db.delete(entry)
+    db.commit()
+    return BulkMutationResult(
+        selected=len(requested_ids),
+        changed=len(entries),
+        unchanged=0,
+    )
+
+
 def remove_manual_source_entry(
     db: Session, site_id: int, source_id: int, entry_id: int
 ) -> UrlSourceEntry | None:

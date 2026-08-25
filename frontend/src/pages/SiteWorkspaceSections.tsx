@@ -9,7 +9,7 @@ import {
 
 import {
   addManualUrls,
-  bulkCreateInventorySuppressions,
+  bulkDeleteInventoryEntries,
   bulkRefreshSources,
   bulkRestoreInventorySuppressions,
   bulkPageWorkspaceState,
@@ -19,10 +19,8 @@ import {
   createSource,
   createAiDocumentSource,
   createPageCategory,
-  createInventorySuppression,
   createSiteNote,
   deletePageCategory,
-  deleteInventorySuppression,
   getPageCategoryDeletionPreview,
   deleteSite,
   deleteSource,
@@ -1485,9 +1483,13 @@ export function SiteInventorySection({ site }: { site: Site }) {
     inventory.data?.items.filter((item) =>
       selected.includes(inventoryItemKey(item)),
     ) ?? [];
-  const selectedEntryIds = selectedItems
-    .filter((item) => !item.is_suppressed)
-    .map((item) => Number(item.sources[0]?.entry_id));
+  const selectedEntryIds = Array.from(
+    new Set(
+      selectedItems.flatMap((item) =>
+        item.sources.map((source) => Number(source.entry_id)),
+      ),
+    ),
+  );
   const selectedSuppressionIds = selectedItems
     .filter(
       (item): item is InventoryItem & { suppression_id: number } =>
@@ -1580,12 +1582,12 @@ export function SiteInventorySection({ site }: { site: Site }) {
           </span>
           {selectedEntryIds.length ? (
             <LifecycleAction
-              label="Remove selected"
-              title={`Remove ${plural(selectedEntryIds.length, "selected URL")} from Inventory?`}
-              description="Source declarations and historical evidence remain intact. The URLs will also be skipped as Inventory-derived scan seeds."
-              confirmLabel="Remove from Inventory"
+              label="Delete selected"
+              title={`Delete ${plural(selected.length, "selected URL")} from Inventory?`}
+              description="The selected Source entries will be deleted. Historical scan evidence remains, and a later Source refresh can discover these URLs again."
+              confirmLabel="Delete from Inventory"
               action={async () => {
-                await bulkCreateInventorySuppressions(
+                await bulkDeleteInventoryEntries(
                   String(site.id),
                   selectedEntryIds,
                 );
@@ -1627,8 +1629,8 @@ export function SiteInventorySection({ site }: { site: Site }) {
       ) : null}
       {controls ? <div className="mt-4">{controls}</div> : null}
       <p className="mt-4 text-xs text-stone-600">
-        Removing an Inventory URL suppresses it from active Inventory and
-        Inventory-based scan seeding. Source declarations and historical evidence remain intact.
+        Deleting an Inventory URL removes its current Source declarations. Historical scan
+        evidence remains, and Source refreshes can discover the URL again.
       </p>
     </section>
   );
@@ -1737,20 +1739,15 @@ function InventoryTable({
               <td className="px-3 py-2">{item.classification}</td>
               <td className="px-3 py-2">
                 <LifecycleAction
-                  label={item.is_suppressed ? "Restore" : "Remove"}
-                  title={item.is_suppressed ? "Restore this URL to Inventory?" : "Remove this URL from Inventory?"}
-                  description={item.is_suppressed ? "The URL will return to active Inventory and Inventory-based scan seeding." : "Source declarations and historical evidence remain intact. Ordinary crawler discovery is not blocked."}
-                  confirmLabel={item.is_suppressed ? "Restore to Inventory" : "Remove from Inventory"}
-                  restore={item.is_suppressed}
+                  label="Delete"
+                  title="Delete this URL from Inventory?"
+                  description="Its current Source declarations will be deleted. Historical scan evidence remains, and a later Source refresh can discover the URL again."
+                  confirmLabel="Delete from Inventory"
                   action={async () => {
-                    if (item.is_suppressed && item.suppression_id) {
-                      await deleteInventorySuppression(String(siteId), item.suppression_id);
-                    } else {
-                      await createInventorySuppression(
-                        String(siteId),
-                        Number(item.sources[0].entry_id),
-                      );
-                    }
+                    await bulkDeleteInventoryEntries(
+                      String(siteId),
+                      item.sources.map((source) => Number(source.entry_id)),
+                    );
                     await onChanged();
                   }}
                 />
