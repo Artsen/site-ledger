@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import threading
 import time
@@ -157,6 +158,29 @@ async def test_chromium_under_budget_capture_retains_artifacts(budget_server: st
         "rendered_dom",
         "viewport_screenshot",
     }
+
+
+@pytest.mark.asyncio
+async def test_chromium_cancels_capture_with_route_callback_in_flight(
+    budget_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route_entered = asyncio.Event()
+
+    async def stalled_destination_validation(*_args: object) -> None:
+        route_entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        "app.browser.capture.validate_public_destination",
+        stalled_destination_validation,
+    )
+    url = f"{budget_server}/under"
+    async with BrowserRenderer(_config(), url) as renderer:
+        capture = asyncio.create_task(renderer.capture(url))
+        await asyncio.wait_for(route_entered.wait(), timeout=5)
+        capture.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(capture, timeout=5)
 
 
 @pytest.mark.asyncio

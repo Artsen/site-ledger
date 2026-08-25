@@ -474,11 +474,22 @@ class BrowserRenderer:
             if capture_artifacts and page and not page.is_closed():
                 await self._capture_artifacts(page, result, warning)
         finally:
+            try:
+                await context.unroute_all(behavior="ignoreErrors")
+            except Exception as exc:
+                warning("route_teardown_failed", str(exc))
+                if result.state == "completed":
+                    result.state = "completed_with_warnings"
             if event_tasks:
                 await asyncio.gather(*event_tasks, return_exceptions=True)
             result.total_network_bytes = byte_budget.total
             result.duration_ms = elapsed()
-            await context.close()
+            try:
+                await context.close()
+            except Exception as exc:
+                warning("context_close_failed", str(exc))
+                if result.state == "completed":
+                    result.state = "completed_with_warnings"
         return result
 
     async def _capture_artifacts(self, page: Any, result: CaptureResult, warning: Any) -> None:
