@@ -9,6 +9,21 @@ from lxml.etree import ParserError
 from app.crawler.link_roles import classify_link_role
 from app.crawler.resource_classification import classify_reference
 
+LINK_RESOURCE_RELATION_PRECEDENCE = (
+    "stylesheet",
+    "manifest",
+    "apple-touch-icon",
+    "mask-icon",
+    "icon",
+    "modulepreload",
+    "preload",
+    "alternate",
+)
+
+
+def rel_tokens(value: str | None) -> frozenset[str]:
+    return frozenset(token.casefold() for token in value.split()) if value else frozenset()
+
 
 @dataclass(frozen=True)
 class AnchorData:
@@ -111,7 +126,7 @@ def parse_html(content: bytes, base_url: str) -> ParsedHtml:
                 item = _attributes(child)
                 links.append(item)
                 ordered.append({"tag": "link", "attributes": item})
-                if (item.get("rel") or "").lower() == "canonical" and item.get("href"):
+                if "canonical" in rel_tokens(item.get("rel")) and item.get("href"):
                     canonical = urljoin(base_url, item["href"])
             elif tag == "script" and (child.get("type") or "").lower() == "application/ld+json":
                 text = child.text_content()
@@ -236,21 +251,11 @@ def _extract_resource_references(document: Any, base_url: str) -> list[ResourceR
 
 def _resource_attributes(tag: str, element: Any, rel: str | None) -> list[tuple[str, str]]:
     if tag == "link":
-        rel_tokens = set((rel or "").casefold().split())
-        supported = {
-            "stylesheet",
-            "icon",
-            "apple-touch-icon",
-            "mask-icon",
-            "preload",
-            "modulepreload",
-            "manifest",
-            "alternate",
-        }
-        if not rel_tokens.intersection(supported):
-            return []
-        relation = next((item for item in supported if item in rel_tokens), "link_resource")
-        return [("href", relation)]
+        tokens = rel_tokens(rel)
+        for relation in LINK_RESOURCE_RELATION_PRECEDENCE:
+            if relation in tokens:
+                return [("href", relation)]
+        return []
     if tag == "object":
         return [("data", "embedded_object")]
     if tag == "video":

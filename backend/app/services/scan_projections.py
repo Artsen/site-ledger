@@ -33,9 +33,12 @@ from app.models import (
 from app.schemas.projections import ProjectionMetadata, ScanProjectionStatusRead
 
 SCAN_PROJECTION_VERSION = "scan-projection-v1"
-SCAN_PROJECTION_ALGORITHM = (
-    "scan-projection-v1:html-parser-v3-resource-references:resource-classifier-v1:link-role-v1"
+CURRENT_SCAN_PROJECTION_ALGORITHM = "scan-projection-v1:resource-classifier-v1:link-role-v1"
+LEGACY_COMPATIBLE_SCAN_PROJECTION_ALGORITHMS = frozenset(
+    {"scan-projection-v1:html-parser-v3-resource-references:resource-classifier-v1:link-role-v1"}
 )
+# Retain the original exported name for callers while new code uses the explicit current identity.
+SCAN_PROJECTION_ALGORITHM = CURRENT_SCAN_PROJECTION_ALGORITHM
 TERMINAL_SCAN_STATUSES = {
     "completed",
     "completed_with_errors",
@@ -58,6 +61,13 @@ class ProjectionContext:
     build: ScanProjectionBuild | None
 
 
+def is_compatible_projection_algorithm(value: str) -> bool:
+    return (
+        value == CURRENT_SCAN_PROJECTION_ALGORITHM
+        or value in LEGACY_COMPATIBLE_SCAN_PROJECTION_ALGORITHMS
+    )
+
+
 def _chunks(items: list[T], size: int = PROJECTION_BATCH_SIZE) -> Iterable[list[T]]:
     for offset in range(0, len(items), size):
         yield items[offset : offset + size]
@@ -72,7 +82,7 @@ def current_projection_build(db: Session, scan_id: int) -> ScanProjectionBuild |
         build is None
         or build.status != "ready"
         or build.projection_version != SCAN_PROJECTION_VERSION
-        or build.algorithm_identity != SCAN_PROJECTION_ALGORITHM
+        or not is_compatible_projection_algorithm(build.algorithm_identity)
     ):
         return None
     return build
@@ -97,7 +107,7 @@ def resolve_projection_context(db: Session, scan_id: int) -> ProjectionContext:
         if build is not None
         and build.status == "ready"
         and build.projection_version == SCAN_PROJECTION_VERSION
-        and build.algorithm_identity == SCAN_PROJECTION_ALGORITHM
+        and is_compatible_projection_algorithm(build.algorithm_identity)
         else None
     )
     return ProjectionContext(scan, compatible)
@@ -229,7 +239,7 @@ def create_projection_build(
     build = ScanProjectionBuild(
         scan_id=scan_id,
         projection_version=SCAN_PROJECTION_VERSION,
-        algorithm_identity=SCAN_PROJECTION_ALGORITHM,
+        algorithm_identity=CURRENT_SCAN_PROJECTION_ALGORITHM,
         status="queued",
         active_key=f"{scan_id}:{SCAN_PROJECTION_VERSION}",
         validation_json={},

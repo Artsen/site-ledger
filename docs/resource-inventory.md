@@ -79,15 +79,23 @@ preserved where available.
 
 ```mermaid
 flowchart LR
-  B[ContentBlob] --> A[HtmlParseArtifact\nparser v3]
+  B[ContentBlob] --> A[HtmlParseArtifact\nparser v4]
   A --> H[HtmlParseAnchor\nduplicate preserving]
   A --> E[HtmlParseResourceReference\nduplicate preserving]
   E --> C[srcset candidates\nseparate positions]
 ```
 
-`HtmlParseArtifact` uses parser version `html-parser-v3-resource-references`. Exact-hash reuse loads
-the deterministic parsed references. Current Scan scope is recomputed when references become
-Scan-specific occurrences; an old scope decision is never reused.
+`HtmlParseArtifact` uses parser version `html-parser-v4-rel-token-semantics`. HTML `rel` attributes
+are interpreted as case-insensitive whitespace-separated token sets. Canonical detection uses token
+membership. Link Resource references select the first present relation from the fixed precedence
+`stylesheet`, `manifest`, `apple-touch-icon`, `mask-icon`, `icon`, `modulepreload`, `preload`,
+`alternate`; equivalent token sets therefore produce the same derived relation regardless of source
+token order or Python hash seed. Unknown tokens do not interfere with recognized tokens.
+
+Raw `rel` strings, `parsed_head_json`, DOM order, and source-derived head hashes remain unchanged.
+Exact-hash reuse loads only a compatible blob, parser version, configuration, and resolution-base
+artifact. Historical V3 artifacts remain unchanged and are not reused as V4. Current Scan scope is
+recomputed when references become Scan-specific occurrences; an old scope decision is never reused.
 
 ```mermaid
 flowchart LR

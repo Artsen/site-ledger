@@ -23,6 +23,7 @@ from app.models import (
     WebsiteProperty,
 )
 from app.schemas.scans import ScopeConfigPayload
+from app.services.scan_projections import CURRENT_SCAN_PROJECTION_ALGORITHM
 
 
 def main() -> None:
@@ -70,6 +71,9 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         )
         assert len(projections) == 2
         assert all(build.projection_version == "scan-projection-v1" for build in projections)
+        assert all(
+            build.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM for build in projections
+        )
         comparison = db.get(ScanComparison, comparison_id)
         assert comparison is not None and comparison.current_build_id is not None
         build = db.get(ScanComparisonBuild, comparison.current_build_id)
@@ -170,6 +174,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "crawler_request_paths": sorted({entry["path"] for entry in crawler_requests}),
         "duplicate_artifact_identity_count": 0,
         "foreign_key_violation_count": 0,
+        "projection_algorithm_identities": [build.algorithm_identity for build in projections],
         "projection_versions": [build.projection_version for build in projections],
         "structured_artifact_ids": artifact_ids,
         "structured_artifact_hashes": {

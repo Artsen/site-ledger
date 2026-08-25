@@ -192,10 +192,15 @@ The following legacy technical identifiers are intentionally retained:
 Preserve these unless a dedicated compatibility migration is explicitly designed. A rename must
 never make existing local data appear missing or silently discard saved preferences.
 
-Current deterministic compatibility identifiers include `html-parser-v3-resource-references`,
+Current deterministic compatibility identifiers include `html-parser-v4-rel-token-semantics`,
 `structured-content-v1` with `default-v1`, `document-content-v2`, `scan-comparison-v2`, and
 `scan-projection-v1`. Treat identity changes as explicit versioned compatibility changes, not
 incidental refactors.
+
+Scan projection algorithm provenance describes projection computation. Do not encode upstream
+evidence-producer versions when those versions are already preserved on their own artifacts. Keep
+historical projection identities readable through explicit compatibility rules rather than
+rewriting or rebuilding retained projections merely to rename provenance.
 
 ## Crawl Behavior
 
@@ -218,6 +223,12 @@ A scan with Page-level failures normally completes with errors rather than faili
 Conditional requests must use the same safe fetcher, redirect checks, scope checks, limits, and SSRF
 protections as full requests. Parse artifact identity includes content blob, parser version, parser
 configuration, and URL resolution base.
+
+HTML `rel` attributes are case-insensitive token lists for derived semantics. Equivalent token sets
+must produce deterministic results independent of source token order and `PYTHONHASHSEED`; never
+choose semantic output by iterating an unordered set. Preserve raw `rel` strings as evidence. Parser
+semantic corrections require a parser-version bump, and historical artifacts must never be silently
+reinterpreted under a newer parser contract.
 
 Do not change crawler behavior as part of a product rebrand.
 
