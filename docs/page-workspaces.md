@@ -152,7 +152,7 @@ flowchart LR
   Scope[Current Scan ScopeEngine] --> Occurrence
 ```
 
-Parser version `html-parser-v3-resource-references` retains link roles and adds embedded Resource
+Parser version `html-parser-v4-rel-token-semantics` retains link roles and embedded Resource
 references. Existing occurrences remain valid with null roles and display as **Unclassified legacy
 link**. A future scan parses or selects a current-version artifact, copies role evidence to new
 occurrences, and independently recomputes scope decisions. Historical rows are not mass-reparsed.

@@ -15,7 +15,7 @@ from app.models import (
 )
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
-HTML_PARSER_VERSION = "html-parser-v3-resource-references"
+HTML_PARSER_VERSION = "html-parser-v4-rel-token-semantics"
 HTML_PARSER_CONFIG_VERSION = "default-v1"
 
 

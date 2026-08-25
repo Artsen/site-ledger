@@ -5,7 +5,7 @@ outline and direct text sections of retained static HTML without replacing exact
 links, executing JavaScript, or changing comparison semantics.
 
 The current identity is `structured-content-v1 | default-v1 | ContentBlob`. It is intentionally
-independent from `html-parser-v3-resource-references`, `document-content-v2`,
+independent from `html-parser-v4-rel-token-semantics`, `document-content-v2`,
 `scan-comparison-v2`, and `scan-projection-v1`.
 
 ## Ownership And Identity

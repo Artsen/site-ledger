@@ -33,6 +33,13 @@ When the same artifact exists, the crawler can reuse parsed head metadata and or
 reuse is disabled, the crawler performs a fresh parse pass but still does not create duplicate
 artifact rows for an identical artifact identity.
 
+The current parser identity is `html-parser-v4-rel-token-semantics` with configuration `default-v1`.
+V4 treats HTML `rel` attributes as case-insensitive whitespace-separated token lists for derived
+canonical and Resource-reference decisions. Raw `rel` strings, ordered head evidence, and head
+hashes remain source evidence. Existing V3 artifacts remain historical rows and cannot satisfy a V4
+artifact lookup; the first V4 request creates a separate artifact and later identical V4 requests
+reuse it.
+
 ## Conditional HTTP Revalidation
 
 For repeat saved-site scans, the crawler may use a prior observation as a revalidation candidate when
@@ -64,7 +71,7 @@ current parse artifact and scope configuration. It does not reuse old Scan occur
 
 Current parser artifacts also store occurrence-specific link role and rule evidence. Scope remains
 scan-specific and is recomputed when anchors are reused. See [Page workspaces](page-workspaces.md).
-Parser v3 also stores duplicate-preserving embedded references; see
+Parser v4 also stores duplicate-preserving embedded references; see
 [Resource Inventory](resource-inventory.md).
 
 ## Limits
