@@ -5,8 +5,15 @@ immutable evidence. They make repeated Page, Resource, link, summary, and graph 
 are disposable and rebuildable; the observations, occurrences, stored HTML, browser events,
 artifacts, fetch attempts, and redirect evidence remain authoritative.
 
-The current projection version is `scan-projection-v1`. Its algorithm identity also records the
-HTML parser, Resource classifier, and link-role identities that affect projected values.
+The current projection version is `scan-projection-v1`. New builds use algorithm identity
+`scan-projection-v1:resource-classifier-v1:link-role-v1`, which describes the projection
+computation itself. Upstream evidence producers such as the HTML parser retain their own versioned
+artifact provenance and are not duplicated in the projection identity.
+
+Ready historical builds stamped with
+`scan-projection-v1:html-parser-v3-resource-references:resource-classifier-v1:link-role-v1` remain
+compatible and readable. This compatibility does not rewrite or rebuild them; all new builds store
+only the decoupled current identity. Unknown identities remain incompatible.
 
 ## Evidence Boundary
 

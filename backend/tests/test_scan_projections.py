@@ -21,6 +21,7 @@ from app.services.graph_filters import GraphFilters
 from app.services.graph_queries import get_scan_graph, get_scan_graph_dynamic
 from app.services.job_handlers import _enqueue_projection_for_terminal_scan
 from app.services.job_types import JOB_TYPE_SCAN_PROJECTION_BUILD
+from app.services.parse_artifacts import HTML_PARSER_VERSION, get_or_create_artifact
 from app.services.resource_queries import (
     list_scan_resources,
     list_scan_resources_dynamic,
@@ -28,15 +29,23 @@ from app.services.resource_queries import (
     scan_resource_summary_dynamic,
 )
 from app.services.scan_projections import (
+    CURRENT_SCAN_PROJECTION_ALGORITHM,
+    LEGACY_COMPATIBLE_SCAN_PROJECTION_ALGORITHMS,
     SCAN_PROJECTION_VERSION,
     ProjectionBuildCancelled,
     create_projection_build,
     current_projection_build,
     delete_scan_projection_data,
     execute_projection_build,
+    is_compatible_projection_algorithm,
     projection_status,
 )
 from app.services.scan_queries import list_scan_pages_dynamic, list_scan_pages_routed
+from app.storage.content_store import LocalContentStore
+
+LEGACY_V3_PROJECTION_ALGORITHM = (
+    "scan-projection-v1:html-parser-v3-resource-references:resource-classifier-v1:link-role-v1"
+)
 
 
 def test_projection_build_activates_equivalent_page_resource_and_graph_reads(db_session) -> None:
@@ -53,6 +62,7 @@ def test_projection_build_activates_equivalent_page_resource_and_graph_reads(db_
 
     assert ready.status == "ready"
     assert ready.projection_version == SCAN_PROJECTION_VERSION
+    assert ready.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
     assert current_projection_build(db_session, scan.id) is not None
     assert _raw_counts(db_session) == raw_counts
     projected_pages = _pages(db_session, scan.id)
@@ -79,6 +89,80 @@ def test_projection_build_activates_equivalent_page_resource_and_graph_reads(db_
     assert [item.model_dump() for item in projected_graph.edges] == [
         item.model_dump() for item in dynamic_graph.edges
     ]
+
+
+def test_projection_algorithm_compatibility_accepts_current_and_legacy_only() -> None:
+    assert {LEGACY_V3_PROJECTION_ALGORITHM} == LEGACY_COMPATIBLE_SCAN_PROJECTION_ALGORITHMS
+    assert is_compatible_projection_algorithm(CURRENT_SCAN_PROJECTION_ALGORITHM)
+    assert is_compatible_projection_algorithm(LEGACY_V3_PROJECTION_ALGORITHM)
+    assert not is_compatible_projection_algorithm("scan-projection-v1:unknown")
+
+
+def test_legacy_v3_stamped_ready_projection_remains_compatible(db_session) -> None:
+    scan = _fixture(db_session, "completed")
+    build = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    ready = execute_projection_build(db_session, build.id)
+    ready.algorithm_identity = LEGACY_V3_PROJECTION_ALGORITHM
+    db_session.commit()
+
+    compatible = current_projection_build(db_session, scan.id)
+
+    assert compatible is not None
+    assert compatible.id == ready.id
+    assert create_projection_build(db_session, scan.id).id == ready.id
+    assert _pages(db_session, scan.id).projection.projection_source == "materialized"
+    status = projection_status(db_session, scan.id)
+    assert status is not None
+    assert status.projection_source == "materialized"
+    assert status.can_rebuild is True
+
+
+def test_current_identity_rebuild_preserves_projection_checksum(db_session) -> None:
+    scan = _fixture(db_session, "completed")
+    first = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    first_ready = execute_projection_build(db_session, first.id)
+    rebuild = create_projection_build(db_session, scan.id, force=True)
+    db_session.commit()
+    second_ready = execute_projection_build(db_session, rebuild.id)
+
+    assert first_ready.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
+    assert second_ready.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
+    assert first_ready.checksum_sha256 == second_ready.checksum_sha256
+
+
+def test_v4_derived_scan_builds_decoupled_projection(db_session, tmp_path) -> None:
+    scan = _fixture(db_session, "completed")
+    store = LocalContentStore(tmp_path / "html")
+    content = b'<html><head><link rel="alternate canonical" href="/canonical"></head></html>'
+    blob = store.put_html(db_session, content, "text/html", "utf-8")
+    artifact = get_or_create_artifact(
+        db_session,
+        blob=blob,
+        content=content,
+        resolution_base_url="https://example.com/",
+    ).artifact
+    snapshot = db_session.scalar(
+        select(ResourceSnapshot)
+        .where(ResourceSnapshot.scan_id == scan.id)
+        .order_by(ResourceSnapshot.id)
+    )
+    assert snapshot is not None
+    snapshot.html_blob_id = blob.id
+    snapshot.parse_artifact_id = artifact.id
+    snapshot.raw_html_sha256 = blob.sha256
+    snapshot.head_sha256 = artifact.head_sha256
+    snapshot.canonical_url = artifact.canonical_url
+    db_session.commit()
+
+    build = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    ready = execute_projection_build(db_session, build.id)
+
+    assert artifact.parser_version == HTML_PARSER_VERSION == "html-parser-v4-rel-token-semantics"
+    assert ready.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
+    assert "html-parser" not in ready.algorithm_identity
 
 
 def test_mutable_site_metadata_does_not_change_scan_projection(db_session) -> None:

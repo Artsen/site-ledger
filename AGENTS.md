@@ -197,6 +197,11 @@ Current deterministic compatibility identifiers include `html-parser-v4-rel-toke
 `scan-projection-v1`. Treat identity changes as explicit versioned compatibility changes, not
 incidental refactors.
 
+Scan projection algorithm provenance describes projection computation. Do not encode upstream
+evidence-producer versions when those versions are already preserved on their own artifacts. Keep
+historical projection identities readable through explicit compatibility rules rather than
+rewriting or rebuilding retained projections merely to rename provenance.
+
 ## Crawl Behavior
 
 The crawler performs breadth-first HTTP GET traversal. It must:
