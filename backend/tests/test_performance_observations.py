@@ -22,17 +22,24 @@ from app.services.background_jobs import (
     enqueue_performance_run_job,
     recover_expired_jobs,
 )
+from app.services.observability_payload_gc import collect_performance_payload_gc
 from app.services.performance_collection import (
     CruxRateLimiter,
     PerformanceCollectionCancelled,
     create_performance_run,
     execute_performance_run,
 )
+from app.services.performance_deletion import (
+    delete_performance_observation,
+    preview_performance_observation_deletion,
+)
 from app.services.performance_presentation import (
     metric_presentations,
     parse_pagespeed_presentation,
 )
 from app.services.performance_providers import (
+    CRUX_ADAPTER_VERSION,
+    PAGESPEED_ADAPTER_VERSION,
     PERFORMANCE_NORMALIZATION_VERSION,
     PerformanceProviderClient,
     ProviderResult,
@@ -43,6 +50,7 @@ from app.services.performance_queries import (
     latest_site_performance,
     page_latest_performance,
     page_performance_history,
+    performance_observation_read,
 )
 from app.services.site_management import create_site
 from app.storage.performance_store import LocalPerformancePayloadStore
@@ -57,6 +65,51 @@ def test_pagespeed_normalization_uses_stable_metric_keys() -> None:
     assert metrics["server_response_time"]["value"] == 310
     assert metadata["provider_target"] == "https://example.com/final"
     assert metadata["product_version"] == "12.4.0"
+
+
+def test_performance_provider_versions_define_pagespeed_v2_boundary() -> None:
+    assert PAGESPEED_ADAPTER_VERSION == "pagespeed-provider-v2"
+    assert CRUX_ADAPTER_VERSION == "crux-provider-v1"
+    assert PERFORMANCE_NORMALIZATION_VERSION == "performance-normalization-v1"
+
+
+@pytest.mark.parametrize(
+    ("score", "audits", "expected_metrics"),
+    [
+        (0.91, {}, {"performance_score"}),
+        (None, {"largest-contentful-paint": {"numericValue": 2450}}, {"lcp"}),
+        (
+            None,
+            {
+                "first-contentful-paint": {"numericValue": 900},
+                "cumulative-layout-shift": {"numericValue": 0.08},
+            },
+            {"fcp", "cls"},
+        ),
+        (0, {}, {"performance_score"}),
+        (None, {"total-blocking-time": {"numericValue": 0}}, {"tbt"}),
+    ],
+    ids=["score-only", "one-audit", "audits-without-score", "zero-score", "zero-audit"],
+)
+def test_pagespeed_ready_requires_at_least_one_recognized_metric(
+    score: float | None,
+    audits: dict[str, dict[str, float]],
+    expected_metrics: set[str],
+) -> None:
+    document = _pagespeed_document()
+    document["lighthouseResult"]["categories"]["performance"]["score"] = score
+    document["lighthouseResult"]["audits"] = audits
+    client = PerformanceProviderClient(
+        "secret-key",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=document)),
+    )
+
+    result = client.pagespeed("https://example.com/page", "mobile")
+    client.close()
+
+    assert result.outcome == "ready"
+    assert set(result.metrics) == expected_metrics
+    assert result.normalized_sha256 is not None
 
 
 def test_crux_normalization_preserves_p75_histogram_and_provider_key() -> None:
@@ -92,6 +145,143 @@ def test_provider_retries_429_and_uses_fixed_pagespeed_contract() -> None:
     assert requests[0].url.path == "/pagespeedonline/v5/runPagespeed"
     assert requests[0].url.params["category"] == "performance"
     assert requests[0].url.params["strategy"] == "mobile"
+
+
+def test_pagespeed_rejects_lighthouse_response_without_usable_metrics() -> None:
+    document = _pagespeed_document()
+    document["lighthouseResult"]["categories"]["performance"]["score"] = None
+    document["lighthouseResult"]["audits"] = {}
+    payload = json.dumps(document).encode()
+    client = PerformanceProviderClient(
+        "secret-key",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=payload)),
+    )
+
+    result = client.pagespeed("https://example.com/page", "mobile")
+    client.close()
+
+    assert result.outcome == "failed"
+    assert result.error_type == "no_usable_performance_metrics"
+    assert result.error_message == "PageSpeed returned no usable Performance metrics."
+    assert result.metrics == {}
+    assert result.normalized_sha256 is None
+    assert result.payload == payload
+    assert result.provider_target == "https://example.com/final"
+    assert result.provider_analysis_at == datetime(2026, 8, 12, 12, tzinfo=UTC)
+    assert result.provider_product_version == "12.4.0"
+
+
+@pytest.mark.parametrize(
+    ("score", "audits"),
+    [
+        ("not-numeric", {}),
+        (None, {"unused-audit": {"numericValue": 123}}),
+        (None, {}),
+    ],
+    ids=["empty-audits", "unrelated-audits", "null-score"],
+)
+def test_pagespeed_metric_empty_variants_fail(
+    score: object, audits: dict[str, dict[str, float]]
+) -> None:
+    document = _pagespeed_document()
+    document["lighthouseResult"]["categories"]["performance"]["score"] = score
+    document["lighthouseResult"]["audits"] = audits
+    client = PerformanceProviderClient(
+        "secret-key",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=document)),
+    )
+
+    result = client.pagespeed("https://example.com/page", "mobile")
+    client.close()
+
+    assert result.outcome == "failed"
+    assert result.error_type == "no_usable_performance_metrics"
+    assert result.payload is not None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"{not-json",
+        b'{"id":"https://example.com/"}',
+        b'{"lighthouseResult":{"categories":{"performance":{"score":0.9}}}}',
+    ],
+    ids=["malformed-json", "missing-lighthouse", "missing-audits"],
+)
+def test_pagespeed_invalid_structures_remain_invalid_provider_payload(payload: bytes) -> None:
+    client = PerformanceProviderClient(
+        "secret-key",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=payload)),
+    )
+
+    result = client.pagespeed("https://example.com/page", "mobile")
+    client.close()
+
+    assert result.outcome == "failed"
+    assert result.error_type == "invalid_provider_payload"
+    assert result.payload == payload
+
+
+@pytest.mark.parametrize(
+    ("status", "error_type"),
+    [(400, "provider_http_error"), (401, "provider_auth_error"), (403, "provider_auth_error")],
+)
+def test_pagespeed_http_failures_remain_distinct(status: int, error_type: str) -> None:
+    client = PerformanceProviderClient(
+        "secret-key",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(status, json={"error": {}})),
+    )
+
+    result = client.pagespeed("https://example.com/page", "mobile")
+    client.close()
+
+    assert result.outcome == "failed"
+    assert result.error_type == error_type
+
+
+@pytest.mark.parametrize(
+    ("status", "error_type"),
+    [(429, "provider_rate_limited"), (500, "provider_http_error")],
+)
+def test_pagespeed_retryable_http_failures_settle_after_bounded_retries(
+    status: int, error_type: str
+) -> None:
+    attempts = 0
+
+    def respond(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(status, json={"error": {}})
+
+    client = PerformanceProviderClient(
+        "secret-key",
+        transport=httpx.MockTransport(respond),
+        sleep=lambda _delay: None,
+    )
+
+    result = client.pagespeed("https://example.com/page", "mobile")
+    client.close()
+
+    assert attempts == 3
+    assert result.outcome == "failed"
+    assert result.error_type == error_type
+
+
+def test_pagespeed_network_failure_remains_provider_network_error() -> None:
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("synthetic failure", request=request)
+
+    client = PerformanceProviderClient(
+        "secret-key",
+        transport=httpx.MockTransport(fail),
+        sleep=lambda _delay: None,
+    )
+
+    result = client.pagespeed("https://example.com/page", "mobile")
+    client.close()
+
+    assert result.outcome == "failed"
+    assert result.error_type == "provider_network_error"
 
 
 def test_crux_404_is_unavailable_and_payload_is_retained() -> None:
@@ -311,6 +501,220 @@ def test_run_is_bounded_idempotent_and_preserves_unavailable(
     current = latest_site_performance(db_session, site.id, provider=None, limit=20, offset=0)
     assert current.field_available_phone_page_count == 0
     assert current.field_available_page_count == 0
+
+
+def test_empty_pagespeed_metrics_persist_as_failed_evidence(
+    db_session: Session, tmp_path: Path, monkeypatch
+) -> None:
+    site, resource = _site_page(db_session)
+    settings = _settings(tmp_path)
+    monkeypatch.setattr("app.services.performance_collection.get_settings", lambda: settings)
+    document = _pagespeed_document()
+    document["lighthouseResult"]["categories"]["performance"]["score"] = None
+    document["lighthouseResult"]["audits"] = {}
+    payload = json.dumps(document, separators=(",", ":")).encode()
+    run = create_performance_run(
+        db_session,
+        site.id,
+        PerformanceRunCreate(
+            resource_ids=[resource.id],
+            providers=["pagespeed"],
+            pagespeed_strategies=["mobile"],
+            crux_form_factors=[],
+            include_origin_crux=False,
+        ),
+    )
+    db_session.commit()
+    session_factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+
+    result = execute_performance_run(
+        session_factory,
+        run.id,
+        should_cancel=lambda: False,
+        progress=lambda _current, _total, _counters: None,
+        client_factory=lambda: PerformanceProviderClient(
+            "secret-key",
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=payload)),
+        ),
+    )
+
+    db_session.expire_all()
+    observation = db_session.scalar(
+        select(PerformanceObservation).where(PerformanceObservation.performance_run_id == run.id)
+    )
+    assert observation is not None
+    assert result.status == "completed_with_errors"
+    assert (
+        result.completed_count,
+        result.ready_count,
+        result.unavailable_count,
+        result.failed_count,
+    ) == (
+        1,
+        0,
+        0,
+        1,
+    )
+    assert observation.provider == "pagespeed"
+    assert observation.provider_adapter_version == "pagespeed-provider-v2"
+    assert observation.normalization_version == "performance-normalization-v1"
+    assert observation.outcome == "failed"
+    assert observation.metrics_json == {}
+    assert observation.normalized_sha256 is None
+    assert observation.payload_blob_id is not None
+    assert observation.error_type == "no_usable_performance_metrics"
+    assert observation.provider_target == "https://example.com/final"
+    assert observation.provider_analysis_at == datetime(2026, 8, 12, 12, tzinfo=UTC)
+    assert observation.provider_product_version == "12.4.0"
+    blob = db_session.get(PerformancePayloadBlob, observation.payload_blob_id)
+    assert blob is not None
+    store = LocalPerformancePayloadStore(settings.performance_payload_storage_root)
+    assert store.read(blob) == payload
+
+    latest = latest_site_performance(db_session, site.id, provider="pagespeed", limit=10, offset=0)
+    page_latest = page_latest_performance(db_session, site.id, resource.id)
+    assert latest.total == 1 and latest.items[0].outcome == "failed"
+    assert page_latest.total == 1 and page_latest.items[0].outcome == "failed"
+    assert page_latest.items[0].metrics_json == {}
+
+    gc_report = collect_performance_payload_gc(db_session, store)
+    assert gc_report.referenced_blob_records == 1
+    assert gc_report.unreferenced_blob_records == 0
+    preview = preview_performance_observation_deletion(db_session, site.id, observation.id)
+    assert preview is not None and preview.can_delete and preview.payload_present
+    deletion = delete_performance_observation(db_session, site.id, observation.id, store)
+    assert deletion is not None
+    assert deletion.observations_deleted == 1
+    assert deletion.payload_blob_records_deleted == 1
+    assert db_session.get(PerformancePayloadBlob, blob.id) is None
+
+
+def test_mixed_pagespeed_run_retains_ready_and_failed_payloads(
+    db_session: Session, tmp_path: Path, monkeypatch
+) -> None:
+    site, resource = _site_page(db_session)
+    settings = _settings(tmp_path)
+    monkeypatch.setattr("app.services.performance_collection.get_settings", lambda: settings)
+    ready_payload = json.dumps(_pagespeed_document(), separators=(",", ":")).encode()
+    empty_document = _pagespeed_document()
+    empty_document["lighthouseResult"]["categories"]["performance"]["score"] = None
+    empty_document["lighthouseResult"]["audits"] = {}
+    failed_payload = json.dumps(empty_document, separators=(",", ":")).encode()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload = ready_payload if request.url.params["strategy"] == "mobile" else failed_payload
+        return httpx.Response(200, content=payload)
+
+    run = create_performance_run(
+        db_session,
+        site.id,
+        PerformanceRunCreate(
+            resource_ids=[resource.id],
+            providers=["pagespeed"],
+            pagespeed_strategies=["mobile", "desktop"],
+            crux_form_factors=[],
+            include_origin_crux=False,
+        ),
+    )
+    db_session.commit()
+    session_factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+
+    result = execute_performance_run(
+        session_factory,
+        run.id,
+        should_cancel=lambda: False,
+        progress=lambda _current, _total, _counters: None,
+        client_factory=lambda: PerformanceProviderClient(
+            "secret-key", transport=httpx.MockTransport(respond)
+        ),
+    )
+
+    assert result.status == "completed_with_errors"
+    assert (
+        result.completed_count,
+        result.ready_count,
+        result.unavailable_count,
+        result.failed_count,
+    ) == (
+        2,
+        1,
+        0,
+        1,
+    )
+    db_session.expire_all()
+    observations = list(
+        db_session.scalars(
+            select(PerformanceObservation)
+            .where(PerformanceObservation.performance_run_id == run.id)
+            .order_by(PerformanceObservation.dimension)
+        )
+    )
+    assert {item.outcome for item in observations} == {"ready", "failed"}
+    store = LocalPerformancePayloadStore(settings.performance_payload_storage_root)
+    retained: set[bytes] = set()
+    for observation in observations:
+        assert observation.payload_blob_id is not None
+        blob = db_session.get(PerformancePayloadBlob, observation.payload_blob_id)
+        assert blob is not None
+        retained.add(store.read(blob))
+    assert retained == {ready_payload, failed_payload}
+
+
+def test_historical_pagespeed_v1_empty_ready_observation_remains_readable(
+    db_session: Session, tmp_path: Path, monkeypatch
+) -> None:
+    site, resource = _site_page(db_session)
+    settings = _settings(tmp_path)
+    monkeypatch.setattr("app.services.performance_collection.get_settings", lambda: settings)
+    run = create_performance_run(
+        db_session,
+        site.id,
+        PerformanceRunCreate(
+            resource_ids=[resource.id],
+            providers=["pagespeed"],
+            pagespeed_strategies=["mobile"],
+            crux_form_factors=[],
+            include_origin_crux=False,
+        ),
+    )
+    run.status = "completed"
+    run.completed_count = 1
+    run.ready_count = 1
+    run.finished_at = datetime.now(UTC)
+    blob = LocalPerformancePayloadStore(settings.performance_payload_storage_root).put(
+        db_session, b'{"historical":"v1"}'
+    )
+    observation = PerformanceObservation(
+        performance_run_id=run.id,
+        website_property_id=site.id,
+        web_resource_id=resource.id,
+        payload_blob_id=blob.id,
+        provider="pagespeed",
+        provider_adapter_version="pagespeed-provider-v1",
+        normalization_version="performance-normalization-v1",
+        target_kind="url",
+        target_key="historical-v1-page",
+        requested_target=resource.normalized_url,
+        provider_target=resource.normalized_url,
+        dimension="mobile",
+        outcome="ready",
+        request_descriptor_json={"provider": "pagespeed"},
+        metrics_json={},
+        normalized_sha256=None,
+        observed_at=datetime.now(UTC),
+    )
+    db_session.add(observation)
+    db_session.commit()
+
+    history = page_performance_history(db_session, site.id, resource.id, limit=10, offset=0)
+    latest = page_latest_performance(db_session, site.id, resource.id)
+    read = performance_observation_read(observation)
+
+    assert history.items[0].provider_adapter_version == "pagespeed-provider-v1"
+    assert history.items[0].outcome == "ready" and history.items[0].metrics_json == {}
+    assert latest.items[0].id == observation.id and latest.items[0].outcome == "ready"
+    assert read.provider_adapter_version == "pagespeed-provider-v1"
+    assert read.payload_sha256 == blob.sha256
 
 
 def test_run_validates_configuration_membership_and_key(

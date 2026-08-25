@@ -267,7 +267,7 @@ def _performance_observation(
         web_resource_id=resource_id,
         payload_blob_id=blob_id,
         provider="pagespeed",
-        provider_adapter_version="pagespeed-provider-v1",
+        provider_adapter_version="pagespeed-provider-v2",
         normalization_version="performance-normalization-v1",
         target_kind="url",
         target_key=target_key,

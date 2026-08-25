@@ -872,7 +872,7 @@ async function mockApi(page: Page) {
   });
 
   await page.route("**/api/sites/3/performance/providers", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ pagespeed: { configured: false, adapter_version: "pagespeed-provider-v1" }, crux: { configured: false, adapter_version: "crux-provider-v1" }, normalization_version: "performance-normalization-v1", default_page_limit: 50, hard_page_limit: 250, absolute_page_limit: 250, max_provider_requests: 1002, crux_queries_per_minute: 120 }) });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ pagespeed: { configured: false, adapter_version: "pagespeed-provider-v2" }, crux: { configured: false, adapter_version: "crux-provider-v1" }, normalization_version: "performance-normalization-v1", default_page_limit: 50, hard_page_limit: 250, absolute_page_limit: 250, max_provider_requests: 1002, crux_queries_per_minute: 120 }) });
   });
   await page.route("**/api/sites/3/performance/latest**", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], total: 0, limit: 100, offset: 0, measured_page_count: 0, field_available_page_count: 0 }) });

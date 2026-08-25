@@ -58,13 +58,22 @@ The adapters call fixed HTTPS endpoints defined in backend code:
 - CrUX `v1/records:queryRecord`, URL or origin, form factors `PHONE` and `DESKTOP`.
 
 Field evidence comes from standalone CrUX, not PageSpeed's embedded field section. The CrUX History
-API is not used. Internal versions are `pagespeed-provider-v1`, `crux-provider-v1`, and
+API is not used. Current internal versions are `pagespeed-provider-v2`, `crux-provider-v1`, and
 `performance-normalization-v1`.
 
 PageSpeed normalization retains performance score, FCP, LCP, CLS, TBT, Speed Index, server response
 time, analyzed URL, analysis time, and Lighthouse version when present. CrUX normalization retains
 LCP, INP, CLS, FCP, and TTFB p75 plus returned histograms, target, and collection period. Missing
 metrics remain missing. Canonical normalized JSON has its own SHA-256 identity.
+
+PageSpeed adapter v2 classifies a result as `ready` only when normalization produces at least one
+recognized Performance metric. HTTP 200 is transport evidence, not by itself a usable measurement.
+A parseable Lighthouse response with zero recognized metrics is retained as
+`failed/no_usable_performance_metrics`; its raw payload and parseable provider target, analysis time,
+and Lighthouse version remain available, while its normalized SHA is absent. Malformed provider
+structures remain `failed/invalid_provider_payload`, and CrUX no-field-data semantics are unchanged.
+Historical `pagespeed-provider-v1` observations remain readable under their original provenance and
+are never rewritten to v2 semantics.
 
 ## Security And Networking
 
