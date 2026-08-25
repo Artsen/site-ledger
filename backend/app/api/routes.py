@@ -29,6 +29,7 @@ from app.schemas.jobs import JobEventList, JobEventRead, JobList, JobRead, Worke
 from app.schemas.page_workspaces import (
     BulkMutationResult,
     BulkPageCategories,
+    BulkPageDelete,
     BulkPageMetadata,
     BulkPageWorkspaceState,
     NoteCreate,
@@ -188,6 +189,7 @@ from app.services.site_management import (
 )
 from app.services.site_pages import (
     bulk_categories,
+    bulk_delete_pages,
     bulk_metadata,
     bulk_workspace_state,
     find_site_page,
@@ -930,6 +932,16 @@ def post_bulk_page_workspace_state(
 ) -> BulkMutationResult:
     try:
         return bulk_workspace_state(db, site_id, payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/sites/{site_id}/pages/bulk-delete", response_model=BulkMutationResult)
+def post_bulk_page_delete(
+    site_id: int, payload: BulkPageDelete, db: DbSession
+) -> BulkMutationResult:
+    try:
+        return bulk_delete_pages(db, site_id, payload)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

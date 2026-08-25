@@ -71,6 +71,7 @@ const api = vi.hoisted(() => ({
   listPageObservations: vi.fn(),
   updatePageMetadata: vi.fn(),
   updatePageWorkspaceState: vi.fn(),
+  bulkDeletePages: vi.fn(),
   listPageCategories: vi.fn(),
   createPageCategory: vi.fn(),
   updatePageCategory: vi.fn(),
@@ -301,6 +302,7 @@ beforeEach(() => {
   api.listSitePages.mockResolvedValue({ items: [persistentPageFixture], total: 1, limit: 50, offset: 0 });
   api.getSitePage.mockResolvedValue({ page: persistentPageFixture, site_id: 3, site_name: "Example Site" });
   api.updatePageWorkspaceState.mockResolvedValue({ page: persistentPageFixture, site_id: 3, site_name: "Example Site" });
+  api.bulkDeletePages.mockResolvedValue({ selected: 1, changed: 1, unchanged: 0, rejected: 0 });
   api.bulkPageWorkspaceState.mockResolvedValue({ selected: 1, changed: 1, unchanged: 0, rejected: 0 });
   api.listPageObservations.mockResolvedValue({ items: [pageObservationFixture], total: 1, limit: 50, offset: 0 });
   api.listPageCategories.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
@@ -767,11 +769,11 @@ describe("saved sites workflow", () => {
   it("removes Pages and deletes Inventory Source entries through accessible confirmations", async () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
-    expect(screen.getByRole("dialog", { name: "Remove this Page from Site Pages?" })).toBeInTheDocument();
-    expect(screen.getAllByText(/Historical Scan evidence is retained/).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Remove from Site Pages" }));
-    await waitFor(() => expect(api.updatePageWorkspaceState).toHaveBeenCalledWith("3", "2", "suppressed"));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(screen.getByRole("dialog", { name: "Delete this Page from Site Pages?" })).toBeInTheDocument();
+    expect(screen.getAllByText(/Historical Scan observations remain/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Delete from Site Pages" }));
+    await waitFor(() => expect(api.bulkDeletePages).toHaveBeenCalledWith("3", [2]));
 
     cleanup();
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");

@@ -82,20 +82,26 @@ test("Accessibility workspace is responsive and keeps automated evidence explici
   await expect(page.getByRole("link", { name: "Accessibility" })).toHaveAttribute("aria-current", "page");
 });
 
-test("Page removal is restorable while Inventory deletion removes Source entries", async ({ page }) => {
+test("Page and Inventory deletion remove workspace and Source entries", async ({ page }) => {
   await mockApi(page);
   let pageState: "active" | "suppressed" = "active";
+  let pageExists = true;
   let inventorySuppressed = false;
   let inventoryExists = true;
 
   await page.route(/\/api\/sites\/3\/pages(?:\?.*)?$/, async (route) => {
     const requested = new URL(route.request().url()).searchParams.get("workspace_state") ?? "active";
-    const visible = requested === "all" || requested === pageState;
+    const visible = pageExists && (requested === "all" || requested === pageState);
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: visible ? [{ ...persistentPage.page, workspace_state: pageState, suppressed_at: pageState === "suppressed" ? "2026-08-25T00:00:00Z" : null }] : [], total: visible ? 1 : 0, limit: 50, offset: 0 }) });
   });
   await page.route("**/api/sites/3/pages/2/workspace-state", async (route) => {
     pageState = (await route.request().postDataJSON()).workspace_state;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...persistentPage, page: { ...persistentPage.page, workspace_state: pageState, suppressed_at: pageState === "suppressed" ? "2026-08-25T00:00:00Z" : null } }) });
+  });
+  await page.route("**/api/sites/3/pages/bulk-delete", async (route) => {
+    expect((await route.request().postDataJSON()).resource_ids).toEqual([2]);
+    pageExists = false;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ selected: 1, changed: 1, unchanged: 0, rejected: 0 }) });
   });
   await page.route(/\/api\/sites\/3\/inventory(?:\?.*)?$/, async (route) => {
     const requested = new URL(route.request().url()).searchParams.get("visibility") ?? "active";
@@ -127,15 +133,11 @@ test("Page removal is restorable while Inventory deletion removes Source entries
   });
 
   await page.goto("/sites/3/pages");
-  await page.getByRole("button", { name: "Remove", exact: true }).click();
-  await page.getByRole("button", { name: "Remove from Site Pages" }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("button", { name: "Delete from Site Pages" }).click();
   await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
   await page.getByLabel("Site Page state").selectOption("suppressed");
-  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
-  await page.getByRole("button", { name: "Restore", exact: true }).click();
-  await page.getByRole("button", { name: "Restore to Site Pages" }).click();
-  await page.getByLabel("Site Page state").selectOption("active");
-  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
+  await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
 
   await page.goto("/sites/3/inventory");
   await page.getByLabel("Select all Inventory URLs on this loaded page").check();

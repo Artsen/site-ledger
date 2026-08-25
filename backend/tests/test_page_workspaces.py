@@ -15,6 +15,7 @@ from app.models import (
 )
 from app.schemas.page_workspaces import (
     BulkPageCategories,
+    BulkPageDelete,
     BulkPageMetadata,
     BulkPageWorkspaceState,
     PageCategoryCreate,
@@ -35,6 +36,7 @@ from app.services.scan_deletion import delete_scan
 from app.services.site_management import delete_site
 from app.services.site_pages import (
     bulk_categories,
+    bulk_delete_pages,
     bulk_metadata,
     bulk_workspace_state,
     ensure_site_page,
@@ -152,6 +154,66 @@ def test_bulk_page_workspace_state_rejects_wrong_site_atomically(db_session) -> 
             ),
         )
     assert first_page.workspace_state == "active"
+
+
+def test_page_delete_removes_workspace_data_and_scan_can_recreate(db_session) -> None:
+    site = _site(db_session)
+    resource = _resource(db_session, "/delete-recreate")
+    scan = _scan(db_session, site.id)
+    page = ensure_site_page(db_session, scan=scan, resource=resource)
+    assert page is not None
+    category = create_category(
+        db_session, site.id, PageCategoryCreate(name="Temporary", color_key="blue")
+    )
+    assert category is not None
+    assignment = PageCategoryAssignment(site_page_id=page.id, category_id=category.id)
+    note = Note(site_page_id=page.id, body="Delete with workspace", is_pinned=False)
+    db_session.add_all([assignment, note])
+    db_session.commit()
+
+    result = bulk_delete_pages(
+        db_session,
+        site.id,
+        BulkPageDelete(resource_ids=[resource.id, resource.id]),
+    )
+
+    assert (result.selected, result.changed, result.unchanged) == (1, 1, 0)
+    assert db_session.query(SitePage).count() == 0
+    assert db_session.get(PageCategoryAssignment, assignment.id) is None
+    assert db_session.get(Note, note.id) is None
+    assert db_session.get(WebResource, resource.id) is not None
+    assert db_session.get(Scan, scan.id) is not None
+
+    recreated = ensure_site_page(
+        db_session,
+        scan=_scan(db_session, site.id),
+        resource=resource,
+    )
+    assert recreated is not None
+    assert recreated.workspace_state == "active"
+    assert recreated.owner_label is None
+    assert recreated.workflow_status == "unreviewed"
+    assert db_session.query(SitePage).count() == 1
+
+
+def test_page_delete_rejects_wrong_site_atomically(db_session) -> None:
+    site = _site(db_session)
+    other = _site(db_session, "Other", "https://other.example/")
+    first = _resource(db_session, "/delete-first")
+    second = _resource(db_session, "/delete-second")
+    first_page = ensure_site_page(db_session, scan=_scan(db_session, site.id), resource=first)
+    second_page = ensure_site_page(db_session, scan=_scan(db_session, other.id), resource=second)
+    assert first_page is not None and second_page is not None
+
+    with pytest.raises(ValueError, match="do not belong"):
+        bulk_delete_pages(
+            db_session,
+            site.id,
+            BulkPageDelete(resource_ids=[first.id, second.id]),
+        )
+
+    assert db_session.get(SitePage, first_page.id) is not None
+    assert db_session.get(SitePage, second_page.id) is not None
 
 
 def test_page_workspace_state_resolves_resource_aliases_and_deduplicates(db_session) -> None:

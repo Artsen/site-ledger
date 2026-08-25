@@ -10,6 +10,7 @@ import {
 import {
   addManualUrls,
   bulkDeleteInventoryEntries,
+  bulkDeletePages,
   bulkRefreshSources,
   bulkRestoreInventorySuppressions,
   bulkPageWorkspaceState,
@@ -465,19 +466,17 @@ export function SitePagesSection({ site }: { site: Site }) {
           >
             Set workflow
           </Button>
-          {workspaceState !== "suppressed" ? (
-            <LifecycleAction
-              label="Remove selected"
-              title="Remove selected Pages from Site Pages?"
-              description="Historical Scan evidence and Page organization are retained. You can restore these Pages later."
-              confirmLabel="Remove from Site Pages"
-              action={async () => {
-                await bulkPageWorkspaceState(String(site.id), selected, "suppressed");
-                await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
-                setSelected([]);
-              }}
-            />
-          ) : null}
+          <LifecycleAction
+            label="Delete selected"
+            title="Delete selected Pages from Site Pages?"
+            description="Page organization and Page notes will be deleted. Historical Scan observations remain, and a later scan can create fresh Page records."
+            confirmLabel="Delete from Site Pages"
+            action={async () => {
+              await bulkDeletePages(String(site.id), selected);
+              await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+              setSelected([]);
+            }}
+          />
           {workspaceState !== "active" ? (
             <LifecycleAction
               label="Restore selected"
@@ -523,7 +522,7 @@ export function SitePagesSection({ site }: { site: Site }) {
         />
       ) : null}
       {controls ? <div className="mt-4">{controls}</div> : null}
-      <p className="mt-4 text-xs text-stone-600">Removing a Page hides it from the active Site Pages workspace. Historical Scan evidence is retained.</p>
+      <p className="mt-4 text-xs text-stone-600">Deleting a Page removes its workspace organization. Historical Scan observations remain, and later scans can create the Page again.</p>
     </section>
   );
 }
@@ -645,17 +644,30 @@ function SitePagesTable({
                     </Link>
                   ) : null}
                   <LifecycleAction
-                    label={page.workspace_state === "suppressed" ? "Restore" : "Remove"}
-                    title={page.workspace_state === "suppressed" ? "Restore this Page to Site Pages?" : "Remove this Page from Site Pages?"}
-                    description={page.workspace_state === "suppressed" ? "The Page will return to the active workspace with its retained organization and evidence." : "Historical Scan evidence is retained, and you can restore the Page later."}
-                    confirmLabel={page.workspace_state === "suppressed" ? "Restore to Site Pages" : "Remove from Site Pages"}
-                    restore={page.workspace_state === "suppressed"}
+                    label="Delete"
+                    title="Delete this Page from Site Pages?"
+                    description="Page organization and Page notes will be deleted. Historical Scan observations remain, and a later scan can create a fresh Page record."
+                    confirmLabel="Delete from Site Pages"
                     className="min-h-0 justify-start border-0 p-0 text-xs underline"
                     action={async () => {
-                      await updatePageWorkspaceState(String(siteId), String(page.resource_id), page.workspace_state === "suppressed" ? "active" : "suppressed");
+                      await bulkDeletePages(String(siteId), [page.resource_id]);
                       await onStateChanged(page.resource_id);
                     }}
                   />
+                  {page.workspace_state === "suppressed" ? (
+                    <LifecycleAction
+                      label="Restore"
+                      title="Restore this Page to Site Pages?"
+                      description="The Page will return to the active workspace with its retained organization and evidence."
+                      confirmLabel="Restore to Site Pages"
+                      restore
+                      className="min-h-0 justify-start border-0 p-0 text-xs underline"
+                      action={async () => {
+                        await updatePageWorkspaceState(String(siteId), String(page.resource_id), "active");
+                        await onStateChanged(page.resource_id);
+                      }}
+                    />
+                  ) : null}
                 </div>
               </td>
             </tr>

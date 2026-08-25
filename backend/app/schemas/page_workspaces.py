@@ -206,6 +206,10 @@ class BulkPageWorkspaceState(PageWorkspaceStateUpdate):
     resource_ids: list[int] = Field(min_length=1, max_length=500)
 
 
+class BulkPageDelete(BaseModel):
+    resource_ids: list[int] = Field(min_length=1, max_length=500)
+
+
 class BulkMutationResult(BaseModel):
     selected: int
     changed: int

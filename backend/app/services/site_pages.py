@@ -15,6 +15,7 @@ from app.models import (
 from app.schemas.page_workspaces import (
     BulkMutationResult,
     BulkPageCategories,
+    BulkPageDelete,
     BulkPageMetadata,
     BulkPageWorkspaceState,
     PageMetadataUpdate,
@@ -274,6 +275,20 @@ def bulk_workspace_state(
         changed += 1
     db.commit()
     return BulkMutationResult(selected=len(pages), changed=changed, unchanged=len(pages) - changed)
+
+
+def bulk_delete_pages(db: Session, site_id: int, payload: BulkPageDelete) -> BulkMutationResult:
+    resolved_values = [resolve_resource_id(db, resource_id) for resource_id in payload.resource_ids]
+    if any(resource_id is None for resource_id in resolved_values):
+        raise ValueError("One or more Pages do not belong to this Site.")
+    resolved_ids = {resource_id for resource_id in resolved_values if resource_id is not None}
+    pages = _site_pages(db, site_id, list(resolved_ids))
+    if len(pages) != len(resolved_ids):
+        raise ValueError("One or more Pages do not belong to this Site.")
+    for page in pages:
+        db.delete(page)
+    db.commit()
+    return BulkMutationResult(selected=len(pages), changed=len(pages), unchanged=0)
 
 
 def _site_pages(db: Session, site_id: int, resource_ids: list[int]) -> list[SitePage]:
