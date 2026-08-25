@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-PAGESPEED_ADAPTER_VERSION = "pagespeed-provider-v1"
+PAGESPEED_ADAPTER_VERSION = "pagespeed-provider-v2"
 CRUX_ADAPTER_VERSION = "crux-provider-v1"
 PERFORMANCE_NORMALIZATION_VERSION = "performance-normalization-v1"
 PAGESPEED_ENDPOINT = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
@@ -95,6 +95,17 @@ class PerformanceProviderClient:
         try:
             document = json.loads(payload)
             metrics, metadata = normalize_pagespeed(document)
+            if not metrics:
+                return ProviderResult(
+                    outcome="failed",
+                    payload=payload,
+                    metrics={},
+                    provider_target=metadata["provider_target"],
+                    provider_analysis_at=metadata["analysis_at"],
+                    provider_product_version=metadata["product_version"],
+                    error_type="no_usable_performance_metrics",
+                    error_message="PageSpeed returned no usable Performance metrics.",
+                )
             return ProviderResult(
                 outcome="ready",
                 payload=payload,

@@ -326,6 +326,12 @@ persist or expose provider keys in evidence, logs, checksums, or APIs. New provi
 fixed trusted endpoints, bounded networking, and sanitized failures. Performance does not modify
 `scan-comparison-v2`; Findings, regressions, and scheduling remain downstream work.
 
+Provider HTTP success is not equivalent to usable normalized evidence. PageSpeed adapter v2 requires
+at least one recognized Performance metric for `ready`; a parseable response with none is
+`failed/no_usable_performance_metrics`. Retain raw provider payloads and parsed provenance on failed
+evidence. Provider contract changes require adapter-version provenance and must never silently
+rewrite observations produced under an earlier adapter version.
+
 Accessibility observations are independent evidence collected at their own time, not Scan browser
 evidence. Automated results do not establish WCAG conformance and must never produce a compliance
 boolean or score. Keep axe-core version, exact detector checksum, effective ruleset identity,

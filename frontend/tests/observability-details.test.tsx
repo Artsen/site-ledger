@@ -115,6 +115,41 @@ describe("human-readable observability details", () => {
     ).toHaveAttribute("href", "/sites/3/performance/evidence/12");
   });
 
+  it("explains unusable PageSpeed metrics while retaining raw evidence access", async () => {
+    api.getPerformanceObservationPresentation.mockResolvedValue({
+      observation: performanceObservation({
+        provider: "pagespeed",
+        provider_adapter_version: "pagespeed-provider-v2",
+        dimension: "mobile",
+        outcome: "failed",
+        error_type: "no_usable_performance_metrics",
+        error_message: "PageSpeed returned no usable Performance metrics.",
+        normalized_sha256: null,
+      }),
+      metrics: [],
+      opportunities: [],
+      diagnostics: [],
+      presentation_error: null,
+      origin_context: null,
+      origin_metrics: [],
+    });
+
+    renderRoute(
+      <PerformanceObservationPage />,
+      "/sites/3/performance/observations/12",
+      "performance/observations/:observationId",
+    );
+
+    expect(
+      await screen.findByText(
+        "PageSpeed returned no usable Performance metrics.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /View exact raw JSON/ }),
+    ).toHaveAttribute("href", "/sites/3/performance/evidence/12");
+  });
+
   it("loads historical Accessibility nodes lazily and keeps raw evidence secondary", async () => {
     renderRoute(
       <AccessibilityObservationPage />,

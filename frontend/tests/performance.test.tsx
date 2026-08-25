@@ -24,7 +24,7 @@ vi.mock("../src/api/client", async (importOriginal) => ({
 
 const site = { id: 3, name: "Example", display_timezone: "UTC" } as Site;
 const capabilities = {
-  pagespeed: { configured: true, adapter_version: "pagespeed-provider-v1" },
+  pagespeed: { configured: true, adapter_version: "pagespeed-provider-v2" },
   crux: { configured: true, adapter_version: "crux-provider-v1" },
   normalization_version: "performance-normalization-v1",
   default_page_limit: 10,
