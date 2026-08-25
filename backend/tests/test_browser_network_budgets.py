@@ -65,6 +65,7 @@ class _BudgetHandler(BaseHTTPRequestHandler):
                   for (let i = 0; i < 20; i++) {
                     try { await fetch('/part?i=' + i); } catch (_) {}
                   }
+                  document.body.dataset.aggregateDone = 'true';
                 })();
                 </script>
             """
@@ -209,8 +210,12 @@ async def test_chromium_stops_oversized_streams(budget_server: str, page: str, s
 async def test_chromium_total_budget_blocks_later_requests(budget_server: str) -> None:
     url = f"{budget_server}/aggregate"
     config = _config(resource_limit=100_000, total_limit=1_000_000)
+
+    async def wait_for_aggregate(page: object) -> None:
+        await page.wait_for_function("document.body.dataset.aggregateDone === 'true'")
+
     async with BrowserRenderer(config, url) as renderer:
-        result = await renderer.capture(url)
+        result = await renderer.capture(url, after_ready=wait_for_aggregate)
     warning_types = {item["type"] for item in result.warnings}
     assert "total_network_budget_exceeded" in warning_types
     assert result.total_network_bytes > 1_000_000
