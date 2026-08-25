@@ -137,6 +137,13 @@ Source Inventory is input data, not scan output. When selected for a scan, sourc
 into ScanSeed and ScanSeedOrigin records. Later refresh or deletion does not rewrite a scan's input
 provenance.
 
+`UrlSourceEntry.is_current` records current Source truth. Site-level
+`SiteInventorySuppression` records the separate user policy for whether a normalized or exact raw
+URL appears in active Inventory and Inventory-derived seeding. Suppression never rewrites Source
+declarations, survives refresh and additional matching Sources, and preserves grouped multi-source
+provenance. Manual declaration removal only marks the retained manual entry non-current. Neither
+operation is a global crawl exclusion or an evidence-deletion path.
+
 AI Document refreshes reuse Source jobs, safe fetching, Site scope, `WebResource`, and current
 Inventory origins. Dedicated compressed blobs preserve exact accepted text. They never create
 `ResourceSnapshot` rows, affect Scan counters, trigger rendering, or add graph edges. See
@@ -170,6 +177,10 @@ Category reconciliation; `services.category_rule_evaluator` is the shared determ
 implementation. Site display timezone is presentation configuration and UTC instants remain
 canonical. An explicit
 all-sites observation mode can inspect the same normalized Page identity outside the selected Site.
+
+`SitePage.workspace_state` controls current Site membership independently of workflow status.
+Operational Page selectors use active membership; historical Page and Scan accessors retain
+suppressed associations so later mutable policy never changes what was observed.
 
 Parse artifacts are identified by content blob, parser version, parser configuration, and final URL
 resolution base. The base URL is required because relative links and canonical URLs depend on it.

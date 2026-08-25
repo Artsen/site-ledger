@@ -248,6 +248,9 @@ export type InventoryItem = {
   latest_scan_status: string | null;
   latest_fetch_date: string | null;
   classification: string;
+  suppression_id: number | null;
+  is_suppressed: boolean;
+  suppressed_at: string | null;
 };
 
 export type InventoryList = {
@@ -564,6 +567,8 @@ export type PersistentPage = {
   query: string;
   owner_label: string | null;
   workflow_status: string;
+  workspace_state: "active" | "suppressed";
+  suppressed_at: string | null;
   categories: PageCategory[];
   category_count: number;
   note_count: number;

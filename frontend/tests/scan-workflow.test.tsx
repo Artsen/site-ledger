@@ -56,19 +56,24 @@ const api = vi.hoisted(() => ({
   createAiDocumentSource: vi.fn(),
   listSourceEntries: vi.fn(),
   addManualUrls: vi.fn(),
+  removeManualSourceEntry: vi.fn(),
   listInventory: vi.fn(),
+  createInventorySuppression: vi.fn(),
+  deleteInventorySuppression: vi.fn(),
   listSitePages: vi.fn(),
   getSitePage: vi.fn(),
   getPageStructuredContent: vi.fn(),
   preparePageStructuredContent: vi.fn(),
   listPageObservations: vi.fn(),
   updatePageMetadata: vi.fn(),
+  updatePageWorkspaceState: vi.fn(),
   listPageCategories: vi.fn(),
   createPageCategory: vi.fn(),
   updatePageCategory: vi.fn(),
   deletePageCategory: vi.fn(),
   bulkPageCategories: vi.fn(),
   bulkPageMetadata: vi.fn(),
+  bulkPageWorkspaceState: vi.fn(),
   listSiteNotes: vi.fn(),
   createSiteNote: vi.fn(),
   listScanNotes: vi.fn(),
@@ -281,9 +286,14 @@ beforeEach(() => {
   api.discoverRobots.mockResolvedValue(refreshFixture);
   api.listSourceEntries.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
   api.addManualUrls.mockResolvedValue({ source: sourceFixture, items: [], accepted_count: 1, rejected_count: 1, duplicate_count: 0 });
+  api.removeManualSourceEntry.mockResolvedValue({});
+  api.createInventorySuppression.mockResolvedValue({ id: 15 });
+  api.deleteInventorySuppression.mockResolvedValue({ deleted_suppression_id: 15 });
   api.listInventory.mockResolvedValue({ items: [inventoryFixture], total: 1, limit: 50, offset: 0 });
   api.listSitePages.mockResolvedValue({ items: [persistentPageFixture], total: 1, limit: 50, offset: 0 });
   api.getSitePage.mockResolvedValue({ page: persistentPageFixture, site_id: 3, site_name: "Example Site" });
+  api.updatePageWorkspaceState.mockResolvedValue({ page: persistentPageFixture, site_id: 3, site_name: "Example Site" });
+  api.bulkPageWorkspaceState.mockResolvedValue({ selected: 1, changed: 1, unchanged: 0, rejected: 0 });
   api.listPageObservations.mockResolvedValue({ items: [pageObservationFixture], total: 1, limit: 50, offset: 0 });
   api.listPageCategories.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
   api.listSiteNotes.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 });
@@ -677,6 +687,34 @@ describe("saved sites workflow", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Scans/ }));
     await waitFor(() => expect(screen.getAllByText("Revalidated unchanged").length).toBeGreaterThan(0));
     expect(screen.getByRole("link", { name: "Open Observation" })).toBeInTheDocument();
+  });
+
+  it("removes Pages and Inventory URLs through accessible lifecycle confirmations", async () => {
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    expect(screen.getByRole("dialog", { name: "Remove this Page from Site Pages?" })).toBeInTheDocument();
+    expect(screen.getAllByText(/Historical Scan evidence is retained/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Remove from Site Pages" }));
+    await waitFor(() => expect(api.updatePageWorkspaceState).toHaveBeenCalledWith("3", "2", "suppressed"));
+
+    cleanup();
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    expect(screen.getByRole("dialog", { name: "Remove this URL from Inventory?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove from Inventory" }));
+    await waitFor(() => expect(api.createInventorySuppression).toHaveBeenCalledWith("3", 6));
+  });
+
+  it("uses independent Page and Inventory state filters", async () => {
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages");
+    fireEvent.change(await screen.findByLabelText("Site Page state"), { target: { value: "suppressed" } });
+    await waitFor(() => expect(api.listSitePages).toHaveBeenLastCalledWith("3", expect.stringContaining("workspace_state=suppressed")));
+
+    cleanup();
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");
+    fireEvent.change(await screen.findByLabelText("Inventory visibility"), { target: { value: "suppressed" } });
+    await waitFor(() => expect(api.listInventory).toHaveBeenLastCalledWith("3", expect.stringContaining("visibility=suppressed")));
   });
 
   it("blocks saved-site scans with invalid scan-specific numeric overrides", async () => {
@@ -1411,7 +1449,10 @@ const inventoryFixture = {
   sitemap_lastmod: "2026-01-01",
   latest_scan_status: "completed",
   latest_fetch_date: "2026-07-30T01:00:02Z",
-  classification: "source_and_crawl"
+  classification: "source_and_crawl",
+  suppression_id: null,
+  is_suppressed: false,
+  suppressed_at: null
 };
 
 const persistentPageFixture = {
@@ -1423,6 +1464,8 @@ const persistentPageFixture = {
   query: "",
   owner_label: "Documentation",
   workflow_status: "needs_review",
+  workspace_state: "active" as const,
+  suppressed_at: null,
   categories: [],
   category_count: 0,
   note_count: 0,

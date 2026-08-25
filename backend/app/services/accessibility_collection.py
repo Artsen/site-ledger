@@ -62,6 +62,7 @@ def create_accessibility_run(
             .where(
                 SitePage.website_property_id == site_id,
                 SitePage.resource_id.in_(payload.resource_ids),
+                SitePage.workspace_state == "active",
                 WebResource.resource_type == "page",
             )
         )

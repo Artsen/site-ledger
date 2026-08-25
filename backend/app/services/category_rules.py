@@ -159,7 +159,10 @@ def preview_rule(
             select(PageCategoryAutomaticExclusion.site_page_id).where(
                 PageCategoryAutomaticExclusion.category_id == payload.category_id,
                 PageCategoryAutomaticExclusion.site_page_id.in_(
-                    select(SitePage.id).where(SitePage.website_property_id == site_id)
+                    select(SitePage.id).where(
+                        SitePage.website_property_id == site_id,
+                        SitePage.workspace_state == "active",
+                    )
                 ),
             )
         )
@@ -172,7 +175,10 @@ def preview_rule(
     rows = db.execute(
         select(SitePage.id, WebResource)
         .join(WebResource, WebResource.id == SitePage.resource_id)
-        .where(SitePage.website_property_id == site_id)
+        .where(
+            SitePage.website_property_id == site_id,
+            SitePage.workspace_state == "active",
+        )
         .order_by(SitePage.id)
     ).yield_per(PAGE_BATCH_SIZE)
     for page_id, resource in rows:
@@ -199,6 +205,7 @@ def preview_rule(
             .join(SitePage, SitePage.id == PageCategoryAssignment.site_page_id)
             .where(
                 SitePage.website_property_id == site_id,
+                SitePage.workspace_state == "active",
                 PageCategoryAssignment.category_id == payload.category_id,
             )
         )
@@ -213,7 +220,11 @@ def preview_rule(
                     PageCategoryAssignmentSupport.page_category_assignment_id
                     == PageCategoryAssignment.id,
                 )
-                .where(PageCategoryAssignmentSupport.rule_id == payload.rule_id)
+                .join(SitePage, SitePage.id == PageCategoryAssignment.site_page_id)
+                .where(
+                    PageCategoryAssignmentSupport.rule_id == payload.rule_id,
+                    SitePage.workspace_state == "active",
+                )
             )
         )
     desired = matching - excluded
@@ -456,7 +467,8 @@ def reconcile_site(
     total_pages = (
         db.scalar(
             select(func.count(SitePage.id)).where(
-                SitePage.website_property_id == run.website_property_id
+                SitePage.website_property_id == run.website_property_id,
+                SitePage.workspace_state == "active",
             )
         )
         or 0
@@ -479,7 +491,10 @@ def reconcile_site(
             for page_id, resource in db.execute(
                 select(SitePage.id, WebResource)
                 .join(WebResource, WebResource.id == SitePage.resource_id)
-                .where(SitePage.website_property_id == run.website_property_id)
+                .where(
+                    SitePage.website_property_id == run.website_property_id,
+                    SitePage.workspace_state == "active",
+                )
                 .order_by(SitePage.id)
                 .limit(PAGE_BATCH_SIZE)
                 .offset(offset)

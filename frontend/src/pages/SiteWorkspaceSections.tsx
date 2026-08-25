@@ -9,14 +9,17 @@ import {
 
 import {
   addManualUrls,
+  bulkPageWorkspaceState,
   bulkPageCategories,
   bulkPageMetadata,
   cancelSourceRefresh,
   createSource,
   createAiDocumentSource,
   createPageCategory,
+  createInventorySuppression,
   createSiteNote,
   deletePageCategory,
+  deleteInventorySuppression,
   getPageCategoryDeletionPreview,
   deleteSite,
   deleteSource,
@@ -31,7 +34,9 @@ import {
   listSitePages,
   listSources,
   refreshSource,
+  removeManualSourceEntry,
   updatePageCategory,
+  updatePageWorkspaceState,
   updateSite,
 } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
@@ -48,6 +53,7 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
+import { LifecycleAction } from "../components/ui/LifecycleAction";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { SortableTableHeader, type SortDirection } from "../components/ui/SortableTableHeader";
@@ -237,6 +243,7 @@ export function SitePagesSection({ site }: { site: Site }) {
   const [bulkCategory, setBulkCategory] = useState("");
   const [bulkOwner, setBulkOwner] = useState("");
   const [bulkWorkflow, setBulkWorkflow] = useState("");
+  const workspaceState = searchParams.get("workspace_state") ?? "active";
   const query = new URLSearchParams();
   for (const key of [
     "search",
@@ -250,6 +257,7 @@ export function SitePagesSection({ site }: { site: Site }) {
     "has_notes",
     "sort",
     "direction",
+    "workspace_state",
   ]) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
@@ -293,6 +301,19 @@ export function SitePagesSection({ site }: { site: Site }) {
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-4">
+        <select
+          aria-label="Site Page state"
+          value={searchParams.get("workspace_state") ?? "active"}
+          onChange={(event) => {
+            setSelected([]);
+            setSearchParam(setSearchParams, "workspace_state", event.target.value === "active" ? "" : event.target.value);
+          }}
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        >
+          <option value="active">Active</option>
+          <option value="suppressed">Removed</option>
+          <option value="all">All</option>
+        </select>
         <input
           aria-label="Search site pages"
           value={searchParams.get("search") ?? ""}
@@ -443,6 +464,33 @@ export function SitePagesSection({ site }: { site: Site }) {
           >
             Set workflow
           </Button>
+          {workspaceState !== "suppressed" ? (
+            <LifecycleAction
+              label="Remove selected"
+              title="Remove selected Pages from Site Pages?"
+              description="Historical Scan evidence and Page organization are retained. You can restore these Pages later."
+              confirmLabel="Remove from Site Pages"
+              action={async () => {
+                await bulkPageWorkspaceState(String(site.id), selected, "suppressed");
+                await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+                setSelected([]);
+              }}
+            />
+          ) : null}
+          {workspaceState !== "active" ? (
+            <LifecycleAction
+              label="Restore selected"
+              title="Restore selected Pages to Site Pages?"
+              description="These Pages will return to the active Site Pages workspace with their existing organization intact."
+              confirmLabel="Restore to Site Pages"
+              restore
+              action={async () => {
+                await bulkPageWorkspaceState(String(site.id), selected, "active");
+                await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+                setSelected([]);
+              }}
+            />
+          ) : null}
         </div>
       ) : null}
       {bulk.error ? (
@@ -462,6 +510,10 @@ export function SitePagesSection({ site }: { site: Site }) {
           activeSort={searchParams.get("sort")}
           direction={searchParams.get("direction") as SortDirection | null}
           onSort={(column, direction) => setSitePageSort(setSearchParams, column, direction)}
+          onStateChanged={async (resourceId) => {
+            await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+            await queryClient.invalidateQueries({ queryKey: ["site-page", String(site.id), String(resourceId)] });
+          }}
         />
       ) : !pages.isLoading ? (
         <EmptyState
@@ -470,6 +522,7 @@ export function SitePagesSection({ site }: { site: Site }) {
         />
       ) : null}
       {controls ? <div className="mt-4">{controls}</div> : null}
+      <p className="mt-4 text-xs text-stone-600">Removing a Page hides it from the active Site Pages workspace. Historical Scan evidence is retained.</p>
     </section>
   );
 }
@@ -482,6 +535,7 @@ function SitePagesTable({
   activeSort,
   direction,
   onSort,
+  onStateChanged,
 }: {
   siteId: number;
   pages: PersistentPage[];
@@ -490,6 +544,7 @@ function SitePagesTable({
   activeSort: string | null;
   direction: SortDirection | null;
   onSort: (column: string | null, direction: SortDirection | null) => void;
+  onStateChanged: (resourceId: number) => Promise<void>;
 }) {
   const allSelected =
     pages.length > 0 &&
@@ -588,6 +643,18 @@ function SitePagesTable({
                       Latest observation
                     </Link>
                   ) : null}
+                  <LifecycleAction
+                    label={page.workspace_state === "suppressed" ? "Restore" : "Remove"}
+                    title={page.workspace_state === "suppressed" ? "Restore this Page to Site Pages?" : "Remove this Page from Site Pages?"}
+                    description={page.workspace_state === "suppressed" ? "The Page will return to the active workspace with its retained organization and evidence." : "Historical Scan evidence is retained, and you can restore the Page later."}
+                    confirmLabel={page.workspace_state === "suppressed" ? "Restore to Site Pages" : "Remove from Site Pages"}
+                    restore={page.workspace_state === "suppressed"}
+                    className="min-h-0 justify-start border-0 p-0 text-xs underline"
+                    action={async () => {
+                      await updatePageWorkspaceState(String(siteId), String(page.resource_id), page.workspace_state === "suppressed" ? "active" : "suppressed");
+                      await onStateChanged(page.resource_id);
+                    }}
+                  />
                 </div>
               </td>
             </tr>
@@ -1304,12 +1371,14 @@ function activeSourceJob(jobs: Job[], sourceId: number) {
 export function SiteInventorySection({ site }: { site: Site }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const pagination = useUrlPagination({ prefix: "inventory" });
+  const queryClient = useQueryClient();
   const query = new URLSearchParams();
   for (const key of [
     "search",
     "source_type",
     "scope_decision",
     "validation_state",
+    "visibility",
   ]) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
@@ -1325,6 +1394,22 @@ export function SiteInventorySection({ site }: { site: Site }) {
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+        <select
+          aria-label="Inventory visibility"
+          value={searchParams.get("visibility") ?? "active"}
+          onChange={(event) =>
+            setSearchParam(
+              setSearchParams,
+              "visibility",
+              event.target.value === "active" ? "" : event.target.value,
+            )
+          }
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        >
+          <option value="active">Active</option>
+          <option value="suppressed">Removed</option>
+          <option value="all">All</option>
+        </select>
         <input
           aria-label="Search inventory"
           value={searchParams.get("search") ?? ""}
@@ -1373,9 +1458,19 @@ export function SiteInventorySection({ site }: { site: Site }) {
       {inventory.isLoading ? (
         <LoadingBlock label="Loading inventory..." />
       ) : null}
+      {inventory.error ? (
+        <ErrorBanner error={inventory.error} title="Could not load Inventory" />
+      ) : null}
       {controls ? <div className="mb-4">{controls}</div> : null}
       {inventory.data?.items.length ? (
-        <InventoryTable items={inventory.data.items} />
+        <InventoryTable
+          siteId={site.id}
+          items={inventory.data.items}
+          onChanged={async () => {
+            await queryClient.invalidateQueries({ queryKey: ["inventory", String(site.id)] });
+            await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
+          }}
+        />
       ) : !inventory.isLoading ? (
         <EmptyState
           title="No inventory URLs"
@@ -1383,11 +1478,23 @@ export function SiteInventorySection({ site }: { site: Site }) {
         />
       ) : null}
       {controls ? <div className="mt-4">{controls}</div> : null}
+      <p className="mt-4 text-xs text-stone-600">
+        Removing an Inventory URL suppresses it from active Inventory and
+        Inventory-based scan seeding. Source declarations and historical evidence remain intact.
+      </p>
     </section>
   );
 }
 
-function InventoryTable({ items }: { items: InventoryItem[] }) {
+function InventoryTable({
+  siteId,
+  items,
+  onChanged,
+}: {
+  siteId: number;
+  items: InventoryItem[];
+  onChanged: () => Promise<void>;
+}) {
   const values = { url: (item: InventoryItem) => item.normalized_url, sources: (item: InventoryItem) => item.source_count, scope: (item: InventoryItem) => item.scope_decision, validation: (item: InventoryItem) => item.validation_state, classification: (item: InventoryItem) => item.classification };
   const { sortedItems, sort, changeSort } = useTableSort(items, values);
   return (
@@ -1396,6 +1503,7 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
             {[["url", "URL"], ["sources", "Sources"], ["scope", "Scope"], ["validation", "Validation"], ["classification", "Classification"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
+            <th className="px-3 py-2">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -1420,6 +1528,23 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
                     {item.sources.map((source) => (
                       <li key={String(source.entry_id)}>
                         {String(source.name)} - {String(source.type)}
+                        {source.type === "manual" ? (
+                          <LifecycleAction
+                            label="Remove manual declaration"
+                            title="Remove this URL from Manual URLs?"
+                            description="The current manual declaration is removed. Historical records remain."
+                            confirmLabel="Remove from Manual URLs"
+                            className="ml-2 min-h-0 border-0 p-0 text-xs underline"
+                            action={async () => {
+                              await removeManualSourceEntry(
+                                String(siteId),
+                                Number(source.id),
+                                Number(source.entry_id),
+                              );
+                              await onChanged();
+                            }}
+                          />
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -1428,6 +1553,26 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
               <td className="px-3 py-2">{item.scope_decision}</td>
               <td className="px-3 py-2">{item.validation_state}</td>
               <td className="px-3 py-2">{item.classification}</td>
+              <td className="px-3 py-2">
+                <LifecycleAction
+                  label={item.is_suppressed ? "Restore" : "Remove"}
+                  title={item.is_suppressed ? "Restore this URL to Inventory?" : "Remove this URL from Inventory?"}
+                  description={item.is_suppressed ? "The URL will return to active Inventory and Inventory-based scan seeding." : "Source declarations and historical evidence remain intact. Ordinary crawler discovery is not blocked."}
+                  confirmLabel={item.is_suppressed ? "Restore to Inventory" : "Remove from Inventory"}
+                  restore={item.is_suppressed}
+                  action={async () => {
+                    if (item.is_suppressed && item.suppression_id) {
+                      await deleteInventorySuppression(String(siteId), item.suppression_id);
+                    } else {
+                      await createInventorySuppression(
+                        String(siteId),
+                        Number(item.sources[0].entry_id),
+                      );
+                    }
+                    await onChanged();
+                  }}
+                />
+              </td>
             </tr>
           ))}
         </tbody>

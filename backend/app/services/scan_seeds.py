@@ -5,6 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.models import Scan, ScanSeed, ScanSeedOrigin, UrlSource, UrlSourceEntry, WebsiteProperty
+from app.services.inventory_lifecycle import (
+    inventory_suppression_map,
+    matching_inventory_suppression,
+)
 from app.services.repositories import get_or_create_resource
 
 
@@ -47,7 +51,10 @@ def create_scan_seeds(
     if source_ids:
         query = query.where(UrlSource.id.in_(source_ids))
     max_pages = config.max_pages
+    suppressions = inventory_suppression_map(db, site)
     for entry in db.scalars(query):
+        if matching_inventory_suppression(db, site, entry, suppressions) is not None:
+            continue
         seed = _add_seed(
             db,
             scan,

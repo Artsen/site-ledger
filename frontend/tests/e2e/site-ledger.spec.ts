@@ -82,6 +82,58 @@ test("Accessibility workspace is responsive and keeps automated evidence explici
   await expect(page.getByRole("link", { name: "Accessibility" })).toHaveAttribute("aria-current", "page");
 });
 
+test("Page and Inventory removal lifecycles support removed views and restoration", async ({ page }) => {
+  await mockApi(page);
+  let pageState: "active" | "suppressed" = "active";
+  let inventorySuppressed = false;
+
+  await page.route(/\/api\/sites\/3\/pages(?:\?.*)?$/, async (route) => {
+    const requested = new URL(route.request().url()).searchParams.get("workspace_state") ?? "active";
+    const visible = requested === "all" || requested === pageState;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: visible ? [{ ...persistentPage.page, workspace_state: pageState, suppressed_at: pageState === "suppressed" ? "2026-08-25T00:00:00Z" : null }] : [], total: visible ? 1 : 0, limit: 50, offset: 0 }) });
+  });
+  await page.route("**/api/sites/3/pages/2/workspace-state", async (route) => {
+    pageState = (await route.request().postDataJSON()).workspace_state;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...persistentPage, page: { ...persistentPage.page, workspace_state: pageState, suppressed_at: pageState === "suppressed" ? "2026-08-25T00:00:00Z" : null } }) });
+  });
+  await page.route(/\/api\/sites\/3\/inventory(?:\?.*)?$/, async (route) => {
+    const requested = new URL(route.request().url()).searchParams.get("visibility") ?? "active";
+    const state = inventorySuppressed ? "suppressed" : "active";
+    const visible = requested === "all" || requested === state;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: visible ? [{ normalized_url: "https://example.com/pricing", resource_id: 2, source_count: 2, source_types: ["manual", "sitemap"], sources: [{ id: 4, name: "Main sitemap", type: "sitemap", entry_id: 6, raw_url: "https://example.com/pricing" }, { id: 7, name: "Manual URLs", type: "manual", entry_id: 8, raw_url: "/pricing" }], scope_decision: "crawlable", validation_state: "valid", sitemap_lastmod: null, latest_scan_status: "completed", latest_fetch_date: "2026-08-25T00:00:00Z", classification: "source_and_crawl", suppression_id: inventorySuppressed ? 15 : null, is_suppressed: inventorySuppressed, suppressed_at: inventorySuppressed ? "2026-08-25T00:00:00Z" : null }] : [], total: visible ? 1 : 0, limit: 50, offset: 0 }) });
+  });
+  await page.route("**/api/sites/3/inventory/suppressions", async (route) => {
+    inventorySuppressed = true;
+    await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ id: 15 }) });
+  });
+  await page.route("**/api/sites/3/inventory/suppressions/15", async (route) => {
+    inventorySuppressed = false;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted_suppression_id: 15 }) });
+  });
+
+  await page.goto("/sites/3/pages");
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByRole("button", { name: "Remove from Site Pages" }).click();
+  await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
+  await page.getByLabel("Site Page state").selectOption("suppressed");
+  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await page.getByRole("button", { name: "Restore to Site Pages" }).click();
+  await page.getByLabel("Site Page state").selectOption("active");
+  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
+
+  await page.goto("/sites/3/inventory");
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByRole("button", { name: "Remove from Inventory" }).click();
+  await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
+  await page.getByLabel("Inventory visibility").selectOption("suppressed");
+  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await page.getByRole("button", { name: "Restore to Inventory" }).click();
+  await page.getByLabel("Inventory visibility").selectOption("active");
+  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
+});
+
 test("observability details are human-readable before raw evidence", async ({ page }) => {
   await mockApi(page);
   for (const viewport of [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1024, height: 768 }, { width: 1440, height: 960 }]) {
@@ -1471,6 +1523,8 @@ const persistentPage = {
     query: "",
     owner_label: "Web team",
     workflow_status: "needs_review",
+    workspace_state: "active" as const,
+    suppressed_at: null,
     categories: [pageCategories[0]],
     category_count: 1,
     note_count: 0,

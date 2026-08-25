@@ -470,6 +470,15 @@ Do not disable checks or weaken tests to force passing results.
   best-effort file removal; report cleanup failures without resurrecting evidence.
 - Full Site deletion must apply the same reference-aware observability cleanup and must not leak
   unreferenced payload records or files.
+- Never delete immutable Scan evidence to change mutable Site membership. `SitePage` workspace
+  state is distinct from workflow status, and later observations must not reactivate a suppressed
+  Page.
+- URL Inventory is Source truth plus Site-scoped policy. Suppression must preserve Source
+  declarations, survive refresh, retain multi-source grouping, and affect only Inventory-derived
+  seeding rather than ordinary crawler discovery.
+- Manual URL removal retains its `UrlSourceEntry` provenance as non-current. Page and Inventory
+  suppression must leave historical evidence queryable, and future Findings must explicitly honor
+  active or suppressed subject policy.
 
 ## Pull Request Format
 

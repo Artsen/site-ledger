@@ -19,6 +19,9 @@ from app.models import (
     ScanComparisonBuild,
     ScanComparisonPageResult,
     ScanProjectionBuild,
+    SiteInventorySuppression,
+    SitePage,
+    UrlSourceEntry,
     WebResource,
     WebsiteProperty,
 )
@@ -55,7 +58,8 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         scan_jobs = list(
             db.scalars(
                 select(BackgroundJob).where(
-                    BackgroundJob.scan_id.in_(scan_ids), BackgroundJob.job_type == "scan"
+                    BackgroundJob.scan_id.in_(scan_ids),
+                    BackgroundJob.job_type == "scan",
                 )
             )
         )
@@ -126,6 +130,32 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert root_hashes[0][0] != root_hashes[1][0]
         assert root_hashes[0][1] == root_hashes[1][1]
         assert _artifact_hashes(db, pricing[0]) == _artifact_hashes(db, pricing[1])
+        active_site_pages = db.scalar(
+            select(func.count(SitePage.id)).where(
+                SitePage.website_property_id == site.id,
+                SitePage.workspace_state == "active",
+            )
+        )
+        inventory_suppressions = db.scalar(
+            select(func.count(SiteInventorySuppression.id)).where(
+                SiteInventorySuppression.website_property_id == site.id
+            )
+        )
+        current_source_entries = db.scalar(
+            select(func.count(UrlSourceEntry.id))
+            .join(UrlSourceEntry.url_source)
+            .where(
+                UrlSourceEntry.is_current.is_(True),
+                UrlSourceEntry.url_source.has(website_property_id=site.id),
+            )
+        )
+        snapshot_count = db.scalar(
+            select(func.count(ResourceSnapshot.id)).where(ResourceSnapshot.scan_id.in_(scan_ids))
+        )
+        assert active_site_pages == 5
+        assert inventory_suppressions == 0
+        assert current_source_entries == 1
+        assert snapshot_count == 9
 
         active_jobs = db.scalar(
             select(func.count(BackgroundJob.id)).where(
@@ -174,6 +204,10 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "crawler_request_paths": sorted({entry["path"] for entry in crawler_requests}),
         "duplicate_artifact_identity_count": 0,
         "foreign_key_violation_count": 0,
+        "lifecycle_active_site_page_count": active_site_pages,
+        "lifecycle_current_source_entry_count": current_source_entries,
+        "lifecycle_inventory_suppression_count": inventory_suppressions,
+        "lifecycle_preserved_snapshot_count": snapshot_count,
         "projection_algorithm_identities": [build.algorithm_identity for build in projections],
         "projection_versions": [build.projection_version for build in projections],
         "structured_artifact_ids": artifact_ids,

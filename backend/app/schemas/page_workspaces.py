@@ -198,6 +198,14 @@ class BulkPageMetadata(BaseModel):
         return value
 
 
+class PageWorkspaceStateUpdate(BaseModel):
+    workspace_state: Literal["active", "suppressed"]
+
+
+class BulkPageWorkspaceState(PageWorkspaceStateUpdate):
+    resource_ids: list[int] = Field(min_length=1, max_length=500)
+
+
 class BulkMutationResult(BaseModel):
     selected: int
     changed: int

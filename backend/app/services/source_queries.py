@@ -22,6 +22,10 @@ from app.schemas.sources import (
     UrlSourceList,
     UrlSourceRead,
 )
+from app.services.inventory_lifecycle import (
+    inventory_suppression_map,
+    matching_inventory_suppression,
+)
 
 
 def list_sources(
@@ -132,10 +136,12 @@ def list_inventory(
     source_id: int | None,
     scope_decision: str | None,
     validation_state: str | None,
+    visibility: Literal["active", "suppressed", "all"] = "active",
     limit: int,
     offset: int,
 ) -> InventoryList | None:
-    if db.get(WebsiteProperty, site_id) is None:
+    site = db.get(WebsiteProperty, site_id)
+    if site is None:
         return None
     query = (
         select(UrlSourceEntry)
@@ -166,7 +172,18 @@ def list_inventory(
     for entry in entries:
         key = entry.normalized_url or f"invalid:{entry.id}"
         grouped[key].append(entry)
-    keys = sorted(grouped)
+    suppressions = inventory_suppression_map(db, site)
+    suppression_by_key = {
+        key: matching_inventory_suppression(db, site, members[0], suppressions)
+        for key, members in grouped.items()
+    }
+    keys = sorted(
+        key
+        for key in grouped
+        if visibility == "all"
+        or (visibility == "suppressed" and suppression_by_key[key] is not None)
+        or (visibility == "active" and suppression_by_key[key] is None)
+    )
     page_keys = keys[offset : offset + limit]
     latest = _latest_scan_by_resource(
         db, [entry.resource_id for key in page_keys for entry in grouped[key]]
@@ -178,6 +195,7 @@ def list_inventory(
         latest_row = latest.get(first.resource_id or -1)
         source_types = sorted({member.url_source.source_type for member in members})
         classification = _inventory_classification(first, latest_row is not None)
+        suppression = suppression_by_key[key]
         items.append(
             InventoryItem(
                 normalized_url=first.normalized_url,
@@ -200,6 +218,9 @@ def list_inventory(
                 latest_scan_status=latest_row[0] if latest_row else None,
                 latest_fetch_date=latest_row[1] if latest_row else None,
                 classification=classification,
+                suppression_id=suppression.id if suppression else None,
+                is_suppressed=suppression is not None,
+                suppressed_at=suppression.created_at if suppression else None,
             )
         )
     return InventoryList(items=items, total=len(keys), limit=limit, offset=offset)

@@ -1,0 +1,182 @@
+from typing import cast
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.crawler.url_normalizer import (
+    SUPPORTED_URL_NORMALIZATION_VERSIONS,
+    UrlNormalizationError,
+    normalize_url_for_version,
+)
+from app.models import SiteInventorySuppression, UrlSource, UrlSourceEntry, WebsiteProperty
+from app.services.url_identity import active_url_normalization_version
+
+
+class ManagedSourceEntryError(ValueError):
+    pass
+
+
+def create_inventory_suppression(
+    db: Session, site_id: int, entry_id: int
+) -> SiteInventorySuppression | None:
+    row = db.execute(
+        select(UrlSourceEntry, UrlSource, WebsiteProperty)
+        .join(UrlSource, UrlSource.id == UrlSourceEntry.url_source_id)
+        .join(WebsiteProperty, WebsiteProperty.id == UrlSource.website_property_id)
+        .where(UrlSourceEntry.id == entry_id, UrlSource.website_property_id == site_id)
+    ).one_or_none()
+    if row is None:
+        return None
+    entry, _source, site = row
+    kind, value, version = inventory_suppression_identity(db, site, entry)
+    suppressions = inventory_suppression_map(db, site)
+    existing = matching_inventory_suppression(db, site, entry, suppressions)
+    if existing is not None:
+        return existing
+    suppression = SiteInventorySuppression(
+        website_property_id=site_id,
+        target_kind=kind,
+        target_value=value,
+        normalization_version=version,
+    )
+    try:
+        with db.begin_nested():
+            db.add(suppression)
+            db.flush()
+    except IntegrityError:
+        recovered = db.scalar(
+            select(SiteInventorySuppression).where(
+                SiteInventorySuppression.website_property_id == site_id,
+                SiteInventorySuppression.target_kind == kind,
+                SiteInventorySuppression.target_value == value,
+            )
+        )
+        if recovered is None:
+            raise
+        suppression = recovered
+    db.commit()
+    db.refresh(suppression)
+    return suppression
+
+
+def delete_inventory_suppression(db: Session, site_id: int, suppression_id: int) -> int | None:
+    suppression = db.scalar(
+        select(SiteInventorySuppression).where(
+            SiteInventorySuppression.id == suppression_id,
+            SiteInventorySuppression.website_property_id == site_id,
+        )
+    )
+    if suppression is None:
+        return None
+    db.delete(suppression)
+    db.commit()
+    return suppression_id
+
+
+def remove_manual_source_entry(
+    db: Session, site_id: int, source_id: int, entry_id: int
+) -> UrlSourceEntry | None:
+    row = db.execute(
+        select(UrlSourceEntry, UrlSource)
+        .join(UrlSource, UrlSource.id == UrlSourceEntry.url_source_id)
+        .where(
+            UrlSource.website_property_id == site_id,
+            UrlSource.id == source_id,
+            UrlSourceEntry.id == entry_id,
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    entry = cast(UrlSourceEntry, row[0])
+    source = cast(UrlSource, row[1])
+    if source.source_type != "manual":
+        raise ManagedSourceEntryError(
+            "This URL is managed by its Source. Remove it from active Inventory instead."
+        )
+    entry.is_current = False
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def inventory_suppression_map(
+    db: Session, site: WebsiteProperty
+) -> dict[tuple[str, str], SiteInventorySuppression]:
+    active_version = active_url_normalization_version(db)
+    result: dict[tuple[str, str], SiteInventorySuppression] = {}
+    for suppression in db.scalars(
+        select(SiteInventorySuppression).where(
+            SiteInventorySuppression.website_property_id == site.id
+        )
+    ):
+        result[(suppression.target_kind, suppression.target_value)] = suppression
+        if suppression.target_kind == "normalized_url":
+            if suppression.normalization_version is not None:
+                result[
+                    (
+                        f"normalized_url@{suppression.normalization_version}",
+                        suppression.target_value,
+                    )
+                ] = suppression
+            try:
+                current_value = normalize_url_for_version(
+                    suppression.target_value,
+                    normalization_version=active_version,
+                ).normalized_url
+            except UrlNormalizationError:
+                continue
+            result[("normalized_url", current_value)] = suppression
+    return result
+
+
+def matching_inventory_suppression(
+    db: Session,
+    site: WebsiteProperty,
+    entry: UrlSourceEntry,
+    suppressions: dict[tuple[str, str], SiteInventorySuppression] | None = None,
+) -> SiteInventorySuppression | None:
+    suppression_map = (
+        suppressions if suppressions is not None else inventory_suppression_map(db, site)
+    )
+    if entry.normalized_url is None:
+        return suppression_map.get(("raw_url", entry.raw_url))
+    active_version = active_url_normalization_version(db)
+    try:
+        current_value = normalize_url_for_version(
+            entry.raw_url,
+            normalization_version=active_version,
+            base_url=site.base_url,
+        ).normalized_url
+    except UrlNormalizationError:
+        current_value = entry.normalized_url
+    direct = suppression_map.get(("normalized_url", current_value))
+    if direct is not None:
+        return direct
+    for version in SUPPORTED_URL_NORMALIZATION_VERSIONS:
+        try:
+            versioned_value = normalize_url_for_version(
+                entry.raw_url,
+                normalization_version=version,
+                base_url=site.base_url,
+            ).normalized_url
+        except UrlNormalizationError:
+            continue
+        match = suppression_map.get((f"normalized_url@{version}", versioned_value))
+        if match is not None:
+            return match
+    return None
+
+
+def inventory_suppression_identity(
+    db: Session, site: WebsiteProperty, entry: UrlSourceEntry
+) -> tuple[str, str, str | None]:
+    if entry.normalized_url is None:
+        return "raw_url", entry.raw_url, None
+    version = active_url_normalization_version(db)
+    normalized = normalize_url_for_version(
+        entry.raw_url,
+        normalization_version=version,
+        base_url=site.base_url,
+    )
+    return "normalized_url", normalized.normalized_url, version

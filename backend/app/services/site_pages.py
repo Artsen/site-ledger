@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -16,7 +16,9 @@ from app.schemas.page_workspaces import (
     BulkMutationResult,
     BulkPageCategories,
     BulkPageMetadata,
+    BulkPageWorkspaceState,
     PageMetadataUpdate,
+    PageWorkspaceStateUpdate,
 )
 from app.services.url_identity import resolve_resource_id
 
@@ -235,6 +237,41 @@ def bulk_metadata(db: Session, site_id: int, payload: BulkPageMetadata) -> BulkM
             page.workflow_status = payload.workflow_status
             page_changed = True
         changed += int(page_changed)
+    db.commit()
+    return BulkMutationResult(selected=len(pages), changed=changed, unchanged=len(pages) - changed)
+
+
+def update_page_workspace_state(
+    db: Session, site_page: SitePage, payload: PageWorkspaceStateUpdate
+) -> SitePage:
+    if site_page.workspace_state != payload.workspace_state:
+        site_page.workspace_state = payload.workspace_state
+        site_page.suppressed_at = (
+            datetime.now(UTC) if payload.workspace_state == "suppressed" else None
+        )
+        db.commit()
+        db.refresh(site_page)
+    return site_page
+
+
+def bulk_workspace_state(
+    db: Session, site_id: int, payload: BulkPageWorkspaceState
+) -> BulkMutationResult:
+    resolved_values = [resolve_resource_id(db, resource_id) for resource_id in payload.resource_ids]
+    if any(resource_id is None for resource_id in resolved_values):
+        raise ValueError("One or more Pages do not belong to this Site.")
+    resolved_ids = {resource_id for resource_id in resolved_values if resource_id is not None}
+    pages = _site_pages(db, site_id, list(resolved_ids))
+    if len(pages) != len(resolved_ids):
+        raise ValueError("One or more Pages do not belong to this Site.")
+    changed = 0
+    now = datetime.now(UTC)
+    for page in pages:
+        if page.workspace_state == payload.workspace_state:
+            continue
+        page.workspace_state = payload.workspace_state
+        page.suppressed_at = now if payload.workspace_state == "suppressed" else None
+        changed += 1
     db.commit()
     return BulkMutationResult(selected=len(pages), changed=changed, unchanged=len(pages) - changed)
 

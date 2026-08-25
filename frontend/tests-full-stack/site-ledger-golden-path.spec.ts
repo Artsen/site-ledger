@@ -26,6 +26,7 @@ type Json = Record<string, unknown> & {
   sections: Array<{ direct_text: string }>;
   items: Json[];
   scope_config: { allow_private_networks: boolean };
+  source: Json;
   comparison: Json;
   current_build: Json | null;
   active_build: Json | null;
@@ -114,6 +115,39 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(evidence1["/technical/"].observation.raw_html_sha256).not.toBe(evidence2["/technical/"].observation.raw_html_sha256);
   expect(evidence1["/technical/"].structured.document_text_sha256).toBe(evidence2["/technical/"].structured.document_text_sha256);
   expect(evidence1["/technical/"].structured.outline_sha256).toBe(evidence2["/technical/"].structured.outline_sha256);
+
+  const activePages = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=active&limit=50`);
+  expect(activePages.total).toBe(5);
+  const pricingPage = activePages.items.find((item) => new URL(item.normalized_url).pathname === "/pricing/");
+  if (!pricingPage) throw new Error("Golden Path pricing Page was not found");
+  await patchJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/workspace-state`, {
+    workspace_state: "suppressed"
+  });
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=active&limit=50`)).total).toBe(4);
+  const removedPages = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=suppressed&limit=50`);
+  expect(removedPages.total).toBe(1);
+  const retainedObservations = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/observations?limit=100`);
+  expect(retainedObservations.total).toBe(2);
+  await patchJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/workspace-state`, {
+    workspace_state: "active"
+  });
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=active&limit=50`)).total).toBe(5);
+
+  const manualBatch = await postJson(request, `${apiUrl}/api/sites/${site.id}/manual-urls`, {
+    urls_text: `${fixtureUrl}/inventory-only/`
+  });
+  expect(manualBatch.items).toHaveLength(1);
+  const manualEntry = manualBatch.items[0];
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(1);
+  const suppression = await postJson(request, `${apiUrl}/api/sites/${site.id}/inventory/suppressions`, {
+    entry_id: manualEntry.id
+  });
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(0);
+  const removedInventory = await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=suppressed&limit=50`);
+  expect(removedInventory.total).toBe(1);
+  expect(removedInventory.items[0].source_count).toBe(1);
+  await deleteJson(request, `${apiUrl}/api/sites/${site.id}/inventory/suppressions/${suppression.id}`);
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(1);
 
   await page.goto(`/sites/${site.id}/comparisons?comparison_id=${comparisonId}`);
   await expect(page.getByRole("heading", { name: `Scan ${scan1Id} to Scan ${scan2Id}` })).toBeVisible();
@@ -240,6 +274,20 @@ async function postJson(request: APIRequestContext, url: string, data?: Record<s
   const response = await request.post(url, data ? { data } : undefined);
   const body = await response.text();
   expect(response.ok(), `${response.status()} POST ${url}: ${body}`).toBe(true);
+  return JSON.parse(body) as Json;
+}
+
+async function patchJson(request: APIRequestContext, url: string, data: Record<string, unknown>): Promise<Json> {
+  const response = await request.patch(url, { data });
+  const body = await response.text();
+  expect(response.ok(), `${response.status()} PATCH ${url}: ${body}`).toBe(true);
+  return JSON.parse(body) as Json;
+}
+
+async function deleteJson(request: APIRequestContext, url: string): Promise<Json> {
+  const response = await request.delete(url);
+  const body = await response.text();
+  expect(response.ok(), `${response.status()} DELETE ${url}: ${body}`).toBe(true);
   return JSON.parse(body) as Json;
 }
 

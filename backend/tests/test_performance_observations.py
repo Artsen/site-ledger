@@ -745,6 +745,25 @@ def test_run_validates_configuration_membership_and_key(
         PerformanceRunCreate(resource_ids=[resource.id, resource.id])
 
 
+def test_new_performance_run_rejects_suppressed_page(
+    db_session: Session, tmp_path: Path, monkeypatch
+) -> None:
+    site, resource = _site_page(db_session)
+    page = db_session.scalar(select(SitePage).where(SitePage.resource_id == resource.id))
+    assert page is not None
+    page.workspace_state = "suppressed"
+    page.suppressed_at = datetime.now(UTC)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.services.performance_collection.get_settings", lambda: _settings(tmp_path)
+    )
+
+    with pytest.raises(ValueError, match="do not belong"):
+        create_performance_run(
+            db_session, site.id, PerformanceRunCreate(resource_ids=[resource.id])
+        )
+
+
 def test_run_cancellation_retains_terminal_state_without_observations(
     db_session: Session, tmp_path: Path, monkeypatch
 ) -> None:

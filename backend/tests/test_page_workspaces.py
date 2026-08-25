@@ -4,19 +4,23 @@ import pytest
 from sqlalchemy import event, select
 
 from app.models import (
+    Note,
     PageCategoryAssignment,
     ResourceSnapshot,
     Scan,
     SitePage,
     WebResource,
+    WebResourceAlias,
     WebsiteProperty,
 )
 from app.schemas.page_workspaces import (
     BulkPageCategories,
     BulkPageMetadata,
+    BulkPageWorkspaceState,
     PageCategoryCreate,
     PageCategoryUpdate,
     PageMetadataUpdate,
+    PageWorkspaceStateUpdate,
 )
 from app.services.page_categories import (
     DuplicateCategoryError,
@@ -32,8 +36,10 @@ from app.services.site_management import delete_site
 from app.services.site_pages import (
     bulk_categories,
     bulk_metadata,
+    bulk_workspace_state,
     ensure_site_page,
     update_page_metadata,
+    update_page_workspace_state,
 )
 from app.storage.content_store import LocalContentStore
 
@@ -79,6 +85,101 @@ def test_site_page_catalog_preserves_manual_metadata_without_observations(db_ses
     assert pages.items[0].owner_label == "Documentation"
     assert detail is not None
     assert "retry" not in detail.model_dump_json().casefold()
+
+
+def test_site_page_workspace_suppression_is_durable_and_preserves_metadata(db_session) -> None:
+    site = _site(db_session)
+    resources = [_resource(db_session, f"/lifecycle-{index}") for index in range(2)]
+    scan = _scan(db_session, site.id)
+    pages = [ensure_site_page(db_session, scan=scan, resource=item) for item in resources]
+    assert pages[0] is not None and pages[1] is not None
+    pages[0].owner_label = "Product"
+    pages[0].workflow_status = "approved"
+    category = create_category(
+        db_session, site.id, PageCategoryCreate(name="Retained", color_key="blue")
+    )
+    assert category is not None
+    assignment = PageCategoryAssignment(site_page_id=pages[0].id, category_id=category.id)
+    note = Note(site_page_id=pages[0].id, body="Retain this note", is_pinned=True)
+    db_session.add_all([assignment, note])
+    db_session.commit()
+
+    update_page_workspace_state(
+        db_session, pages[0], PageWorkspaceStateUpdate(workspace_state="suppressed")
+    )
+    assert pages[0].suppressed_at is not None
+    assert list_site_pages(db_session, site.id).total == 1  # type: ignore[union-attr]
+    removed = list_site_pages(db_session, site.id, workspace_state="suppressed")
+    assert removed is not None and removed.items[0].resource_id == resources[0].id
+    assert get_site_page(db_session, site.id, resources[0].id).page.workspace_state == "suppressed"  # type: ignore[union-attr]
+
+    later = ensure_site_page(db_session, scan=_scan(db_session, site.id), resource=resources[0])
+    assert later is not None and later.id == pages[0].id
+    assert later.workspace_state == "suppressed"
+    assert (later.owner_label, later.workflow_status) == ("Product", "approved")
+    assert db_session.get(PageCategoryAssignment, assignment.id) is not None
+    assert db_session.get(Note, note.id) is not None
+
+    result = bulk_workspace_state(
+        db_session,
+        site.id,
+        BulkPageWorkspaceState(
+            resource_ids=[resources[0].id, resources[0].id, resources[1].id],
+            workspace_state="active",
+        ),
+    )
+    assert (result.selected, result.changed, result.unchanged) == (2, 1, 1)
+    assert pages[0].suppressed_at is None
+    assert db_session.get(PageCategoryAssignment, assignment.id) is not None
+    assert db_session.get(Note, note.id) is not None
+
+
+def test_bulk_page_workspace_state_rejects_wrong_site_atomically(db_session) -> None:
+    site = _site(db_session)
+    other = _site(db_session, "Other", "https://other.example/")
+    first = _resource(db_session, "/first")
+    second = _resource(db_session, "/second")
+    first_page = ensure_site_page(db_session, scan=_scan(db_session, site.id), resource=first)
+    ensure_site_page(db_session, scan=_scan(db_session, other.id), resource=second)
+    assert first_page is not None
+
+    with pytest.raises(ValueError, match="do not belong"):
+        bulk_workspace_state(
+            db_session,
+            site.id,
+            BulkPageWorkspaceState(
+                resource_ids=[first.id, second.id], workspace_state="suppressed"
+            ),
+        )
+    assert first_page.workspace_state == "active"
+
+
+def test_page_workspace_state_resolves_resource_aliases_and_deduplicates(db_session) -> None:
+    site = _site(db_session)
+    resource = _resource(db_session, "/canonical")
+    site_page = ensure_site_page(db_session, scan=_scan(db_session, site.id), resource=resource)
+    assert site_page is not None
+    alias_id = 999_035
+    db_session.add(
+        WebResourceAlias(
+            legacy_resource_id=alias_id,
+            target_resource_id=resource.id,
+            migration_id=999_035,
+            alias_reason="synthetic-test",
+        )
+    )
+    db_session.commit()
+
+    detail = get_site_page(db_session, site.id, alias_id)
+    assert detail is not None and detail.page.resource_id == resource.id
+    result = bulk_workspace_state(
+        db_session,
+        site.id,
+        BulkPageWorkspaceState(resource_ids=[alias_id, resource.id], workspace_state="suppressed"),
+    )
+
+    assert (result.selected, result.changed, result.unchanged) == (1, 1, 0)
+    assert site_page.workspace_state == "suppressed"
 
 
 def test_categories_are_site_scoped_editable_archivable_and_assignable(db_session) -> None:

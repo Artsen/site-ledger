@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -213,6 +213,8 @@ class PersistentPageRead(BaseModel):
     query: str
     owner_label: str | None
     workflow_status: str
+    workspace_state: Literal["active", "suppressed"]
+    suppressed_at: datetime | None
     categories: list[PageCategoryRead] = Field(default_factory=list)
     category_count: int = 0
     note_count: int = 0
