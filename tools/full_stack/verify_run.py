@@ -6,6 +6,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import func, select, text
+
 from app.database import SessionLocal
 from app.models import (
     ArtifactBlob,
@@ -31,13 +33,10 @@ from app.models import (
 )
 from app.schemas.scans import ScopeConfigPayload
 from app.services.scan_projections import CURRENT_SCAN_PROJECTION_ALGORITHM
-from sqlalchemy import func, select, text
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Verify persisted Golden Path invariants."
-    )
+    parser = argparse.ArgumentParser(description="Verify persisted Golden Path invariants.")
     parser.add_argument("--result", type=Path, required=True)
     parser.add_argument("--request-log", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -58,8 +57,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         scans = [db.get(Scan, scan_id) for scan_id in scan_ids]
         assert all(scan is not None and scan.status == "completed" for scan in scans)
         assert all(
-            scan is not None and scan.scope_config["allow_private_networks"]
-            for scan in scans
+            scan is not None and scan.scope_config["allow_private_networks"] for scan in scans
         )
         site = db.get(WebsiteProperty, int(result["site_id"]))
         assert site is not None and site.scope_config["allow_private_networks"] is True
@@ -82,20 +80,15 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             )
         )
         assert len(projections) == 2
+        assert all(build.projection_version == "scan-projection-v1" for build in projections)
         assert all(
-            build.projection_version == "scan-projection-v1" for build in projections
-        )
-        assert all(
-            build.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
-            for build in projections
+            build.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM for build in projections
         )
         comparison = db.get(ScanComparison, comparison_id)
         assert comparison is not None and comparison.current_build_id is not None
         build = db.get(ScanComparisonBuild, comparison.current_build_id)
         assert (
-            build is not None
-            and build.status == "ready"
-            and build.coverage_state == "comparable"
+            build is not None and build.status == "ready" and build.coverage_state == "comparable"
         )
         page_rows = list(
             db.scalars(
@@ -163,9 +156,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             )
         )
         snapshot_count = db.scalar(
-            select(func.count(ResourceSnapshot.id)).where(
-                ResourceSnapshot.scan_id.in_(scan_ids)
-            )
+            select(func.count(ResourceSnapshot.id)).where(ResourceSnapshot.scan_id.in_(scan_ids))
         )
         assert active_site_pages == 5
         assert inventory_suppressions == 0
@@ -185,9 +176,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             )
         )
         assert lifecycle_projection is not None
-        assert (
-            lifecycle_projection.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
-        )
+        assert lifecycle_projection.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
         resource_id = int(result["lifecycle_page_resource_id"])
         assert db.get(SitePage, int(result["lifecycle_deleted_site_page_id"])) is None
         recreated_page = db.scalar(
@@ -213,17 +202,9 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert seed_origins
 
         scan_render_run = db.get(RenderRun, int(result["scan_render_run_id"]))
-        standalone_render_run = db.get(
-            RenderRun, int(result["standalone_render_run_id"])
-        )
-        assert (
-            scan_render_run is not None
-            and scan_render_run.source_scan_id == scan_ids[0]
-        )
-        assert (
-            standalone_render_run is not None
-            and standalone_render_run.source_scan_id is None
-        )
+        standalone_render_run = db.get(RenderRun, int(result["standalone_render_run_id"]))
+        assert scan_render_run is not None and scan_render_run.source_scan_id == scan_ids[0]
+        assert standalone_render_run is not None and standalone_render_run.source_scan_id is None
         assert scan_render_run.status == standalone_render_run.status == "completed"
         repeated_resource_id = int(result["repeated_render_resource_id"])
         repeated_observation_ids = [
@@ -235,9 +216,10 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             for observation_id in repeated_observation_ids
         ]
         assert all(item is not None for item in repeated_observations)
-        assert {
-            item.render_run_id for item in repeated_observations if item is not None
-        } == {scan_render_run.id, standalone_render_run.id}
+        assert {item.render_run_id for item in repeated_observations if item is not None} == {
+            scan_render_run.id,
+            standalone_render_run.id,
+        }
         assert all(
             item is not None
             and item.web_resource_id == repeated_resource_id
@@ -333,10 +315,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert foreign_key_violations == []
         blob_count = db.scalar(select(func.count(ContentBlob.id))) or 0
 
-    requests = [
-        json.loads(line)
-        for line in request_log.read_text(encoding="utf-8").splitlines()
-    ]
+    requests = [json.loads(line) for line in request_log.read_text(encoding="utf-8").splitlines()]
     crawler_requests = [
         entry for entry in requests if entry["user_agent"] == "SiteLedgerGoldenPath/1.0"
     ]
@@ -367,12 +346,8 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "duplicate_site_page_identity_count": 0,
         "foreign_key_violation_count": 0,
         "render_run_count": db.scalar(select(func.count(RenderRun.id))) or 0,
-        "rendered_observation_count": db.scalar(
-            select(func.count(RenderedObservation.id))
-        )
-        or 0,
-        "rendered_artifact_blob_count": db.scalar(select(func.count(ArtifactBlob.id)))
-        or 0,
+        "rendered_observation_count": db.scalar(select(func.count(RenderedObservation.id))) or 0,
+        "rendered_artifact_blob_count": db.scalar(select(func.count(ArtifactBlob.id))) or 0,
         "lifecycle_active_site_page_count": active_site_pages,
         "lifecycle_current_source_entry_count": current_source_entries,
         "lifecycle_inventory_suppression_count": inventory_suppressions,
@@ -380,9 +355,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "lifecycle_inventory_entry_id": inventory_entry_id,
         "lifecycle_seed_origin_count": len(seed_origins),
         "lifecycle_scan_id": lifecycle_scan_id,
-        "projection_algorithm_identities": [
-            build.algorithm_identity for build in projections
-        ],
+        "projection_algorithm_identities": [build.algorithm_identity for build in projections],
         "projection_versions": [build.projection_version for build in projections],
         "structured_artifact_ids": artifact_ids,
         "structured_artifact_hashes": {
@@ -394,9 +367,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
     }
 
 
-def _observations_by_path(
-    db: Any, scan_ids: list[int]
-) -> dict[str, list[ResourceSnapshot]]:
+def _observations_by_path(db: Any, scan_ids: list[int]) -> dict[str, list[ResourceSnapshot]]:
     rows = db.execute(
         select(ResourceSnapshot, WebResource.path)
         .join(WebResource, WebResource.id == ResourceSnapshot.resource_id)
