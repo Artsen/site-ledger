@@ -1,12 +1,20 @@
 # Browser-rendered observations
 
-Browser rendering is optional and defaults to `none`. A Scan may render only its starting Page or
-up to `render_max_pages` eligible static observations. Eligibility requires usable static HTML and
-an in-scope HTTP(S) main-navigation URL. `all_eligible` ordering is deterministic: starting Page,
-lowest crawl depth, earliest static observation time, then snapshot ID.
+Browser rendering is a first-class durable evidence collector. A `RenderRun` freezes a bounded set
+of `RenderRunTarget` Page identities and effective browser configuration before its asynchronous
+job starts. Manual Site/Page Runs do not require a Scan or `ResourceSnapshot`; rerendering selected
+targets creates a new Run and new observations without modifying prior evidence.
 
-Static HTTP evidence remains authoritative. Each selected ResourceSnapshot receives at most one
-RenderedObservation attempt. Rendered DOM is not parsed into static metadata or links and does not
+A Scan with rendering enabled deterministically selects eligible static observations, creates a
+linked Render Run with snapshot provenance, and completes according to static crawl evidence.
+Saved-Site Scan Runs are owned durably by the Site and survive source Scan deletion with Scan and
+snapshot provenance detached. Ad-hoc Scan Runs have no Site owner, remain navigable through their
+source Scan, and are deleted with that Scan using reference-aware artifact cleanup. Browser HTTP or
+technical outcomes belong to the Render Run and do not change the Scan terminal result. Historical
+Scan-bound observations remain readable without invented Run membership.
+
+Static HTTP evidence remains authoritative. Each frozen target receives at most one immutable
+RenderedObservation. Rendered DOM is not parsed into static metadata or links and does not
 enter the graph. Browser technical success is distinct from requested-Page success: normal Page
 screenshots and rendered DOM require a final artifact-eligible main-document HTTP 2xx response.
 HTTP 204 and 205 responses retain their exact status but are no-content outcomes, not successful
@@ -15,8 +23,9 @@ non-followed 3xx responses and explicit HTTP 4xx/5xx responses likewise retain e
 bounded diagnostic, network, console, and Page-error evidence, but receive no normal Page
 artifacts. HTTP 200 soft challenge or block documents are not heuristically classified yet.
 
-Browser-rendered Pages are never retried. Bounded retry behavior applies only to eligible static
-requests while their Scan is still active; it never causes a second browser capture.
+A selected rerender is an explicit new Render Run. It never retries in place and never changes an
+existing observation. Target membership is not re-derived from current SitePages when queued work
+starts; removing or suppressing a Page workspace does not rewrite an existing Run.
 
 Three consecutive explicit HTTP 429 outcomes open a render circuit for that requested host. Later
 selected targets on that host are persisted as `skipped` with
@@ -43,7 +52,7 @@ duration, observed encoded network bytes, bounded event counts, and artifact byt
 external website.
 
 The worker reports package and Chromium availability in its capability metadata. API requests and
-jobs never download a browser automatically. Rendering uses one Chromium process per rendered Scan
+jobs never download a browser automatically. Rendering uses one Chromium process per Render Run
 and a fresh non-persistent context for every Page.
 
 ## Security policy
@@ -51,7 +60,7 @@ and a fresh non-persistent context for every Page.
 - Request interception is installed before a Page exists and therefore before navigation.
 - Only GET, HEAD, and OPTIONS are allowed.
 - Every HTTP(S) request, including redirect hops and subresources, passes destination validation.
-- Main-frame navigations must remain within Scan scope.
+- Main-frame navigations must remain within the frozen Run scope.
 - Private, loopback, link-local, reserved, and multicast destinations are blocked by default.
 - Service workers, popups, downloads, WebSocket/EventSource constructors, and blocking dialogs are
   disabled or dismissed.
@@ -75,12 +84,9 @@ content addressing, atomic writes, and reference-aware deletion. Artifact paths 
 from hashes. Rendered DOM is served as `text/plain` and displayed as escaped React text.
 
 Capture states are `capturing`, `completed`, `completed_with_warnings`, `failed`, `skipped`,
-`cancelled`, and `interrupted`. Page-level browser failures make the Scan
-`completed_with_errors`; browser preflight failure before useful execution makes it `failed`.
-For new Scans, only `completed` or `completed_with_warnings` observations with artifact-eligible
-HTTP 2xx statuses increment `rendered_completed_count`; no-content responses and HTTP errors
-increment `rendered_failed_count`, while circuit-open targets increment `rendered_skipped_count`.
-Historical counters are not rewritten. The Rendered
+`cancelled`, and `interrupted`. Run counters distinguish attempted, successful, failed, and skipped
+targets. Worker cancellation and expired leases leave durable Run/observation terminal state.
+Historical Scan counters and observations are not rewritten. The Rendered
 workspace derives its outcome summary from retained observations, so legacy renderer-v1 rows such
 as `completed` plus HTTP 429 are still presented truthfully.
 
@@ -95,9 +101,15 @@ Browser policy remains version 2 because request interception and browser safety
 change, and capture schema remains version 2 because persisted shapes did not change. Renderer-v1
 observations remain readable and are never rewritten.
 
-## Scan Discoverability
+## Discoverability
 
-The Scan Rendered tab indexes retained observations with server-side filtering and pagination.
-Overview and Pages links open the exact snapshot's Rendered workspace. This index does not alter
-capture selection, browser policy, or the no-retry rule. Rendered network and DOM evidence do not
-feed static Resource Inventory; see [Resource Inventory](resource-inventory.md).
+The Site Rendered workspace provides Run creation, history, active progress, Run detail, bounded
+server-side observation filtering/pagination, and selected rerender. Persistent Page detail exposes
+bounded render history. Scan detail links to its associated Run when present; the historical Scan
+Rendered tab remains readable. Rendered network and DOM evidence do not feed static Resource
+Inventory; see [Resource Inventory](resource-inventory.md).
+
+Deleting a source Scan preserves Run-owned evidence and nulls optional Scan/snapshot provenance.
+Deleting a Site removes its Runs and exclusively referenced rendered artifacts while retaining
+shared content-addressed blobs. General Run/observation deletion and Site-wide render purge are
+intentionally outside the current product boundary.

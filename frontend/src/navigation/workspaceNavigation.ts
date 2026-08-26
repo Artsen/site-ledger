@@ -16,6 +16,7 @@ import {
   NotebookPen,
   Play,
   ScanSearch,
+  MonitorUp,
   Settings,
   Tags,
 } from "lucide-react";
@@ -31,6 +32,7 @@ export type SiteArea =
   | "comparisons"
   | "performance"
   | "accessibility"
+  | "rendered"
   | "graph"
   | "categories"
   | "category-rules"
@@ -74,6 +76,7 @@ export const siteNavigation: SiteNavigationGroup[] = [
       { area: "comparisons", label: "Comparisons", icon: GitCompareArrows, segment: "comparisons" },
       { area: "performance", label: "Performance", icon: Gauge, segment: "performance" },
       { area: "accessibility", label: "Accessibility", icon: Accessibility, segment: "accessibility" },
+      { area: "rendered", label: "Rendered", icon: MonitorUp, segment: "rendered" },
       { area: "graph", label: "Graph", icon: Network, segment: "graph" },
     ],
   },
@@ -109,6 +112,7 @@ export function siteAreaFromPath(pathname: string): SiteArea {
   if (segment === "comparisons") return "comparisons";
   if (segment === "performance") return "performance";
   if (segment === "accessibility") return "accessibility";
+  if (segment === "rendered") return "rendered";
   return allSiteItems.find((item) => item.segment === segment)?.area ?? "overview";
 }
 

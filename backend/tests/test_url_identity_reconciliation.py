@@ -135,6 +135,8 @@ def test_plan_enumerates_rekeys_splits_grandfathering_and_evidence(tmp_path: Pat
         "resource_reference_target",
         "performance_url",
         "accessibility_url",
+        "render_run_target",
+        "rendered_observation",
         "ai_document_snapshot",
         "ai_document_reference",
     } <= domains
@@ -412,6 +414,15 @@ def _create_full_domain_fixture(database: Path) -> None:
         "INSERT INTO accessibility_observations VALUES "
         "(1, 1, 1, 'https://example.test/?b=2&a=1', 'https://final.test/', 1)"
     )
+    connection.execute("INSERT INTO render_runs VALUES (1, 1)")
+    connection.execute(
+        "INSERT INTO render_run_targets VALUES (1, 1, 1, 1, 'https://example.test/?b=2&a=1', 1)"
+    )
+    connection.execute(
+        "INSERT INTO rendered_observations VALUES "
+        "(1, 1, 1, 1, 1, 'https://example.test/?a=1&b=2', "
+        "'https://final.test/', 'completed', 200)"
+    )
     connection.execute(
         "INSERT INTO ai_document_snapshots VALUES "
         "(1, 1, 'https://example.test/?a=1&b=2', 'https://final.test/')"
@@ -499,6 +510,16 @@ CREATE TABLE accessibility_observations (
  id INTEGER PRIMARY KEY, website_property_id INTEGER,
  web_resource_id INTEGER REFERENCES web_resources(id),
  requested_url TEXT, final_url TEXT, payload_id INTEGER);
+CREATE TABLE render_runs (
+ id INTEGER PRIMARY KEY, website_property_id INTEGER);
+CREATE TABLE render_run_targets (
+ id INTEGER PRIMARY KEY, render_run_id INTEGER,
+ web_resource_id INTEGER REFERENCES web_resources(id), source_snapshot_id INTEGER,
+ requested_url TEXT, position INTEGER);
+CREATE TABLE rendered_observations (
+ id INTEGER PRIMARY KEY, render_run_id INTEGER, render_run_target_id INTEGER,
+ web_resource_id INTEGER REFERENCES web_resources(id), snapshot_id INTEGER,
+ requested_url TEXT, final_url TEXT, capture_state TEXT, navigation_http_status INTEGER);
 CREATE TABLE ai_document_snapshots (
  id INTEGER PRIMARY KEY, resource_id INTEGER REFERENCES web_resources(id),
  requested_url TEXT, final_url TEXT);

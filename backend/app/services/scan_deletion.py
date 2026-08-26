@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import delete, distinct, func, or_, select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.models import (
     ArtifactBlob,
@@ -13,6 +14,8 @@ from app.models import (
     RenderedNetworkEntry,
     RenderedObservation,
     RenderedPageError,
+    RenderRun,
+    RenderRunTarget,
     ResourceOccurrence,
     ResourceReferenceOccurrence,
     ResourceSnapshot,
@@ -162,8 +165,15 @@ def delete_scan(
     candidate_resource_ids = impact.resource_ids
     snapshot_ids = select(ResourceSnapshot.id).where(ResourceSnapshot.scan_id == scan.id)
     rendered_blob_ids = [blob.id for blob in impact.referenced_artifact_blobs]
-    rendered_ids = select(RenderedObservation.id).where(
-        RenderedObservation.snapshot_id.in_(snapshot_ids)
+    deleted_rendered_ids = _scan_owned_rendered_observation_ids(scan.id)
+    ad_hoc_run_ids = _ad_hoc_render_run_ids(scan.id)
+    saved_site_run_ids = list(
+        db.scalars(
+            select(RenderRun.id).where(
+                RenderRun.source_scan_id == scan.id,
+                RenderRun.website_property_id.is_not(None),
+            )
+        )
     )
     comparison_ids = select(ScanComparison.id).where(
         or_(
@@ -179,6 +189,25 @@ def delete_scan(
     db.execute(delete(ScanComparison).where(ScanComparison.id.in_(comparison_ids)))
     delete_scan_projection_data(db, scan.id)
     db.execute(
+        update(RenderRun).where(RenderRun.id.in_(saved_site_run_ids)).values(source_scan_id=None)
+    )
+    db.execute(
+        update(RenderRunTarget)
+        .where(
+            RenderRunTarget.render_run_id.in_(saved_site_run_ids),
+            RenderRunTarget.source_snapshot_id.in_(snapshot_ids),
+        )
+        .values(source_snapshot_id=None)
+    )
+    db.execute(
+        update(RenderedObservation)
+        .where(
+            RenderedObservation.snapshot_id.in_(snapshot_ids),
+            RenderedObservation.render_run_id.in_(saved_site_run_ids),
+        )
+        .values(snapshot_id=None)
+    )
+    db.execute(
         delete(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id.in_(snapshot_ids))
     )
     db.execute(
@@ -188,21 +217,28 @@ def delete_scan(
     )
     db.execute(
         delete(RenderedNetworkEntry).where(
-            RenderedNetworkEntry.rendered_observation_id.in_(rendered_ids)
+            RenderedNetworkEntry.rendered_observation_id.in_(deleted_rendered_ids)
         )
     )
     db.execute(
         delete(RenderedConsoleMessage).where(
-            RenderedConsoleMessage.rendered_observation_id.in_(rendered_ids)
+            RenderedConsoleMessage.rendered_observation_id.in_(deleted_rendered_ids)
         )
     )
     db.execute(
-        delete(RenderedPageError).where(RenderedPageError.rendered_observation_id.in_(rendered_ids))
+        delete(RenderedPageError).where(
+            RenderedPageError.rendered_observation_id.in_(deleted_rendered_ids)
+        )
     )
     db.execute(
-        delete(RenderedArtifact).where(RenderedArtifact.rendered_observation_id.in_(rendered_ids))
+        delete(RenderedArtifact).where(
+            RenderedArtifact.rendered_observation_id.in_(deleted_rendered_ids)
+        )
     )
-    db.execute(delete(RenderedObservation).where(RenderedObservation.snapshot_id.in_(snapshot_ids)))
+    db.execute(delete(RenderedObservation).where(RenderedObservation.id.in_(deleted_rendered_ids)))
+    db.execute(delete(BackgroundJob).where(BackgroundJob.render_run_id.in_(ad_hoc_run_ids)))
+    db.execute(delete(RenderRunTarget).where(RenderRunTarget.render_run_id.in_(ad_hoc_run_ids)))
+    db.execute(delete(RenderRun).where(RenderRun.id.in_(ad_hoc_run_ids)))
     db.execute(delete(ResourceSnapshot).where(ResourceSnapshot.scan_id == scan.id))
     unreferenced_rendered_blobs = (
         list(
@@ -389,13 +425,11 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
     deletable_blobs = [
         blob for blob in referenced_blobs if outside_blob_references.get(blob.id, 0) == 0
     ]
-    rendered_observation_ids = select(RenderedObservation.id).where(
-        RenderedObservation.snapshot_id.in_(snapshot_ids)
-    )
+    rendered_observation_ids = _scan_owned_rendered_observation_ids(scan.id)
     rendered_observations = (
         db.scalar(
             select(func.count(RenderedObservation.id)).where(
-                RenderedObservation.snapshot_id.in_(snapshot_ids)
+                RenderedObservation.id.in_(rendered_observation_ids),
             )
         )
         or 0
@@ -471,11 +505,30 @@ def _has_active_scan_job(db: Session, scan_id: int) -> bool:
                 or_(
                     BackgroundJob.scan_id == scan_id,
                     BackgroundJob.scan_comparison_id.in_(comparison_ids),
+                    BackgroundJob.render_run_id.in_(_ad_hoc_render_run_ids(scan_id)),
                 ),
             )
         )
         or 0
     ) > 0
+
+
+def _ad_hoc_render_run_ids(scan_id: int) -> Select[tuple[int]]:
+    return select(RenderRun.id).where(
+        RenderRun.source_scan_id == scan_id,
+        RenderRun.website_property_id.is_(None),
+    )
+
+
+def _scan_owned_rendered_observation_ids(scan_id: int) -> Select[tuple[int]]:
+    snapshot_ids = select(ResourceSnapshot.id).where(ResourceSnapshot.scan_id == scan_id)
+    return select(RenderedObservation.id).where(
+        or_(
+            RenderedObservation.render_run_id.in_(_ad_hoc_render_run_ids(scan_id)),
+            RenderedObservation.snapshot_id.in_(snapshot_ids)
+            & RenderedObservation.render_run_id.is_(None),
+        )
+    )
 
 
 def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int]) -> list[int]:
@@ -523,6 +576,13 @@ def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int
             )
         )
     )
+    still_render_targets = set(
+        db.scalars(
+            select(distinct(RenderRunTarget.web_resource_id)).where(
+                RenderRunTarget.web_resource_id.in_(candidate_resource_ids)
+            )
+        )
+    )
     deletable = sorted(
         set(candidate_resource_ids)
         - still_snapshotted
@@ -531,6 +591,7 @@ def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int
         - still_source_entry
         - still_seeded
         - still_site_pages
+        - still_render_targets
     )
     if deletable:
         db.execute(delete(WebResource).where(WebResource.id.in_(deletable)))

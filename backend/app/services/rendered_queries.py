@@ -4,13 +4,35 @@ from typing import Literal
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.selectable import Subquery
 
-from app.models import RenderedArtifact, RenderedObservation, ResourceSnapshot
+from app.models import (
+    BackgroundJob,
+    RenderedArtifact,
+    RenderedObservation,
+    RenderRun,
+    RenderRunTarget,
+    ResourceSnapshot,
+)
 from app.schemas.rendered import (
     RenderedObservationIndexItem,
     RenderedObservationIndexList,
     RenderedObservationSummary,
+    RenderRunDetail,
+    RenderRunList,
+    RenderRunRead,
 )
+
+RenderOutcome = Literal[
+    "successful",
+    "no_content",
+    "redirect",
+    "http_error",
+    "rate_limited",
+    "not_attempted",
+    "technical_failure",
+]
 
 
 def list_scan_rendered_observations(
@@ -235,4 +257,370 @@ def list_scan_rendered_observations(
             technical_failures=summary_values[6] or 0,
             artifacts_retained=artifact_total,
         ),
+    )
+
+
+def list_render_runs(
+    db: Session, site_id: int, *, limit: int = 25, offset: int = 0
+) -> RenderRunList:
+    condition = RenderRun.website_property_id == site_id
+    total = db.scalar(select(func.count(RenderRun.id)).where(condition)) or 0
+    runs = list(
+        db.scalars(
+            select(RenderRun)
+            .where(condition)
+            .order_by(RenderRun.created_at.desc(), RenderRun.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    jobs = {
+        job.render_run_id: job
+        for job in db.scalars(
+            select(BackgroundJob).where(BackgroundJob.render_run_id.in_([run.id for run in runs]))
+        )
+    }
+    return RenderRunList(
+        items=[_render_run_read(db, run, jobs.get(run.id)) for run in runs],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def get_render_run(
+    db: Session,
+    site_id: int,
+    run_id: int,
+    *,
+    search: str | None = None,
+    capture_state: str | None = None,
+    navigation_status: int | None = None,
+    has_warnings: bool | None = None,
+    has_page_errors: bool | None = None,
+    has_viewport_screenshot: bool | None = None,
+    outcomes: list[RenderOutcome] | None = None,
+    sort: Literal[
+        "page_url",
+        "capture_state",
+        "duration",
+        "navigation_status",
+        "warning_count",
+        "page_error_count",
+        "browser_evidence",
+        "capture_time",
+    ] = "capture_time",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> RenderRunDetail | None:
+    run = db.scalar(
+        select(RenderRun).where(RenderRun.id == run_id, RenderRun.website_property_id == site_id)
+    )
+    if run is None:
+        return None
+    job = db.scalar(select(BackgroundJob).where(BackgroundJob.render_run_id == run.id))
+    observations = list_render_run_observations(
+        db,
+        run.id,
+        search=search,
+        capture_state=capture_state,
+        navigation_status=navigation_status,
+        has_warnings=has_warnings,
+        has_page_errors=has_page_errors,
+        has_viewport_screenshot=has_viewport_screenshot,
+        outcomes=outcomes,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+    return RenderRunDetail(**_render_run_read(db, run, job).model_dump(), observations=observations)
+
+
+def list_render_run_observations(
+    db: Session,
+    run_id: int | None,
+    *,
+    site_id: int | None = None,
+    resource_id: int | None = None,
+    search: str | None = None,
+    capture_state: str | None = None,
+    navigation_status: int | None = None,
+    has_warnings: bool | None = None,
+    has_page_errors: bool | None = None,
+    has_viewport_screenshot: bool | None = None,
+    outcomes: list[RenderOutcome] | None = None,
+    sort: Literal[
+        "page_url",
+        "capture_state",
+        "duration",
+        "navigation_status",
+        "warning_count",
+        "page_error_count",
+        "browser_evidence",
+        "capture_time",
+    ] = "capture_time",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> RenderedObservationIndexList:
+    if run_id is not None:
+        condition = RenderedObservation.render_run_id == run_id
+    elif site_id is not None and resource_id is not None:
+        condition = RenderedObservation.render_run_id.in_(
+            select(RenderRun.id).where(RenderRun.website_property_id == site_id)
+        ) & (RenderedObservation.web_resource_id == resource_id)
+    else:
+        raise ValueError("Run identity or Site Page identity is required.")
+    artifacts = _artifact_presence_subquery()
+    query = (
+        select(RenderedObservation, RenderRunTarget, ResourceSnapshot, artifacts)
+        .join(RenderRunTarget, RenderRunTarget.id == RenderedObservation.render_run_target_id)
+        .outerjoin(ResourceSnapshot, ResourceSnapshot.id == RenderedObservation.snapshot_id)
+        .outerjoin(artifacts, artifacts.c.observation_id == RenderedObservation.id)
+        .where(condition)
+    )
+    if search:
+        pattern = f"%{search}%"
+        query = query.where(
+            or_(
+                RenderRunTarget.requested_url.ilike(pattern),
+                RenderedObservation.final_url.ilike(pattern),
+                RenderedObservation.document_title.ilike(pattern),
+                ResourceSnapshot.page_title.ilike(pattern),
+            )
+        )
+    if capture_state:
+        query = query.where(RenderedObservation.capture_state == capture_state)
+    if navigation_status is not None:
+        query = query.where(RenderedObservation.navigation_http_status == navigation_status)
+    for value, count_column in (
+        (has_warnings, RenderedObservation.warning_count),
+        (has_page_errors, RenderedObservation.page_error_count),
+    ):
+        if value is True:
+            query = query.where(count_column > 0)
+        elif value is False:
+            query = query.where(count_column == 0)
+    if has_viewport_screenshot is True:
+        query = query.where(artifacts.c.viewport == 1)
+    elif has_viewport_screenshot is False:
+        query = query.where(func.coalesce(artifacts.c.viewport, 0) == 0)
+    if outcomes:
+        query = query.where(or_(*[_render_outcome_condition(value) for value in outcomes]))
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    sort_map = {
+        "page_url": RenderRunTarget.requested_url,
+        "capture_state": RenderedObservation.capture_state,
+        "duration": RenderedObservation.duration_ms,
+        "navigation_status": RenderedObservation.navigation_http_status,
+        "warning_count": RenderedObservation.warning_count,
+        "page_error_count": RenderedObservation.page_error_count,
+        "browser_evidence": func.coalesce(artifacts.c.viewport, 0)
+        + func.coalesce(artifacts.c.full_page, 0)
+        + func.coalesce(artifacts.c.dom, 0)
+        + RenderedObservation.console_message_count
+        + RenderedObservation.blocked_request_count,
+        "capture_time": RenderedObservation.finished_at,
+    }
+    order = sort_map[sort].desc() if direction == "desc" else sort_map[sort].asc()
+    rows = db.execute(
+        query.order_by(order, RenderRunTarget.position, RenderedObservation.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return RenderedObservationIndexList(
+        items=[
+            RenderedObservationIndexItem(
+                id=observation.id,
+                snapshot_id=observation.snapshot_id,
+                render_run_target_id=target.id,
+                resource_id=target.web_resource_id,
+                page_title=(snapshot.page_title if snapshot else None)
+                or observation.document_title,
+                static_final_url=(
+                    (snapshot.final_url or snapshot.requested_url)
+                    if snapshot
+                    else target.requested_url
+                ),
+                browser_final_url=observation.final_url,
+                capture_state=observation.capture_state,
+                static_http_status=snapshot.http_status if snapshot else None,
+                navigation_http_status=observation.navigation_http_status,
+                error_type=observation.error_type,
+                error_message=observation.error_message,
+                duration_ms=observation.duration_ms,
+                warning_count=observation.warning_count,
+                blocked_request_count=observation.blocked_request_count,
+                console_message_count=observation.console_message_count,
+                page_error_count=observation.page_error_count,
+                has_viewport_screenshot=bool(viewport),
+                has_full_page_screenshot=bool(full_page),
+                has_rendered_dom=bool(dom),
+                finished_at=observation.finished_at,
+            )
+            for observation, target, snapshot, _observation_id, viewport, full_page, dom in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+        summary=_render_summary(db, condition),
+    )
+
+
+def page_render_history(
+    db: Session,
+    site_id: int,
+    resource_id: int,
+    *,
+    search: str | None = None,
+    capture_state: str | None = None,
+    navigation_status: int | None = None,
+    has_warnings: bool | None = None,
+    has_page_errors: bool | None = None,
+    has_viewport_screenshot: bool | None = None,
+    outcomes: list[RenderOutcome] | None = None,
+    sort: Literal[
+        "page_url",
+        "capture_state",
+        "duration",
+        "navigation_status",
+        "warning_count",
+        "page_error_count",
+        "browser_evidence",
+        "capture_time",
+    ] = "capture_time",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> RenderedObservationIndexList:
+    return list_render_run_observations(
+        db,
+        None,
+        site_id=site_id,
+        resource_id=resource_id,
+        search=search,
+        capture_state=capture_state,
+        navigation_status=navigation_status,
+        has_warnings=has_warnings,
+        has_page_errors=has_page_errors,
+        has_viewport_screenshot=has_viewport_screenshot,
+        outcomes=outcomes,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _artifact_presence_subquery() -> Subquery:
+    return (
+        select(
+            RenderedArtifact.rendered_observation_id.label("observation_id"),
+            func.max(
+                case((RenderedArtifact.artifact_type == "viewport_screenshot", 1), else_=0)
+            ).label("viewport"),
+            func.max(
+                case((RenderedArtifact.artifact_type == "full_page_screenshot", 1), else_=0)
+            ).label("full_page"),
+            func.max(case((RenderedArtifact.artifact_type == "rendered_dom", 1), else_=0)).label(
+                "dom"
+            ),
+        )
+        .group_by(RenderedArtifact.rendered_observation_id)
+        .subquery()
+    )
+
+
+def _render_outcome_condition(outcome: RenderOutcome) -> ColumnElement[bool]:
+    status = RenderedObservation.navigation_http_status
+    state = RenderedObservation.capture_state
+    skipped = func.coalesce(RenderedObservation.error_type == "host_rate_limit_circuit_open", False)
+    rate_limited = func.coalesce(
+        (status == 429) | (RenderedObservation.error_type == "navigation_rate_limited"),
+        False,
+    )
+    no_content = func.coalesce(status.in_((204, 205)), False)
+    redirect = func.coalesce(status.between(300, 399), False)
+    http_error = func.coalesce(status.between(400, 599), False) & ~rate_limited
+    successful = func.coalesce(
+        state.in_(("completed", "completed_with_warnings"))
+        & status.between(200, 299)
+        & ~no_content,
+        False,
+    )
+    conditions: dict[RenderOutcome, ColumnElement[bool]] = {
+        "successful": successful & ~rate_limited & ~skipped,
+        "no_content": no_content & ~skipped,
+        "redirect": redirect & ~skipped,
+        "http_error": http_error & ~skipped,
+        "rate_limited": rate_limited & ~skipped,
+        "not_attempted": skipped,
+        "technical_failure": ~or_(
+            *[
+                func.coalesce(value, False)
+                for value in (
+                    successful,
+                    no_content,
+                    redirect,
+                    http_error,
+                    rate_limited,
+                    skipped,
+                )
+            ]
+        ),
+    }
+    return func.coalesce(conditions[outcome], False)
+
+
+def _render_summary(db: Session, condition: ColumnElement[bool]) -> RenderedObservationSummary:
+    observations = list(db.scalars(select(RenderedObservation).where(condition)))
+    successful = no_content = redirects = http_errors = rate_limited = skipped = technical = 0
+    for item in observations:
+        status = item.navigation_http_status
+        if item.error_type == "host_rate_limit_circuit_open":
+            skipped += 1
+        elif status == 429 or item.error_type == "navigation_rate_limited":
+            rate_limited += 1
+        elif status in (204, 205):
+            no_content += 1
+        elif status is not None and 300 <= status <= 399:
+            redirects += 1
+        elif status is not None and 400 <= status <= 599:
+            http_errors += 1
+        elif (
+            item.capture_state in ("completed", "completed_with_warnings")
+            and status is not None
+            and 200 <= status <= 299
+        ):
+            successful += 1
+        else:
+            technical += 1
+    artifact_total = (
+        db.scalar(
+            select(func.count(RenderedArtifact.id)).join(RenderedObservation).where(condition)
+        )
+        or 0
+    )
+    return RenderedObservationSummary(
+        successful_renders=successful,
+        no_content_responses=no_content,
+        redirect_responses=redirects,
+        http_error_responses=http_errors,
+        rate_limited=rate_limited,
+        skipped_after_throttling=skipped,
+        technical_failures=technical,
+        artifacts_retained=artifact_total,
+    )
+
+
+def _render_run_read(db: Session, run: RenderRun, job: BackgroundJob | None) -> RenderRunRead:
+    return RenderRunRead.model_validate(
+        {
+            **{column.name: getattr(run, column.name) for column in run.__table__.columns},
+            "job_id": job.id if job else None,
+            "presentation_status": job.status if job else run.status,
+            "summary": _render_summary(db, RenderedObservation.render_run_id == run.id),
+        }
     )

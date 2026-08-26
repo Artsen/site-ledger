@@ -156,7 +156,7 @@ def _prepare_executor_fixture(database: Path) -> dict:
             INSERT INTO url_identity_state
               (id, active_normalization_version, reconciliation_required)
               VALUES (1, 'url-normalization-v1', 1);
-            UPDATE alembic_version SET version_num = '202608140023';
+            UPDATE alembic_version SET version_num = '202608260025';
             """
         )
         connection.commit()

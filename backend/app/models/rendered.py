@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     Float,
     ForeignKey,
     Index,
@@ -20,15 +21,112 @@ from app.database import Base
 from app.database import UTCDateTime as DateTime
 
 if TYPE_CHECKING:
-    from app.models.resources import ResourceSnapshot
+    from app.models.resources import (
+        BackgroundJob,
+        ResourceSnapshot,
+        Scan,
+        WebResource,
+        WebsiteProperty,
+    )
+
+
+class RenderRun(Base):
+    __tablename__ = "render_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    website_property_id: Mapped[int | None] = mapped_column(
+        ForeignKey("website_properties.id", ondelete="CASCADE"), index=True
+    )
+    source_scan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scans.id", ondelete="SET NULL"), index=True
+    )
+    source_render_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("render_runs.id", ondelete="SET NULL"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    trigger: Mapped[str] = mapped_column(String(32), default="site_workspace", index=True)
+    configuration_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    target_count: Mapped[int] = mapped_column(Integer)
+    attempted_count: Mapped[int] = mapped_column(Integer, default=0)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    blocked_request_count: Mapped[int] = mapped_column(Integer, default=0)
+    artifact_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_summary: Mapped[str | None] = mapped_column(Text)
+
+    website_property: Mapped[WebsiteProperty | None] = relationship()
+    source_scan: Mapped[Scan | None] = relationship()
+    source_render_run: Mapped[RenderRun | None] = relationship(remote_side=[id])
+    targets: Mapped[list[RenderRunTarget]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="RenderRunTarget.position"
+    )
+    observations: Mapped[list[RenderedObservation]] = relationship(back_populates="run")
+    jobs: Mapped[list[BackgroundJob]] = relationship(
+        back_populates="render_run", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "(trigger = 'scan' AND (source_scan_id IS NOT NULL "
+            "OR website_property_id IS NOT NULL)) OR "
+            "(trigger IN ('site_workspace', 'page_workspace', 'rerender') "
+            "AND website_property_id IS NOT NULL)",
+            name="ck_render_run_owner",
+        ),
+        Index("ix_render_runs_site_created", "website_property_id", "created_at", "id"),
+    )
+
+
+class RenderRunTarget(Base):
+    __tablename__ = "render_run_targets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    render_run_id: Mapped[int] = mapped_column(
+        ForeignKey("render_runs.id", ondelete="CASCADE"), index=True
+    )
+    web_resource_id: Mapped[int] = mapped_column(
+        ForeignKey("web_resources.id", ondelete="RESTRICT"), index=True
+    )
+    source_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("resource_snapshots.id", ondelete="SET NULL"), index=True
+    )
+    requested_url: Mapped[str] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    run: Mapped[RenderRun] = relationship(back_populates="targets")
+    web_resource: Mapped[WebResource] = relationship()
+    source_snapshot: Mapped[ResourceSnapshot | None] = relationship()
+    observation: Mapped[RenderedObservation | None] = relationship(
+        back_populates="target", cascade="all, delete-orphan", uselist=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("render_run_id", "web_resource_id", name="uq_render_run_target_resource"),
+        UniqueConstraint("render_run_id", "position", name="uq_render_run_target_position"),
+        Index("ix_render_run_targets_run_position", "render_run_id", "position", "id"),
+    )
 
 
 class RenderedObservation(Base):
     __tablename__ = "rendered_observations"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    snapshot_id: Mapped[int] = mapped_column(
-        ForeignKey("resource_snapshots.id", ondelete="CASCADE"), unique=True, index=True
+    render_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("render_runs.id", ondelete="CASCADE"), index=True
+    )
+    render_run_target_id: Mapped[int | None] = mapped_column(
+        ForeignKey("render_run_targets.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    web_resource_id: Mapped[int | None] = mapped_column(
+        ForeignKey("web_resources.id", ondelete="RESTRICT"), index=True
+    )
+    snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("resource_snapshots.id", ondelete="SET NULL"), index=True
     )
     capture_state: Mapped[str] = mapped_column(String(32), index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -71,7 +169,10 @@ class RenderedObservation(Base):
     warnings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    snapshot: Mapped[ResourceSnapshot] = relationship(back_populates="rendered_observation")
+    run: Mapped[RenderRun | None] = relationship(back_populates="observations")
+    target: Mapped[RenderRunTarget | None] = relationship(back_populates="observation")
+    web_resource: Mapped[WebResource | None] = relationship()
+    snapshot: Mapped[ResourceSnapshot | None] = relationship(back_populates="rendered_observation")
     artifacts: Mapped[list[RenderedArtifact]] = relationship(
         back_populates="observation", cascade="all, delete-orphan"
     )
@@ -83,6 +184,17 @@ class RenderedObservation(Base):
     )
     page_errors: Mapped[list[RenderedPageError]] = relationship(
         back_populates="observation", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_rendered_observations_resource_finished", "web_resource_id", "finished_at", "id"),
+        Index(
+            "ix_rendered_observations_run_outcome",
+            "render_run_id",
+            "capture_state",
+            "navigation_http_status",
+            "id",
+        ),
     )
 
 

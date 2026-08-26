@@ -17,6 +17,7 @@ from app.models import (
     RenderedNetworkEntry,
     RenderedObservation,
     RenderedPageError,
+    RenderRun,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -499,6 +500,7 @@ def remove_site(site_id: int, request: Request, db: DbSession) -> SiteDeleteResu
             request.app.state.performance_payload_store,
             request.app.state.accessibility_payload_store,
             warnings,
+            request.app.state.artifact_store,
         )
     except SiteHasScansError as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -1241,6 +1243,12 @@ def get_scan(scan_id: int, db: DbSession) -> ScanRead:
         raise HTTPException(404, "Scan not found")
     result = ScanRead.model_validate(scan, from_attributes=True)
     result.note_count = db.scalar(select(func.count(Note.id)).where(Note.scan_id == scan.id)) or 0
+    render_run = db.scalar(
+        select(RenderRun).where(RenderRun.source_scan_id == scan.id).order_by(RenderRun.id.desc())
+    )
+    if render_run:
+        result.render_run_id = render_run.id
+        result.render_run_status = render_run.status
     return result
 
 

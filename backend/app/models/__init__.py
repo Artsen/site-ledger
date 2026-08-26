@@ -41,6 +41,8 @@ from app.models.rendered import (
     RenderedNetworkEntry,
     RenderedObservation,
     RenderedPageError,
+    RenderRun,
+    RenderRunTarget,
 )
 from app.models.resources import (
     BackgroundJob,
@@ -143,6 +145,8 @@ __all__ = [
     "RenderedNetworkEntry",
     "RenderedObservation",
     "RenderedPageError",
+    "RenderRun",
+    "RenderRunTarget",
 ]
 from app.models.ai_documents import (
     AiDocumentBlob,
