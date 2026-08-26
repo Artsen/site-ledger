@@ -36,7 +36,12 @@ export function ScanDetailPage() {
   const scan = useQuery({
     queryKey: ["scan", scanId],
     queryFn: () => getScan(scanId),
-    refetchInterval: (query) => (isTerminalStatus(query.state.data?.status ?? "") ? false : 1500),
+    refetchInterval: (query) => {
+      const value = query.state.data;
+      const scanFinished = isTerminalStatus(value?.status ?? "");
+      const renderFinished = !value?.render_run_id || isTerminalStatus(value.render_run_status ?? "");
+      return scanFinished && renderFinished ? false : 1500;
+    },
     retry: (failureCount, error) => (error instanceof Error && error.message.includes("not be found") ? false : failureCount < 2)
   });
   useDocumentTitle(scan.data ? `Scan ${scan.data.id}` : scanId ? `Scan ${scanId}` : "Scan");
@@ -96,7 +101,8 @@ export function ScanDetailPage() {
   const recentRendered = useQuery({
     queryKey: ["scan-rendered-observations", scanId, "overview"],
     queryFn: () => listScanRenderedObservations(scanId, "?sort=capture_time&direction=desc&limit=5"),
-    enabled: tab === "overview" && Boolean(scan.data?.rendered_attempted_count)
+    enabled: tab === "overview" && Boolean(scan.data?.rendered_attempted_count || scan.data?.render_run_id),
+    refetchInterval: scan.data?.render_run_id && !isTerminalStatus(scan.data.render_run_status ?? "") ? 1500 : false
   });
   const cancel = useMutation({
     mutationFn: () => cancelScan(scanId),
@@ -179,7 +185,7 @@ export function ScanDetailPage() {
         <Metric label="Final failed" value={scan.data.failed_count} />
         <Metric label="Skipped" value={scan.data.skipped_count} />
       </div>
-      {scan.data.render_run_id && scan.data.website_property_id ? <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-stone-200 bg-white p-3 text-sm"><span>Browser evidence continues in independent Render Run {scan.data.render_run_id}. <StatusBadge status={scan.data.render_run_status ?? "queued"} /></span><Link className="font-medium underline" to={`/sites/${scan.data.website_property_id}/rendered/runs/${scan.data.render_run_id}`}>Open Render Run</Link></div> : null}
+      {scan.data.render_run_id ? <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-stone-200 bg-white p-3 text-sm"><span>Browser Render Run #{scan.data.render_run_id} <StatusBadge status={scan.data.render_run_status ?? "queued"} /></span><Link className="font-medium underline" to={scan.data.website_property_id ? `/sites/${scan.data.website_property_id}/rendered/runs/${scan.data.render_run_id}` : `/scans/${scanId}?tab=rendered`}>{scan.data.website_property_id ? "Open Render Run" : "View rendered observations"}</Link></div> : null}
       {scan.data.scope_config.render_mode !== "none" ? <Link to={`/scans/${scanId}?tab=rendered`} className="mb-6 grid grid-cols-2 gap-3 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 md:grid-cols-4 xl:grid-cols-8" aria-label="View historical Scan-bound rendered captures"><Metric label="Successful renders" value={recentRendered.data?.summary?.successful_renders ?? scan.data.rendered_completed_count} /><Metric label="No content" value={recentRendered.data?.summary?.no_content_responses ?? 0} /><Metric label="Redirects" value={recentRendered.data?.summary?.redirect_responses ?? 0} /><Metric label="HTTP errors (not 429)" value={recentRendered.data?.summary?.http_error_responses ?? 0} /><Metric label="Rate limited" value={recentRendered.data?.summary?.rate_limited ?? 0} /><Metric label="Not attempted" value={recentRendered.data?.summary?.skipped_after_throttling ?? scan.data.rendered_skipped_count} /><Metric label="Technical failures" value={recentRendered.data?.summary?.technical_failures ?? scan.data.rendered_failed_count} /><Metric label="Artifacts" value={recentRendered.data?.summary?.artifacts_retained ?? scan.data.rendered_artifact_count} /></Link> : null}
 
       {latestJob && !isTerminalStatus(latestJob.status) ? <JobNotice job={latestJob} workerHealth={workerHealth.data} /> : null}
@@ -228,7 +234,7 @@ export function ScanDetailPage() {
           />
         ) : null}
         {tab === "resources" ? <ResourceInventoryView scope="scan" id={scanId} scanStatus={scan.data.status} projectionStatus={projection.data} /> : null}
-        {tab === "rendered" ? <RenderedObservationTable scanId={scanId} renderMode={scan.data.scope_config.render_mode} /> : null}
+        {tab === "rendered" ? <RenderedObservationTable scanId={scanId} renderMode={scan.data.scope_config.render_mode} poll={Boolean(scan.data.render_run_id && !isTerminalStatus(scan.data.render_run_status ?? ""))} /> : null}
         {tab === "inputs" ? <InputsView seeds={seeds.data?.items ?? []} loading={seeds.isLoading} error={seeds.error} /> : null}
         {tab === "errors" ? <ErrorsView scanId={scanId} errors={errors.data ?? []} loading={errors.isLoading} error={errors.error} /> : null}
         {tab === "graph" ? <ScanGraphView scan={scan.data} projectionStatus={projection.data} /> : null}

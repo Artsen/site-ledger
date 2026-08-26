@@ -450,7 +450,7 @@ export type RenderedObservationIndexList = {
 
 export type RenderRun = {
   id: number;
-  website_property_id: number;
+  website_property_id: number | null;
   source_scan_id: number | null;
   source_render_run_id: number | null;
   status: string;

@@ -106,12 +106,9 @@ class ScanExecutionCoordinator:
         if config.render_mode == "starting_page" and not selected:
             scan.rendered_skipped_count = 1
             rendered_stop_reason = "starting_page_not_render_eligible"
-        elif selected and scan.website_property_id is not None:
+        elif selected:
             render_run = create_scan_render_run(self.db, scan, selected)
             enqueue_render_run_job(self.db, render_run)
-        elif selected:
-            scan.rendered_skipped_count = len(selected)
-            rendered_stop_reason = "render_run_requires_saved_site"
         scan.status = "completed_with_errors" if static.had_errors else "completed"
         return self._finish(
             scan,

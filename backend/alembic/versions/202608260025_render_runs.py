@@ -64,7 +64,7 @@ def upgrade() -> None:
     op.create_table(
         "render_runs",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("website_property_id", sa.Integer(), nullable=False),
+        sa.Column("website_property_id", sa.Integer()),
         sa.Column("source_scan_id", sa.Integer()),
         sa.Column("source_render_run_id", sa.Integer()),
         sa.Column("status", sa.String(32), nullable=False, server_default="queued"),
@@ -88,6 +88,13 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["source_scan_id"], ["scans.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["source_render_run_id"], ["render_runs.id"], ondelete="SET NULL"),
+        sa.CheckConstraint(
+            "(trigger = 'scan' AND (source_scan_id IS NOT NULL "
+            "OR website_property_id IS NOT NULL)) OR "
+            "(trigger IN ('site_workspace', 'page_workspace', 'rerender') "
+            "AND website_property_id IS NOT NULL)",
+            name="ck_render_run_owner",
+        ),
     )
     for column in (
         "website_property_id",

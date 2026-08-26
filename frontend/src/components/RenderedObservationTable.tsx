@@ -24,13 +24,14 @@ type RenderedObservationTableProps = {
   observationHref?: (observationId: number, snapshotId: number | null) => string;
   selectedTargetIds?: number[];
   onSelectedTargetIdsChange?: (targetIds: number[]) => void;
+  poll?: boolean;
 };
 
-export function RenderedObservationTable({ scanId, renderMode, queryKey, loadObservations, observationHref, selectedTargetIds = [], onSelectedTargetIdsChange }: RenderedObservationTableProps) {
+export function RenderedObservationTable({ scanId, renderMode, queryKey, loadObservations, observationHref, selectedTargetIds = [], onSelectedTargetIdsChange, poll = false }: RenderedObservationTableProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const pagination = useUrlPagination({ prefix: "rendered" });
   const query = buildQuery(searchParams, pagination.limit, pagination.offset);
-  const rendered = useQuery({ queryKey: [...(queryKey ?? ["scan-rendered-observations", scanId]), query], queryFn: () => loadObservations ? loadObservations(query) : listScanRenderedObservations(scanId ?? "", query), placeholderData: (previous) => previous });
+  const rendered = useQuery({ queryKey: [...(queryKey ?? ["scan-rendered-observations", scanId]), query], queryFn: () => loadObservations ? loadObservations(query) : listScanRenderedObservations(scanId ?? "", query), placeholderData: (previous) => previous, refetchInterval: poll ? 1500 : false });
   useEffect(() => pagination.ensureValid(rendered.data?.total), [pagination, rendered.data?.total]);
   const controls = <PaginatedTableControls total={rendered.data?.total ?? 0} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="rendered capture" isLoading={rendered.isFetching && !rendered.isLoading} />;
   if (rendered.error) return <ErrorBanner error={rendered.error} title="Could not load rendered captures" />;

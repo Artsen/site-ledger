@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 
 from alembic import command
@@ -27,6 +28,15 @@ def test_render_run_migration_round_trip(tmp_path: Path, monkeypatch) -> None:
             job_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(background_jobs)")
             }
+            render_run_columns = {
+                row[1]: row for row in connection.execute("PRAGMA table_info(render_runs)")
+            }
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO render_runs "
+                    "(status, trigger, configuration_json, target_count) "
+                    "VALUES ('queued', 'site_workspace', '{}', 0)"
+                )
             foreign_keys = list(connection.execute("PRAGMA foreign_key_check"))
         assert {"render_runs", "render_run_targets"} <= tables
         assert observation_columns["snapshot_id"][3] == 0
@@ -34,6 +44,7 @@ def test_render_run_migration_round_trip(tmp_path: Path, monkeypatch) -> None:
             observation_columns
         )
         assert "render_run_id" in job_columns
+        assert render_run_columns["website_property_id"][3] == 0
         assert foreign_keys == []
 
         command.downgrade(config, "202608250024")

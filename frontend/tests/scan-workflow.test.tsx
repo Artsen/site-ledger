@@ -406,18 +406,44 @@ describe("new scan workflow", () => {
     resolveScan({ id: 44 });
   });
 
-  it("submits optional server-bounded browser rendering settings", async () => {
+  it("submits ad-hoc Scan browser rendering settings without requiring a saved Site", async () => {
     renderRoute(<NewScanPage />, "/scans/new");
     fireEvent.change(screen.getByLabelText("Starting URL"), { target: { value: "https://example.com/" } });
-    fireEvent.change(screen.getByLabelText("Render mode"), { target: { value: "starting_page" } });
-    fireEvent.change(screen.getByLabelText("Maximum rendered pages"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Render mode"), { target: { value: "all_eligible" } });
+    fireEvent.change(screen.getByLabelText("Maximum rendered pages"), { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "Start scan" }));
     await waitFor(() => expect(api.createScan).toHaveBeenCalled());
-    expect(api.createScan.mock.calls[0][1]).toMatchObject({ render_mode: "starting_page", render_max_pages: 1 });
+    expect(api.createScan.mock.calls[0][1]).toMatchObject({ render_mode: "all_eligible", render_max_pages: 2 });
+    expect(api.createSiteScan).not.toHaveBeenCalled();
   });
 });
 
 describe("scan results workflow", () => {
+  it("shows an ad-hoc Scan Render Run in Scan context", async () => {
+    api.getScan.mockResolvedValue({
+      ...scanFixture,
+      website_property_id: null,
+      website_property_name: null,
+      render_run_id: 77,
+      render_run_status: "running",
+      scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" }
+    });
+    api.listScanRenderedObservations.mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+      summary: { successful_renders: 0, no_content_responses: 0, redirect_responses: 0, http_error_responses: 0, rate_limited: 0, skipped_after_throttling: 0, technical_failures: 0, artifacts_retained: 0 }
+    });
+
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=rendered");
+
+    expect(await screen.findByText("Browser Render Run #77")).toBeInTheDocument();
+    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View rendered observations" })).toHaveAttribute("href", "/scans/1?tab=rendered");
+    await waitFor(() => expect(api.listScanRenderedObservations).toHaveBeenCalledWith("1", expect.any(String)));
+  });
+
   it("keeps Resource search stable and resets filters when changing Scan tabs", async () => {
     renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=resources");
 

@@ -270,6 +270,9 @@ Treat crawling and source refresh as SSRF boundaries:
   produce at most one terminal immutable observation; rerendering always creates a new Run.
 - Standalone Render Runs have no Scan snapshot provenance. Scan provenance is optional, while the
   frozen WebResource and requested URL remain authoritative target identity.
+- A Scan-triggered Render Run may be Site-less only while its ad-hoc source Scan remains its durable
+  owner. Saved-Site Runs survive Scan deletion; Site-less Runs are deleted with their source Scan
+  using reference-aware artifact cleanup. Never leave an ownerless Site-less Run.
 - `renderer-v2` remains the capture contract. Rate-limit circuits are Run-local, and later SitePage
   suppression must not rewrite or hide retained Render Run evidence.
 - New manual targets must resolve to active Site Pages. URL identity reconciliation must include

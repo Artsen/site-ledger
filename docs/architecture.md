@@ -68,7 +68,8 @@ Observation where the implementation names would be unnecessarily technical.
 - storage.content_store stores exact response bytes as gzip-compressed, content-addressed blobs.
 
 services.scan_execution owns queued static Scan terminal state and may enqueue an independent
-Render Run after deterministic target selection. services.render_runs owns browser execution,
+Render Run after deterministic target selection. Saved-Site Runs are Site-owned; ad-hoc Scan Runs
+are Site-less and remain owned by their source Scan. services.render_runs owns browser execution,
 Run-local throttling, progress, and immutable observation persistence.
 Browser capture never discovers additional Pages and never replaces static HTML, parse artifacts,
 occurrences, or graph data. See [Browser-rendered observations](browser-rendered-observations.md).

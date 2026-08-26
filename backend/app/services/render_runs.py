@@ -117,8 +117,6 @@ def create_rerender_run(
 
 
 def create_scan_render_run(db: Session, scan: Scan, snapshots: list[ResourceSnapshot]) -> RenderRun:
-    if scan.website_property_id is None:
-        raise ValueError("Standalone Render Runs require a saved Site.")
     config = ScopeConfig.from_dict(scan.scope_config)
     configuration = config.to_dict()
     configuration["render_mode"] = "all_eligible"
@@ -141,7 +139,7 @@ def create_scan_render_run(db: Session, scan: Scan, snapshots: list[ResourceSnap
 def _create_frozen_run(
     db: Session,
     *,
-    site_id: int,
+    site_id: int | None,
     trigger: str,
     configuration: dict[str, Any],
     targets: list[tuple[int, str, int | None]],
@@ -152,6 +150,11 @@ def _create_frozen_run(
         raise ValueError("Select at least one Page.")
     if len(targets) > 1_000:
         raise ValueError("A Render Run supports at most 1000 Pages.")
+    if trigger == "scan":
+        if source_scan_id is None:
+            raise ValueError("A Scan-triggered Render Run requires Scan provenance.")
+    elif site_id is None:
+        raise ValueError("A manual or rerendered Render Run requires a saved Site.")
     run = RenderRun(
         website_property_id=site_id,
         source_scan_id=source_scan_id,

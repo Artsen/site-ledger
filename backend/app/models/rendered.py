@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     Float,
     ForeignKey,
     Index,
@@ -33,7 +34,7 @@ class RenderRun(Base):
     __tablename__ = "render_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    website_property_id: Mapped[int] = mapped_column(
+    website_property_id: Mapped[int | None] = mapped_column(
         ForeignKey("website_properties.id", ondelete="CASCADE"), index=True
     )
     source_scan_id: Mapped[int | None] = mapped_column(
@@ -57,7 +58,7 @@ class RenderRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_summary: Mapped[str | None] = mapped_column(Text)
 
-    website_property: Mapped[WebsiteProperty] = relationship()
+    website_property: Mapped[WebsiteProperty | None] = relationship()
     source_scan: Mapped[Scan | None] = relationship()
     source_render_run: Mapped[RenderRun | None] = relationship(remote_side=[id])
     targets: Mapped[list[RenderRunTarget]] = relationship(
@@ -69,6 +70,13 @@ class RenderRun(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "(trigger = 'scan' AND (source_scan_id IS NOT NULL "
+            "OR website_property_id IS NOT NULL)) OR "
+            "(trigger IN ('site_workspace', 'page_workspace', 'rerender') "
+            "AND website_property_id IS NOT NULL)",
+            name="ck_render_run_owner",
+        ),
         Index("ix_render_runs_site_created", "website_property_id", "created_at", "id"),
     )
 

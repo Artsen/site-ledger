@@ -5,11 +5,13 @@ of `RenderRunTarget` Page identities and effective browser configuration before 
 job starts. Manual Site/Page Runs do not require a Scan or `ResourceSnapshot`; rerendering selected
 targets creates a new Run and new observations without modifying prior evidence.
 
-A saved-Site Scan with rendering enabled deterministically selects eligible static observations,
-creates a linked Render Run with optional snapshot provenance, and completes according to static
-crawl evidence. Browser HTTP or technical outcomes belong to the Render Run and do not change the
-Scan terminal result. Historical Scan-bound observations remain readable without invented Run
-membership.
+A Scan with rendering enabled deterministically selects eligible static observations, creates a
+linked Render Run with snapshot provenance, and completes according to static crawl evidence.
+Saved-Site Scan Runs are owned durably by the Site and survive source Scan deletion with Scan and
+snapshot provenance detached. Ad-hoc Scan Runs have no Site owner, remain navigable through their
+source Scan, and are deleted with that Scan using reference-aware artifact cleanup. Browser HTTP or
+technical outcomes belong to the Render Run and do not change the Scan terminal result. Historical
+Scan-bound observations remain readable without invented Run membership.
 
 Static HTTP evidence remains authoritative. Each frozen target receives at most one immutable
 RenderedObservation. Rendered DOM is not parsed into static metadata or links and does not

@@ -230,6 +230,133 @@ def test_scan_deletion_preserves_run_evidence_and_detaches_optional_provenance(
     assert preserved_observation is not None and preserved_observation.snapshot_id is None
 
 
+def test_ad_hoc_scan_deletion_removes_site_less_run_and_only_exclusive_artifacts(
+    db_session, tmp_path
+) -> None:
+    resource = WebResource(
+        resource_type="page",
+        normalized_url="https://example.com/ad-hoc",
+        scheme="https",
+        host="example.com",
+        path="/ad-hoc",
+        query="",
+    )
+    scan = Scan(
+        website_property_id=None,
+        starting_url=resource.normalized_url,
+        status="completed",
+        scope_config={},
+    )
+    db_session.add_all([resource, scan])
+    db_session.flush()
+    snapshot = ResourceSnapshot(
+        scan_id=scan.id,
+        resource_id=resource.id,
+        requested_url=resource.normalized_url,
+        final_url=resource.normalized_url,
+        http_status=200,
+        content_type="text/html",
+        crawl_depth=0,
+        fetched_at=datetime.now(UTC),
+        fetch_state="fetched",
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+    run = RenderRun(
+        website_property_id=None,
+        source_scan_id=scan.id,
+        status="completed",
+        trigger="scan",
+        configuration_json={},
+        target_count=1,
+    )
+    db_session.add(run)
+    db_session.flush()
+    target = RenderRunTarget(
+        render_run_id=run.id,
+        web_resource_id=resource.id,
+        source_snapshot_id=snapshot.id,
+        requested_url=resource.normalized_url,
+        position=1,
+    )
+    db_session.add(target)
+    db_session.flush()
+    observation = _observation(target)
+    observation.snapshot_id = snapshot.id
+    observation.capture_state = "completed"
+    observation.navigation_http_status = 200
+    db_session.add(observation)
+
+    site, saved_resource = _site_page(db_session, "shared-artifact")
+    saved_target = _run_target(db_session, site, saved_resource)
+    saved_observation = _observation(saved_target)
+    saved_observation.capture_state = "completed"
+    saved_observation.navigation_http_status = 200
+    db_session.add(saved_observation)
+    db_session.commit()
+
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    shared_blob = store.put(db_session, b"shared", "image/png")
+    exclusive_blob = store.put(db_session, b"exclusive", "text/html")
+    db_session.add_all(
+        [
+            RenderedArtifact(
+                rendered_observation_id=observation.id,
+                artifact_blob_id=shared_blob.id,
+                artifact_type="viewport_screenshot",
+                metadata_json={},
+            ),
+            RenderedArtifact(
+                rendered_observation_id=observation.id,
+                artifact_blob_id=exclusive_blob.id,
+                artifact_type="rendered_dom",
+                metadata_json={},
+            ),
+            RenderedArtifact(
+                rendered_observation_id=saved_observation.id,
+                artifact_blob_id=shared_blob.id,
+                artifact_type="viewport_screenshot",
+                metadata_json={},
+            ),
+        ]
+    )
+    db_session.commit()
+    scan_id = scan.id
+    run_id = run.id
+    target_id = target.id
+    observation_id = observation.id
+    shared_blob_id = shared_blob.id
+    exclusive_blob_id = exclusive_blob.id
+    shared_path = store.path_for(shared_blob)
+    exclusive_path = store.path_for(exclusive_blob)
+
+    result = delete_scan(
+        db_session,
+        scan_id,
+        LocalContentStore(tmp_path / "content"),
+        store,
+    )
+    db_session.expire_all()
+
+    assert result is not None
+    assert result.rendered_observations_deleted == 1
+    assert result.rendered_artifacts_deleted == 2
+    assert db_session.get(Scan, scan_id) is None
+    assert db_session.get(RenderRun, run_id) is None
+    assert db_session.get(RenderRunTarget, target_id) is None
+    assert db_session.get(RenderedObservation, observation_id) is None
+    assert db_session.get(ArtifactBlob, exclusive_blob_id) is None
+    assert not exclusive_path.exists()
+    assert db_session.get(ArtifactBlob, shared_blob_id) is not None
+    assert shared_path.exists()
+    assert (
+        db_session.query(RenderRun)
+        .filter(RenderRun.website_property_id.is_(None), RenderRun.source_scan_id.is_(None))
+        .count()
+        == 0
+    )
+
+
 def test_site_deletion_cleans_render_runs_and_exclusive_artifact(db_session, tmp_path) -> None:
     site, resource = _site_page(db_session, "site-delete")
     target = _run_target(db_session, site, resource)

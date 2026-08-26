@@ -197,7 +197,7 @@ class RenderRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    website_property_id: int
+    website_property_id: int | None
     source_scan_id: int | None
     source_render_run_id: int | None
     status: str
