@@ -109,7 +109,18 @@ bounded render history. Scan detail links to its associated Run when present; th
 Rendered tab remains readable. Rendered network and DOM evidence do not feed static Resource
 Inventory; see [Resource Inventory](resource-inventory.md).
 
-Deleting a source Scan preserves Run-owned evidence and nulls optional Scan/snapshot provenance.
-Deleting a Site removes its Runs and exclusively referenced rendered artifacts while retaining
-shared content-addressed blobs. General Run/observation deletion and Site-wide render purge are
-intentionally outside the current product boundary.
+Deleting a source Scan preserves Site-owned Run evidence and nulls optional Scan/snapshot
+provenance. Browser evidence also has an explicit independent deletion lifecycle:
+
+- deleting an observation removes its network, console, Page-error, and artifact relationships;
+- its frozen `RenderRunTarget` remains with `evidence_deleted_at`, presented as **Evidence deleted**;
+- a target with no observation and no marker is **Not attempted**;
+- historical execution counters remain unchanged while retained counts are derived from current rows;
+- rerendering a deleted or unattempted target creates a new Run and never restores old evidence;
+- shared content-addressed `ArtifactBlob` records/files survive until their final reference is gone;
+- database deletion commits before best-effort physical file removal.
+
+Site purge removes Site-owned Runs and legacy Scan-bound browser evidence for that Site without
+removing Pages, Scans, snapshots, Performance, Accessibility, notes, or categories. Scan purge
+removes legacy observations and Site-less ad-hoc Runs owned by the Scan; linked Site-owned Runs
+remain independent. Active affected Runs must finish or be cancelled before deletion.

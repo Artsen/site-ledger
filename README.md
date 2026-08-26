@@ -36,6 +36,8 @@ observations from separate scans without erasing the evidence captured by each s
 - Materializes versioned, rebuildable indexes for fast immutable terminal-Scan reads while keeping
   raw evidence authoritative.
 - Indexes browser-rendered observations from Site, Page, Render Run, and historical Scan workspaces
+- Deletes retained browser evidence independently with target tombstones, bounded bulk actions,
+  reference-safe artifact reclamation, and Site/legacy Scan ownership controls
   with exact evidence links.
 - Supports scan, source, Site, and background Activity lifecycle management.
 

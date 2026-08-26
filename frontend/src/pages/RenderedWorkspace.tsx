@@ -10,13 +10,14 @@ import {
   getPageRenderHistory,
   getRenderCapabilities,
   getSiteRenderedObservation,
-  listRenderRunObservations,
   listRenderRuns,
   rerenderTargets,
 } from "../api/client";
 import { CollectionPageSelector } from "../components/observability/CollectionPageSelector";
 import { RenderedObservationTable } from "../components/RenderedObservationTable";
 import { RenderedObservationView } from "../components/RenderedObservationView";
+import { RenderRunTargetTable } from "../components/rendered/RenderRunTargetTable";
+import { RenderObservationDeleteAction, RenderRunDeleteAction, RenderSiteDeleteAction, RenderTargetBulkDeleteAction } from "../components/rendered/RenderedEvidenceDeletionActions";
 import { Button } from "../components/ui/Button";
 import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -25,7 +26,7 @@ import { LoadingBlock } from "../components/ui/Loading";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { inputClass } from "../components/ui/styles";
-import type { RenderCapabilities, RenderRun, ScopeConfig, Site } from "../types/scans";
+import type { RenderCapabilities, RenderDeleteResult, RenderRun, ScopeConfig, Site } from "../types/scans";
 import { formatDate, formatStatus } from "../utils/format";
 import { useUrlPagination } from "../utils/useUrlPagination";
 
@@ -35,6 +36,7 @@ const TERMINAL = new Set(["completed", "completed_with_errors", "failed", "cance
 export function SiteRenderedPage() {
   const { site } = useOutletContext<WorkspaceContext>();
   const [creating, setCreating] = useState(false);
+  const [deletionResult, setDeletionResult] = useState<RenderDeleteResult | null>(null);
   const pagination = useUrlPagination({ prefix: "render_runs", defaultLimit: 25 });
   const runs = useQuery({
     queryKey: ["render-runs", String(site.id), pagination.limit, pagination.offset],
@@ -46,11 +48,13 @@ export function SiteRenderedPage() {
   if (runs.error) return <ErrorBanner error={runs.error} title="Could not load Render Runs" />;
   const latest = runs.data?.items[0];
   return <div className="space-y-5">
+    <DeletionNotice result={deletionResult} />
     <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-xl font-semibold">Rendered</h1><p className="mt-1 text-sm text-stone-600">Durable browser evidence collected independently of static Scans.</p></div><Button type="button" variant="primary" onClick={() => setCreating(true)}><MonitorUp className="mr-2 size-4" />Run renders</Button></header>
-    <section className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-stone-200 bg-stone-200 md:grid-cols-4"><Summary label="Latest run" value={latest ? `Run ${latest.id}` : "None"} /><Summary label="Status" value={latest ? formatStatus(latest.presentation_status ?? latest.status) : "No evidence"} /><Summary label="Successful" value={String(latest?.completed_count ?? 0)} /><Summary label="Artifacts" value={String(latest?.artifact_count ?? 0)} /></section>
+    <section className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-stone-200 bg-stone-200 md:grid-cols-4"><Summary label="Latest run" value={latest ? `Run ${latest.id}` : "None"} /><Summary label="Status" value={latest ? formatStatus(latest.presentation_status ?? latest.status) : "No evidence"} /><Summary label="Successful" value={String(latest?.completed_count ?? 0)} /><Summary label="Artifacts retained" value={String(latest?.retained_artifact_count ?? 0)} /></section>
     {!runs.data?.items.length ? <EmptyState title="No Render Runs" message="Choose active Pages and run browser rendering without starting a Scan." /> : <RunHistory siteId={String(site.id)} runs={runs.data.items} />}
     {runs.data?.total ? <PaginatedTableControls total={runs.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="Render Run" /> : null}
     {creating ? <StartRenderRun siteId={String(site.id)} onClose={() => setCreating(false)} /> : null}
+    <section className="border-t border-stone-200 pt-5"><h2 className="font-semibold">Rendered evidence lifecycle</h2><p className="mb-3 mt-1 text-sm text-stone-600">Remove browser evidence independently of Pages, Scans, Performance, and Accessibility evidence.</p><RenderSiteDeleteAction siteId={String(site.id)} onDeleted={setDeletionResult} /></section>
   </div>;
 }
 
@@ -59,7 +63,7 @@ function Summary({ label, value }: { label: string; value: string }) {
 }
 
 function RunHistory({ siteId, runs }: { siteId: string; runs: RenderRun[] }) {
-  return <div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="px-3 py-2">Run</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Progress</th><th className="px-3 py-2">Successful</th><th className="px-3 py-2">Errors</th><th className="px-3 py-2">Rate limited</th><th className="px-3 py-2">Skipped</th><th className="px-3 py-2">Artifacts</th><th className="px-3 py-2">Started</th><th className="px-3 py-2">Finished</th></tr></thead><tbody>{runs.map((run) => <tr key={run.id} className="border-t border-stone-100"><td className="px-3 py-2"><Link className="font-medium underline" to={`/sites/${siteId}/rendered/runs/${run.id}`}>Run {run.id}</Link><span className="block text-xs text-stone-500">{formatStatus(run.trigger)}{run.source_scan_id ? ` / Scan ${run.source_scan_id}` : ""}</span></td><td className="px-3 py-2"><StatusBadge status={run.presentation_status ?? run.status} /></td><td className="px-3 py-2 tabular-nums">{run.completed_count + run.failed_count + run.skipped_count} / {run.target_count}</td><td className="px-3 py-2 tabular-nums">{run.summary.successful_renders}</td><td className="px-3 py-2 tabular-nums">{run.summary.http_error_responses + run.summary.technical_failures}</td><td className="px-3 py-2 tabular-nums">{run.summary.rate_limited}</td><td className="px-3 py-2 tabular-nums">{run.summary.skipped_after_throttling}</td><td className="px-3 py-2 tabular-nums">{run.artifact_count}</td><td className="whitespace-nowrap px-3 py-2">{run.started_at ? formatDate(run.started_at) : "Waiting"}</td><td className="whitespace-nowrap px-3 py-2">{run.finished_at ? formatDate(run.finished_at) : "In progress"}</td></tr>)}</tbody></table></div>;
+  return <div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="px-3 py-2">Run</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Progress</th><th className="px-3 py-2">Successful</th><th className="px-3 py-2">Errors</th><th className="px-3 py-2">Rate limited</th><th className="px-3 py-2">Skipped</th><th className="px-3 py-2">Artifacts produced / retained</th><th className="px-3 py-2">Started</th><th className="px-3 py-2">Finished</th></tr></thead><tbody>{runs.map((run) => <tr key={run.id} className="border-t border-stone-100"><td className="px-3 py-2"><Link className="font-medium underline" to={`/sites/${siteId}/rendered/runs/${run.id}`}>Run {run.id}</Link><span className="block text-xs text-stone-500">{formatStatus(run.trigger)}{run.source_scan_id ? ` / Scan ${run.source_scan_id}` : ""}</span></td><td className="px-3 py-2"><StatusBadge status={run.presentation_status ?? run.status} /></td><td className="px-3 py-2 tabular-nums">{run.completed_count + run.failed_count + run.skipped_count} / {run.target_count}</td><td className="px-3 py-2 tabular-nums">{run.summary.successful_renders}</td><td className="px-3 py-2 tabular-nums">{run.summary.http_error_responses + run.summary.technical_failures}</td><td className="px-3 py-2 tabular-nums">{run.summary.rate_limited}</td><td className="px-3 py-2 tabular-nums">{run.summary.skipped_after_throttling}</td><td className="px-3 py-2 tabular-nums">{run.artifact_count} / {run.retained_artifact_count}</td><td className="whitespace-nowrap px-3 py-2">{run.started_at ? formatDate(run.started_at) : "Waiting"}</td><td className="whitespace-nowrap px-3 py-2">{run.finished_at ? formatDate(run.finished_at) : "In progress"}</td></tr>)}</tbody></table></div>;
 }
 
 function StartRenderRun({ siteId, onClose }: { siteId: string; onClose: () => void }) {
@@ -83,6 +87,7 @@ export function RenderRunPage() {
   const { site } = useOutletContext<WorkspaceContext>();
   const { runId = "" } = useParams();
   const [selected, setSelected] = useState<number[]>([]);
+  const [deletionResult, setDeletionResult] = useState<RenderDeleteResult | null>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const run = useQuery({ queryKey: ["render-run", String(site.id), runId], queryFn: () => getRenderRun(String(site.id), runId, "?limit=1"), refetchInterval: (query) => query.state.data && !TERMINAL.has(query.state.data.status) ? 2_000 : false });
@@ -92,9 +97,9 @@ export function RenderRunPage() {
   if (run.error) return <ErrorBanner error={run.error} title="Could not load Render Run" />;
   if (!run.data) return null;
   const value = run.data;
-  return <div className="space-y-5"><header className="flex flex-wrap items-start justify-between gap-3"><div><Link className="text-sm underline" to={`/sites/${site.id}/rendered`}>Render Runs</Link><h1 className="mt-1 text-xl font-semibold">Run {value.id}</h1></div><div className="flex gap-2">{selected.length ? <Button type="button" loading={rerender.isPending} onClick={() => rerender.mutate()}><RotateCcw className="mr-2 size-4" />Rerender {selected.length}</Button> : null}{!TERMINAL.has(value.status) ? <Button type="button" variant="danger" loading={cancel.isPending} onClick={() => cancel.mutate()}>Cancel run</Button> : null}</div></header>
-    <section className="rounded-md border border-stone-200 bg-white p-4"><DefinitionList items={[{ label: "Status", value: <StatusBadge status={value.presentation_status ?? value.status} /> }, { label: "Progress", value: `${value.completed_count + value.failed_count + value.skipped_count} of ${value.target_count} Pages` }, { label: "Successful / failed / skipped", value: `${value.completed_count} / ${value.failed_count} / ${value.skipped_count}` }, { label: "Trigger", value: formatStatus(value.trigger) }, { label: "Source Scan", value: value.source_scan_id ? <Link className="underline" to={`/scans/${value.source_scan_id}`}>Scan {value.source_scan_id}</Link> : "Not applicable" }, { label: "Viewport", value: `${value.configuration_json.render_viewport_width ?? "Default"} x ${value.configuration_json.render_viewport_height ?? "Default"}` }, { label: "Color scheme", value: formatStatus(String(value.configuration_json.render_color_scheme ?? "Default")) }, { label: "Full-page screenshot", value: value.configuration_json.render_capture_full_page ? "Enabled" : "Disabled" }, { label: "Created", value: formatDate(value.created_at) }, { label: "Started", value: value.started_at ? formatDate(value.started_at) : "Waiting for worker" }, { label: "Finished", value: value.finished_at ? formatDate(value.finished_at) : "In progress" }]} />{value.error_summary ? <p className="mt-4 text-sm text-red-700">{value.error_summary}</p> : null}</section>
-    <RenderedObservationTable renderMode="all_eligible" queryKey={["render-run-observations", String(site.id), runId]} loadObservations={(query) => listRenderRunObservations(String(site.id), runId, query)} observationHref={(id) => `/sites/${site.id}/rendered/observations/${id}`} selectedTargetIds={selected} onSelectedTargetIdsChange={setSelected} />
+  return <div className="space-y-5"><DeletionNotice result={deletionResult} /><header className="flex flex-wrap items-start justify-between gap-3"><div><Link className="text-sm underline" to={`/sites/${site.id}/rendered`}>Render Runs</Link><h1 className="mt-1 text-xl font-semibold">Run {value.id}</h1></div><div className="flex flex-wrap gap-2">{selected.length ? <><Button type="button" loading={rerender.isPending} onClick={() => rerender.mutate()}><RotateCcw className="mr-2 size-4" />Rerender {selected.length}</Button><RenderTargetBulkDeleteAction siteId={String(site.id)} runId={runId} targetIds={selected} onDeleted={(result) => { setDeletionResult(result); setSelected([]); }} /></> : null}{!TERMINAL.has(value.status) ? <Button type="button" variant="danger" loading={cancel.isPending} onClick={() => cancel.mutate()}>Cancel run</Button> : <RenderRunDeleteAction siteId={String(site.id)} runId={value.id} onDeleted={(result) => navigate(`/sites/${site.id}/rendered`, { state: { evidenceDeletion: result } })} />}</div></header>
+    <section className="rounded-md border border-stone-200 bg-white p-4"><DefinitionList items={[{ label: "Status", value: <StatusBadge status={value.presentation_status ?? value.status} /> }, { label: "Progress", value: `${value.completed_count + value.failed_count + value.skipped_count} of ${value.target_count} Pages` }, { label: "Successful / failed / skipped", value: `${value.completed_count} / ${value.failed_count} / ${value.skipped_count}` }, { label: "Evidence retained / deleted / not attempted", value: `${value.retained_observation_count} / ${value.deleted_observation_count} / ${value.unattempted_target_count}` }, { label: "Artifacts produced / retained", value: `${value.artifact_count} / ${value.retained_artifact_count}` }, { label: "Trigger", value: formatStatus(value.trigger) }, { label: "Source Scan", value: value.source_scan_id ? <Link className="underline" to={`/scans/${value.source_scan_id}`}>Scan {value.source_scan_id}</Link> : "Not applicable" }, { label: "Viewport", value: `${value.configuration_json.render_viewport_width ?? "Default"} x ${value.configuration_json.render_viewport_height ?? "Default"}` }, { label: "Color scheme", value: formatStatus(String(value.configuration_json.render_color_scheme ?? "Default")) }, { label: "Full-page screenshot", value: value.configuration_json.render_capture_full_page ? "Enabled" : "Disabled" }, { label: "Created", value: formatDate(value.created_at) }, { label: "Started", value: value.started_at ? formatDate(value.started_at) : "Waiting for worker" }, { label: "Finished", value: value.finished_at ? formatDate(value.finished_at) : "In progress" }]} />{value.error_summary ? <p className="mt-4 text-sm text-red-700">{value.error_summary}</p> : null}</section>
+    <RenderRunTargetTable siteId={String(site.id)} runId={runId} selected={selected} onSelectedChange={setSelected} />
     {rerender.error ? <ErrorBanner error={rerender.error} title="Could not queue rerender" /> : null}
   </div>;
 }
@@ -102,11 +107,17 @@ export function RenderRunPage() {
 export function RenderedEvidencePage() {
   const { site } = useOutletContext<WorkspaceContext>();
   const { observationId = "" } = useParams();
+  const navigate = useNavigate();
   const observation = useQuery({ queryKey: ["rendered-observation", String(site.id), observationId], queryFn: () => getSiteRenderedObservation(String(site.id), observationId) });
   if (observation.isLoading) return <LoadingBlock label="Loading rendered evidence..." />;
   if (observation.error) return <ErrorBanner error={observation.error} title="Could not load rendered evidence" />;
   if (!observation.data) return null;
-  return <div className="space-y-4"><header><Link className="text-sm underline" to={`/sites/${site.id}/rendered/runs/${observation.data.render_run_id}`}>Run {observation.data.render_run_id}</Link><h1 className="mt-1 text-xl font-semibold">Rendered observation {observation.data.id}</h1></header><RenderedObservationView observation={observation.data} /></div>;
+  return <div className="space-y-4"><header className="flex flex-wrap items-start justify-between gap-3"><div><Link className="text-sm underline" to={`/sites/${site.id}/rendered/runs/${observation.data.render_run_id}`}>Run {observation.data.render_run_id}</Link><h1 className="mt-1 text-xl font-semibold">Rendered observation {observation.data.id}</h1></div><RenderObservationDeleteAction siteId={String(site.id)} observationId={observationId} onDeleted={() => navigate(`/sites/${site.id}/rendered/runs/${observation.data.render_run_id}`)} /></header><RenderedObservationView observation={observation.data} /></div>;
+}
+
+function DeletionNotice({ result }: { result: RenderDeleteResult | null }) {
+  if (!result) return null;
+  return <div role="status" className={`rounded-md border p-3 text-sm ${result.warnings.length ? "border-amber-300 bg-amber-50 text-amber-950" : "border-emerald-300 bg-emerald-50 text-emerald-950"}`}><strong>Rendered evidence deleted.</strong> {result.observations_deleted.toLocaleString()} observation{result.observations_deleted === 1 ? "" : "s"} removed.{result.warnings.length ? <ul className="mt-2 list-disc pl-5">{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}</div>;
 }
 
 export function PageRenderedPanel({ siteId, resourceId }: { siteId: string; resourceId: string }) {

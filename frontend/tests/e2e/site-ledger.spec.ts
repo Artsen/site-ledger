@@ -82,11 +82,12 @@ test("Accessibility workspace is responsive and keeps automated evidence explici
   await expect(page.getByRole("link", { name: "Accessibility" })).toHaveAttribute("aria-current", "page");
 });
 
-test("Rendered workspace creates a Run and rerenders selected failed targets", async ({ page }) => {
+test("Rendered workspace rerenders, deletes old evidence, and deletes the old Run", async ({ page }) => {
   await mockApi(page);
   let activeRunId = 41;
-  let requestedOutcomes: string[] = [];
   let rerenderTargets: number[] = [];
+  let evidenceDeleted = false;
+  let oldRunDeleted = false;
   const run = (id: number) => renderRunFixture(id, id === 41 ? "site_workspace" : "rerender");
   const observation = (overrides: Record<string, unknown>) => ({
     id: 301,
@@ -118,6 +119,8 @@ test("Rendered workspace creates a Run and rerenders selected failed targets", a
     observation({ id: 303, render_run_target_id: 103, resource_id: 4, page_title: "Not attempted", static_final_url: "https://example.com/skipped", browser_final_url: null, capture_state: "skipped", navigation_http_status: null, error_type: "host_rate_limit_circuit_open", has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false }),
   ];
   const observationList = (items: typeof mixed) => ({ items, total: items.length, limit: 50, offset: 0, summary: { successful_renders: 1, no_content_responses: 0, redirect_responses: 0, http_error_responses: 0, rate_limited: 1, skipped_after_throttling: 1, technical_failures: 0, artifacts_retained: 3 } });
+  const target = (item: (typeof mixed)[number], position: number) => ({ target_id: item.render_run_target_id, position, web_resource_id: item.resource_id, requested_url: item.static_final_url, source_snapshot_id: null, created_at: "2026-08-26T05:00:00Z", evidence_deleted_at: evidenceDeleted && item.id === 302 ? "2026-08-26T06:00:00Z" : null, observation_id: evidenceDeleted && item.id === 302 ? null : item.id, capture_state: evidenceDeleted && item.id === 302 ? null : item.capture_state, navigation_http_status: evidenceDeleted && item.id === 302 ? null : item.navigation_http_status, duration_ms: item.duration_ms, warning_count: item.warning_count, page_error_count: item.page_error_count, has_browser_evidence: !evidenceDeleted && item.has_viewport_screenshot, finished_at: evidenceDeleted && item.id === 302 ? null : item.finished_at, presentation_state: evidenceDeleted && item.id === 302 ? "evidence_deleted" : item.error_type === "navigation_rate_limited" ? "rate_limited" : item.error_type === "host_rate_limit_circuit_open" ? "not_attempted_host_throttled" : "successful" });
+  const deletionImpact = { can_delete: true, reason: null, targets_requested: 1, observations: 1, targets_already_without_evidence: 0, runs: 1, run_targets: 3, deleted_targets: 0, unattempted_targets: 0, legacy_observations: 0, network_rows: 4, console_rows: 0, page_error_rows: 0, artifact_rows: 0, artifact_blobs_referenced: 0, exclusive_artifact_blobs: 0, shared_artifact_blobs_retained: 0, raw_bytes_reclaimable: 0, stored_bytes_reclaimable: 0, background_jobs: 1, job_events: 2, child_rerender_links_detached: 1 };
 
   await page.route("**/api/rendering/capabilities", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ defaults: { ...scope, render_mode: "all_eligible" }, limits: { render_viewport_width: { minimum: 320, maximum: 3840 }, render_viewport_height: { minimum: 240, maximum: 2160 }, render_navigation_timeout_seconds: { minimum: 1, maximum: 120 }, render_load_timeout_seconds: { minimum: 0, maximum: 30 } }, supported_modes: [], browser_engine: "chromium", artifact_types: [], allowed_request_methods: ["GET"], service_workers: "blocked" }) }));
   await page.route(/\/api\/sites\/3\/pages(?:\?.*)?$/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [
@@ -131,20 +134,26 @@ test("Rendered workspace creates a Run and rerenders selected failed targets", a
       await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(run(41)) });
       return;
     }
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [run(activeRunId)], total: 1, limit: 25, offset: 0 }) });
+    const items = oldRunDeleted ? [run(42)] : activeRunId === 42 ? [run(42), run(41)] : [run(41)];
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items, total: items.length, limit: 25, offset: 0 }) });
   });
   await page.route("**/api/sites/3/render-runs/41/rerender", async (route) => {
     rerenderTargets = (await route.request().postDataJSON()).target_ids;
     activeRunId = 42;
     await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(run(42)) });
   });
-  await page.route(/\/api\/sites\/3\/render-runs\/(41|42)\/observations(?:\?.*)?$/, async (route) => {
-    requestedOutcomes = new URL(route.request().url()).searchParams.getAll("outcome");
-    const items = requestedOutcomes.length ? mixed.slice(1) : mixed;
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify(observationList(items)) });
+  await page.route(/\/api\/sites\/3\/render-runs\/(41|42)\/targets(?:\?.*)?$/, async (route) => {
+    const outcome = new URL(route.request().url()).searchParams.get("outcome");
+    let items = mixed.map(target);
+    if (outcome === "rate_limited") items = items.filter((item) => item.presentation_state === "rate_limited");
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items, total: items.length, limit: 50, offset: 0 }) });
   });
+  await page.route("**/api/sites/3/render-runs/41/evidence-deletion-preview", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(deletionImpact) }));
+  await page.route("**/api/sites/3/render-runs/41/delete-evidence", async (route) => { evidenceDeleted = true; await route.fulfill({ contentType: "application/json", body: JSON.stringify({ observations_deleted: 1, runs_deleted: 0, warnings: [] }) }); });
+  await page.route("**/api/sites/3/render-runs/41/deletion-preview", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(deletionImpact) }));
   await page.route(/\/api\/sites\/3\/render-runs\/(41|42)(?:\?.*)?$/, async (route) => {
     const id = Number(new URL(route.request().url()).pathname.split("/").at(-1));
+    if (route.request().method() === "DELETE") { oldRunDeleted = true; await route.fulfill({ contentType: "application/json", body: JSON.stringify({ observations_deleted: 0, runs_deleted: 1, warnings: [] }) }); return; }
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...run(id), observations: observationList(mixed) }) });
   });
 
@@ -156,14 +165,25 @@ test("Rendered workspace creates a Run and rerenders selected failed targets", a
   await page.getByRole("button", { name: "Queue 3 Pages" }).click();
   await expect(page).toHaveURL(/\/sites\/3\/rendered\/runs\/41/);
   await expect(page.getByText("HTTP 429")).toBeVisible();
-  await page.getByRole("checkbox", { name: "Rate limited", exact: true }).click();
-  await page.getByRole("checkbox", { name: "Not attempted", exact: true }).click();
-  await expect.poll(() => requestedOutcomes.sort()).toEqual(["not_attempted", "rate_limited"]);
+  await page.getByLabel("Target state").selectOption("rate_limited");
   await page.getByRole("checkbox", { name: "Select https://example.com/limited" }).click();
-  await page.getByRole("checkbox", { name: "Select https://example.com/skipped" }).click();
-  await page.getByRole("button", { name: "Rerender 2" }).click();
+  await page.getByRole("button", { name: "Rerender 1" }).click();
   await expect(page).toHaveURL(/\/sites\/3\/rendered\/runs\/42/);
-  expect(rerenderTargets).toEqual([102, 103]);
+  expect(rerenderTargets).toEqual([102]);
+
+  await page.goto("/sites/3/rendered/runs/41");
+  await page.getByLabel("Target state").selectOption("rate_limited");
+  await page.getByRole("checkbox", { name: "Select https://example.com/limited" }).click();
+  await page.getByRole("button", { name: "Delete evidence (1)" }).click();
+  await page.getByRole("button", { name: "Delete permanently" }).click();
+  await page.getByLabel("Target state").selectOption("evidence_deleted");
+  await expect(page.getByRole("table").getByText("Evidence deleted", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Delete run" }).click();
+  await page.getByRole("textbox", { name: "Type DELETE RENDER RUN 41 to confirm" }).fill("DELETE RENDER RUN 41");
+  await page.getByRole("button", { name: "Delete permanently" }).click();
+  await expect(page).toHaveURL(/\/sites\/3\/rendered$/);
+  await expect(page.getByRole("link", { name: "Run 42" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Run 41" })).toHaveCount(0);
 });
 
 test("Page and Inventory Remove, Restore, and Delete remain distinct", async ({ page }) => {
@@ -490,9 +510,10 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
 
   await page.goto("/scans/1?tab=rendered");
   await expect(page.getByRole("alert")).toContainText("Browser rendering was rate limited");
-  await expect(page.getByText("HTTP error", { exact: true })).toBeVisible();
-  await expect(page.getByText("Rate limited", { exact: true }).last()).toBeVisible();
-  await expect(page.getByText("Not attempted - host throttled", { exact: true })).toBeVisible();
+  const renderedTable = page.getByRole("table");
+  await expect(renderedTable.getByText("HTTP error", { exact: true })).toBeVisible();
+  await expect(renderedTable.getByText("Rate limited", { exact: true })).toBeVisible();
+  await expect(renderedTable.getByText("Not attempted - host throttled", { exact: true })).toBeVisible();
   await page.getByLabel("Rendered capture state").selectOption("completed_with_warnings");
   await expect(page).toHaveURL(/render_state=completed_with_warnings/);
   await page.getByRole("link", { name: /Open rendered evidence/ }).first().click();
@@ -2050,6 +2071,10 @@ function renderRunFixture(id: number, trigger: string) {
     skipped_count: 1,
     blocked_request_count: 0,
     artifact_count: 3,
+    retained_observation_count: 3,
+    deleted_observation_count: 0,
+    unattempted_target_count: 0,
+    retained_artifact_count: 3,
     created_at: "2026-08-26T05:00:00Z",
     started_at: "2026-08-26T05:00:01Z",
     finished_at: "2026-08-26T05:01:00Z",

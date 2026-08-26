@@ -257,6 +257,11 @@ preserve tab, filter, pagination, graph, and presentation state where appropriat
 Shared table pagination conventions and URL parameter isolation are documented in
 [Table pagination](table-pagination.md).
 
+Render Run detail is target-centric: it left-joins optional retained observations so frozen target
+membership, ordering, deleted-evidence tombstones, and never-attempted targets remain visible.
+Rendered evidence deletion is a separate lifecycle and cannot delete the Page, WebResource, Scan,
+static evidence, Performance evidence, or Accessibility evidence it describes.
+
 Stored HTML is rendered only as escaped text. The raw HTML endpoint returns text/plain.
 
 ## External Performance Evidence

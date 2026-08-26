@@ -554,11 +554,11 @@ describe("scan results workflow", () => {
     expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("No-content responses1");
     expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("HTTP redirects1");
     expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("HTTP errors (not 429)1");
-    expect(screen.getByText("HTTP error")).toBeInTheDocument();
+    expect(screen.getByText("HTTP error", { selector: "span" })).toBeInTheDocument();
     expect(screen.getByText("Rate limited", { selector: "span" })).toBeInTheDocument();
     expect(screen.getByText("No Page content")).toBeInTheDocument();
-    expect(screen.getByText("HTTP redirect")).toBeInTheDocument();
-    expect(screen.getByText("Not attempted - host throttled")).toBeInTheDocument();
+    expect(screen.getByText("HTTP redirect", { selector: "span" })).toBeInTheDocument();
+    expect(screen.getByText("Not attempted - host throttled", { selector: "span" })).toBeInTheDocument();
     expect(screen.getAllByText("No artifacts")).toHaveLength(5);
     expect(screen.getByText("HTTP 404")).toBeInTheDocument();
     expect(screen.getByText("HTTP 429")).toBeInTheDocument();

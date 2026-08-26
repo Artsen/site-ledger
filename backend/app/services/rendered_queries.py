@@ -22,6 +22,8 @@ from app.schemas.rendered import (
     RenderRunDetail,
     RenderRunList,
     RenderRunRead,
+    RenderRunTargetList,
+    RenderRunTargetRead,
 )
 
 RenderOutcome = Literal[
@@ -32,7 +34,139 @@ RenderOutcome = Literal[
     "rate_limited",
     "not_attempted",
     "technical_failure",
+    "evidence_deleted",
+    "not_attempted_host_throttled",
 ]
+
+
+def list_render_run_targets(
+    db: Session,
+    run_id: int,
+    *,
+    search: str | None = None,
+    outcomes: list[RenderOutcome] | None = None,
+    sort: Literal[
+        "page_url",
+        "capture_state",
+        "duration",
+        "navigation_status",
+        "warning_count",
+        "page_error_count",
+        "browser_evidence",
+        "capture_time",
+    ] = "capture_time",
+    direction: Literal["asc", "desc"] = "desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> RenderRunTargetList:
+    artifacts = _artifact_presence_subquery()
+    query = (
+        select(RenderRunTarget, RenderedObservation, artifacts)
+        .outerjoin(
+            RenderedObservation,
+            RenderedObservation.render_run_target_id == RenderRunTarget.id,
+        )
+        .outerjoin(artifacts, artifacts.c.observation_id == RenderedObservation.id)
+        .where(RenderRunTarget.render_run_id == run_id)
+    )
+    if search:
+        query = query.where(RenderRunTarget.requested_url.ilike(f"%{search}%"))
+    if outcomes:
+        conditions: list[ColumnElement[bool]] = []
+        for outcome in outcomes:
+            if outcome == "evidence_deleted":
+                conditions.append(
+                    RenderedObservation.id.is_(None)
+                    & RenderRunTarget.evidence_deleted_at.is_not(None)
+                )
+            elif outcome == "not_attempted":
+                conditions.append(
+                    RenderedObservation.id.is_(None) & RenderRunTarget.evidence_deleted_at.is_(None)
+                )
+            elif outcome == "not_attempted_host_throttled":
+                conditions.append(
+                    RenderedObservation.id.is_not(None) & _render_outcome_condition("not_attempted")
+                )
+            else:
+                conditions.append(
+                    RenderedObservation.id.is_not(None) & _render_outcome_condition(outcome)
+                )
+        query = query.where(or_(*conditions))
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    evidence_count = (
+        func.coalesce(artifacts.c.viewport, 0)
+        + func.coalesce(artifacts.c.full_page, 0)
+        + func.coalesce(artifacts.c.dom, 0)
+    )
+    sort_map = {
+        "page_url": RenderRunTarget.requested_url,
+        "capture_state": RenderedObservation.capture_state,
+        "duration": RenderedObservation.duration_ms,
+        "navigation_status": RenderedObservation.navigation_http_status,
+        "warning_count": RenderedObservation.warning_count,
+        "page_error_count": RenderedObservation.page_error_count,
+        "browser_evidence": evidence_count,
+        "capture_time": RenderedObservation.finished_at,
+    }
+    order = sort_map[sort].desc() if direction == "desc" else sort_map[sort].asc()
+    rows = db.execute(
+        query.order_by(order, RenderRunTarget.position, RenderRunTarget.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return RenderRunTargetList(
+        items=[
+            RenderRunTargetRead(
+                target_id=target.id,
+                position=target.position,
+                web_resource_id=target.web_resource_id,
+                requested_url=target.requested_url,
+                source_snapshot_id=target.source_snapshot_id,
+                created_at=target.created_at,
+                evidence_deleted_at=target.evidence_deleted_at,
+                observation_id=observation.id if observation else None,
+                capture_state=observation.capture_state if observation else None,
+                navigation_http_status=(
+                    observation.navigation_http_status if observation else None
+                ),
+                duration_ms=observation.duration_ms if observation else None,
+                warning_count=observation.warning_count if observation else None,
+                page_error_count=observation.page_error_count if observation else None,
+                has_browser_evidence=bool(viewport or full_page or dom),
+                finished_at=observation.finished_at if observation else None,
+                presentation_state=_target_presentation_state(target, observation),
+            )
+            for target, observation, _observation_id, viewport, full_page, dom in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _target_presentation_state(
+    target: RenderRunTarget, observation: RenderedObservation | None
+) -> str:
+    if observation is None:
+        return "evidence_deleted" if target.evidence_deleted_at is not None else "not_attempted"
+    status = observation.navigation_http_status
+    if observation.error_type == "host_rate_limit_circuit_open":
+        return "not_attempted_host_throttled"
+    if status == 429 or observation.error_type == "navigation_rate_limited":
+        return "rate_limited"
+    if status in (204, 205):
+        return "no_content"
+    if status is not None and 300 <= status <= 399:
+        return "redirect"
+    if status is not None and 400 <= status <= 599:
+        return "http_error"
+    if (
+        observation.capture_state in ("completed", "completed_with_warnings")
+        and status is not None
+        and 200 <= status <= 299
+    ):
+        return "successful"
+    return "technical_failure"
 
 
 def list_scan_rendered_observations(
@@ -616,11 +750,40 @@ def _render_summary(db: Session, condition: ColumnElement[bool]) -> RenderedObse
 
 
 def _render_run_read(db: Session, run: RenderRun, job: BackgroundJob | None) -> RenderRunRead:
+    retained = (
+        db.scalar(
+            select(func.count(RenderedObservation.id)).where(
+                RenderedObservation.render_run_id == run.id
+            )
+        )
+        or 0
+    )
+    deleted = (
+        db.scalar(
+            select(func.count(RenderRunTarget.id)).where(
+                RenderRunTarget.render_run_id == run.id,
+                RenderRunTarget.evidence_deleted_at.is_not(None),
+            )
+        )
+        or 0
+    )
+    retained_artifacts = (
+        db.scalar(
+            select(func.count(RenderedArtifact.id))
+            .join(RenderedObservation)
+            .where(RenderedObservation.render_run_id == run.id)
+        )
+        or 0
+    )
     return RenderRunRead.model_validate(
         {
             **{column.name: getattr(run, column.name) for column in run.__table__.columns},
             "job_id": job.id if job else None,
             "presentation_status": job.status if job else run.status,
             "summary": _render_summary(db, RenderedObservation.render_run_id == run.id),
+            "retained_observation_count": retained,
+            "deleted_observation_count": deleted,
+            "unattempted_target_count": max(run.target_count - retained - deleted, 0),
+            "retained_artifact_count": retained_artifacts,
         }
     )

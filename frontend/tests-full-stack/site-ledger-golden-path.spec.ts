@@ -96,6 +96,21 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     configuration: { render_capture_full_page: false }
   });
   const completedStandaloneRenderRun = await waitForRenderRun(request, site.id, standaloneRenderRun.id);
+  const sourceTargets = await getJson(request, `${apiUrl}/api/sites/${site.id}/render-runs/${scan1RenderRun.id}/targets?limit=50`);
+  expect(sourceTargets.items).toHaveLength(1);
+  const rerenderRun = await postJson(request, `${apiUrl}/api/sites/${site.id}/render-runs/${scan1RenderRun.id}/rerender`, {
+    target_ids: [sourceTargets.items[0].target_id]
+  });
+  const completedRerenderRun = await waitForRenderRun(request, site.id, rerenderRun.id);
+  const deletedObservation = await postJson(request, `${apiUrl}/api/sites/${site.id}/render-runs/${scan1RenderRun.id}/delete-evidence`, {
+    target_ids: [sourceTargets.items[0].target_id]
+  });
+  expect(deletedObservation.observations_deleted).toBe(1);
+  const deletedTarget = await getJson(request, `${apiUrl}/api/sites/${site.id}/render-runs/${scan1RenderRun.id}/targets?limit=50`);
+  expect(deletedTarget.items[0].presentation_state).toBe("evidence_deleted");
+  await deleteJson(request, `${apiUrl}/api/sites/${site.id}/render-runs/${scan1RenderRun.id}`, {
+    confirmation: `DELETE RENDER RUN ${scan1RenderRun.id}`
+  });
   const rootRenderHistory = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${rootPage.resource_id}/rendered-observations?direction=asc&limit=50`);
   expect(rootRenderHistory.total).toBe(2);
   expect(rootRenderHistory.items.map((item) => item.render_run_target_id)).toHaveLength(2);
@@ -240,8 +255,9 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     lifecycle_inventory_entry_id: inventoryEntryId,
     lifecycle_source_id: source.id,
     comparison_id: comparisonId,
-    scan_render_run_id: scan1RenderRun.id,
+    deleted_scan_render_run_id: scan1RenderRun.id,
     standalone_render_run_id: completedStandaloneRenderRun.id,
+    rerender_render_run_id: completedRerenderRun.id,
     repeated_render_resource_id: rootPage.resource_id,
     repeated_render_observation_ids: rootRenderHistory.items.map((item) => item.id),
     timings_ms: {
@@ -397,8 +413,8 @@ async function patchJson(request: APIRequestContext, url: string, data: Record<s
   return JSON.parse(body) as Json;
 }
 
-async function deleteJson(request: APIRequestContext, url: string): Promise<Json> {
-  const response = await request.delete(url);
+async function deleteJson(request: APIRequestContext, url: string, data?: Record<string, unknown>): Promise<Json> {
+  const response = await request.delete(url, data ? { data } : undefined);
   const body = await response.text();
   expect(response.ok(), `${response.status()} DELETE ${url}: ${body}`).toBe(true);
   return JSON.parse(body) as Json;
