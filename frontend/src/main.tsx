@@ -26,6 +26,9 @@ const AccessibilityRunPage = lazyNamed(() => import("./pages/AccessibilityWorksp
 const AccessibilityRulePage = lazyNamed(() => import("./pages/AccessibilityWorkspace"), "AccessibilityRulePage");
 const AccessibilityEvidencePage = lazyNamed(() => import("./pages/AccessibilityWorkspace"), "AccessibilityEvidencePage");
 const AccessibilityObservationPage = lazyNamed(() => import("./pages/AccessibilityObservationPage"), "AccessibilityObservationPage");
+const SiteRenderedPage = lazyNamed(() => import("./pages/RenderedWorkspace"), "SiteRenderedPage");
+const RenderRunPage = lazyNamed(() => import("./pages/RenderedWorkspace"), "RenderRunPage");
+const RenderedEvidencePage = lazyNamed(() => import("./pages/RenderedWorkspace"), "RenderedEvidencePage");
 
 function lazyWorkspacePage(name: keyof typeof import("./pages/site-workspace/SiteWorkspacePages")) {
   return lazyNamed(() => import("./pages/site-workspace/SiteWorkspacePages"), name);
@@ -82,6 +85,9 @@ const router = createBrowserRouter([
           { path: "accessibility/rules/:ruleId", element: <AccessibilityRulePage /> },
           { path: "accessibility/evidence/:observationId", element: <AccessibilityEvidencePage /> },
           { path: "accessibility/observations/:observationId", element: <AccessibilityObservationPage /> },
+          { path: "rendered", element: <SiteRenderedPage /> },
+          { path: "rendered/runs/:runId", element: <RenderRunPage /> },
+          { path: "rendered/observations/:observationId", element: <RenderedEvidencePage /> },
           { path: "comparisons/:comparisonId/pages/:resourceId", element: <PageComparisonDetailPage /> },
           { path: "comparisons/:comparisonId/resources/:resourceId", element: <ResourceComparisonDetailPage /> },
           { path: "comparisons/:comparisonId/links/:sourceResourceId/:targetResourceId", element: <LinkComparisonDetailPage /> },

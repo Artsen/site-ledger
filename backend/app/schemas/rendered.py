@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class RenderCapabilitiesRead(BaseModel):
@@ -28,7 +28,10 @@ class RenderedArtifactRead(BaseModel):
 
 class RenderedObservationRead(BaseModel):
     id: int
-    snapshot_id: int
+    snapshot_id: int | None
+    render_run_id: int | None = None
+    render_run_target_id: int | None = None
+    web_resource_id: int | None = None
     capture_state: str
     started_at: datetime | None
     finished_at: datetime | None
@@ -125,7 +128,8 @@ class RenderedEventList(BaseModel):
 
 class RenderedObservationIndexItem(BaseModel):
     id: int
-    snapshot_id: int
+    snapshot_id: int | None
+    render_run_target_id: int | None = None
     resource_id: int
     page_title: str | None
     static_final_url: str | None
@@ -163,3 +167,64 @@ class RenderedObservationIndexList(BaseModel):
     limit: int
     offset: int
     summary: RenderedObservationSummary
+
+
+class RenderRunCreate(BaseModel):
+    resource_ids: list[int] = Field(min_length=1, max_length=1_000)
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    trigger: str = "site_workspace"
+
+    @model_validator(mode="after")
+    def validate_resource_ids(self) -> "RenderRunCreate":
+        if len(self.resource_ids) != len(set(self.resource_ids)):
+            raise ValueError("resource_ids cannot contain duplicates.")
+        if self.trigger not in {"site_workspace", "page_workspace"}:
+            raise ValueError("trigger is unsupported.")
+        return self
+
+
+class RenderRunRerender(BaseModel):
+    target_ids: list[int] = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def validate_target_ids(self) -> "RenderRunRerender":
+        if len(self.target_ids) != len(set(self.target_ids)):
+            raise ValueError("target_ids cannot contain duplicates.")
+        return self
+
+
+class RenderRunRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    website_property_id: int
+    source_scan_id: int | None
+    source_render_run_id: int | None
+    status: str
+    trigger: str
+    configuration_json: dict[str, Any]
+    target_count: int
+    attempted_count: int
+    completed_count: int
+    failed_count: int
+    skipped_count: int
+    blocked_request_count: int
+    artifact_count: int
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    error_summary: str | None
+    job_id: int | None = None
+    presentation_status: str | None = None
+    summary: RenderedObservationSummary
+
+
+class RenderRunList(BaseModel):
+    items: list[RenderRunRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class RenderRunDetail(RenderRunRead):
+    observations: RenderedObservationIndexList

@@ -3,13 +3,14 @@ from typing import Any
 from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.models import BackgroundJob, Scan, SitePage, UrlSourceEntry, WebsiteProperty
+from app.models import BackgroundJob, RenderRun, Scan, SitePage, UrlSourceEntry, WebsiteProperty
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate, WebsitePropertyUpdate
 from app.services.scan_seeds import create_scan_seeds
 from app.services.site_urls import normalize_site_base_url
 from app.services.url_identity import active_url_normalization_version
 from app.storage.accessibility_store import LocalAccessibilityPayloadStore
+from app.storage.artifact_store import LocalArtifactStore
 from app.storage.performance_store import LocalPerformancePayloadStore
 
 
@@ -80,6 +81,7 @@ def delete_site(
     performance_store: LocalPerformancePayloadStore | None = None,
     accessibility_store: LocalAccessibilityPayloadStore | None = None,
     cleanup_warnings: list[str] | None = None,
+    artifact_store: LocalArtifactStore | None = None,
 ) -> int | None:
     site = db.get(WebsiteProperty, site_id)
     if site is None:
@@ -142,11 +144,21 @@ def delete_site(
         cleanup_performance_payload_files,
         prepare_performance_site_cleanup,
     )
+    from app.services.render_site_cleanup import (
+        cleanup_render_artifact_files,
+        prepare_render_site_cleanup,
+        remove_render_site_blobs,
+    )
 
     performance_blobs = prepare_performance_site_cleanup(db, site.id)
     accessibility_blobs = prepare_accessibility_site_cleanup(db, site.id)
+    render_blobs = prepare_render_site_cleanup(db, site.id)
+    for render_run in db.scalars(select(RenderRun).where(RenderRun.website_property_id == site.id)):
+        db.delete(render_run)
+    db.flush()
     db.delete(site)
     db.flush()
+    remove_render_site_blobs(db, render_blobs)
     resource_ids = (
         set(item for item in source_resource_ids if item)
         | set(site_page_resource_ids)
@@ -162,6 +174,10 @@ def delete_site(
         _deleted, warnings = cleanup_accessibility_payload_files(
             accessibility_store, accessibility_blobs
         )
+        if cleanup_warnings is not None:
+            cleanup_warnings.extend(warnings)
+    if artifact_store is not None:
+        warnings = cleanup_render_artifact_files(artifact_store, render_blobs)
         if cleanup_warnings is not None:
             cleanup_warnings.extend(warnings)
     return site_id

@@ -34,8 +34,9 @@ Python app package.
 - **Activity:** Durable background execution and worker status.
 - **Evidence:** Stored responses, metadata, links, redirects, source provenance, and reuse
   provenance that support an observation.
-- **Rendered observation:** Browser-derived evidence associated with a Page observation, distinct
-  from retained static HTML.
+- **Render Run:** One durable, bounded browser-evidence collection over a frozen set of Pages.
+- **Rendered observation:** Immutable browser-derived evidence for one Render Run target, with
+  optional historical Scan/snapshot provenance and distinct from retained static HTML.
 - **Scan projection:** A deterministic, versioned, rebuildable index derived from one terminal
   Scan's immutable evidence. It is never the original evidence.
 - **Comparison:** A deterministic relationship and versioned build comparing two terminal Scans
@@ -68,8 +69,8 @@ Implemented capabilities include:
 - Resource Inventory for observed and referenced non-HTML Resources without general Resource-body
   storage.
 - Inbound and outgoing link provenance.
-- Optional bounded browser-rendered observations, screenshots, rendered DOM, network, console, and
-  Page-error artifacts associated with static observations.
+- First-class bounded Render Runs with Scan-triggered, Site/Page manual, and selected-rerender
+  workflows plus screenshots, rendered DOM, network, console, and Page-error evidence.
 - Scan-specific 2D and 3D topology graphs.
 - Immutable, versioned Scan projections for terminal result reads.
 - Deterministic same-Site Scan Comparison over Pages, Resources, and Links, including coverage,
@@ -122,9 +123,9 @@ behavior. Keep storage behind the existing content-store abstraction.
 - crawler.structured_content, services.structured_content,
   services.structured_content_queries, api.structured_content_routes,
   HtmlStructuredContentArtifact, and HtmlStructuredContentSection own structured Page content.
-- browser.*, models.rendered, services.rendered_capture, services.rendered_queries, and api.routes
-  own bounded browser
-  capture, rendered observations, and rendered artifacts.
+- browser.*, models.rendered, services.render_runs, services.rendered_capture,
+  services.rendered_queries, and api.render_routes own bounded browser capture, durable Render Runs,
+  rendered observations, and rendered artifacts.
 - crawler.resource_classification, ResourceSnapshot/WebResource resource fields,
   ResourceReferenceOccurrence, and services.resource_queries own Resource Inventory classification,
   evidence, and reads.
@@ -156,6 +157,8 @@ Do not rename these models or their tables for branding:
 - BackgroundJob
 - RenderedObservation
 - RenderedArtifact
+- RenderRun
+- RenderRunTarget
 - HtmlStructuredContentArtifact
 - HtmlStructuredContentSection
 - PageCategoryRule
@@ -263,6 +266,14 @@ Treat crawling and source refresh as SSRF boundaries:
   evidence.
 - Renderer semantic changes require versioned new observations. Never rewrite historical rendered
   observations or counters to apply a newer outcome policy.
+- A Render Run freezes its targets and effective configuration before execution. Each target may
+  produce at most one terminal immutable observation; rerendering always creates a new Run.
+- Standalone Render Runs have no Scan snapshot provenance. Scan provenance is optional, while the
+  frozen WebResource and requested URL remain authoritative target identity.
+- `renderer-v2` remains the capture contract. Rate-limit circuits are Run-local, and later SitePage
+  suppression must not rewrite or hide retained Render Run evidence.
+- New manual targets must resolve to active Site Pages. URL identity reconciliation must include
+  Render Run targets and observations, and artifact deletion must remain reference-aware.
 - Never claim Chromium DNS pinning unless the actual browser connection is constrained. Keep
   hostile-network cases in focused lower-level tests rather than the Golden Path.
 - Enforce timeout, redirect, response-size, Page, depth, and source-expansion limits.

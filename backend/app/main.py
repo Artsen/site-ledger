@@ -14,6 +14,7 @@ from app.api.ai_document_routes import router as ai_document_router
 from app.api.category_rule_routes import router as category_rule_router
 from app.api.comparison_routes import router as comparison_router
 from app.api.performance_routes import router as performance_router
+from app.api.render_routes import router as render_router
 from app.api.routes import router
 from app.api.structured_content_routes import router as structured_content_router
 from app.config import get_settings
@@ -101,6 +102,7 @@ def create_app(*, session_factory: Callable[[], Session] = SessionLocal) -> Fast
     app.include_router(comparison_router)
     app.include_router(structured_content_router)
     app.include_router(performance_router)
+    app.include_router(render_router)
     return app
 
 

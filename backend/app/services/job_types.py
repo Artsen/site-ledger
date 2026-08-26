@@ -9,6 +9,7 @@ JobType = Literal[
     "structured_content_build",
     "performance_run",
     "accessibility_run",
+    "render_run",
 ]
 JobStatus = Literal[
     "queued",
@@ -28,6 +29,7 @@ JOB_TYPE_CATEGORY_RULE_EVALUATION: JobType = "category_rule_evaluation"
 JOB_TYPE_STRUCTURED_CONTENT_BUILD: JobType = "structured_content_build"
 JOB_TYPE_PERFORMANCE_RUN: JobType = "performance_run"
 JOB_TYPE_ACCESSIBILITY_RUN: JobType = "accessibility_run"
+JOB_TYPE_RENDER_RUN: JobType = "render_run"
 
 JOB_TYPE_LABELS: dict[JobType, str] = {
     JOB_TYPE_SCAN: "Scan",
@@ -38,6 +40,7 @@ JOB_TYPE_LABELS: dict[JobType, str] = {
     JOB_TYPE_STRUCTURED_CONTENT_BUILD: "Structured Page content preparation",
     JOB_TYPE_PERFORMANCE_RUN: "Performance collection",
     JOB_TYPE_ACCESSIBILITY_RUN: "Accessibility audit",
+    JOB_TYPE_RENDER_RUN: "Rendered capture",
 }
 
 JOB_STATUS_QUEUED: JobStatus = "queued"

@@ -24,6 +24,7 @@ import { NotesPanel } from "../components/NotesPanel";
 import { StructuredContentView } from "../components/StructuredContentView";
 import { PagePerformancePanel } from "./PerformanceWorkspace";
 import { PageAccessibilityPanel } from "./AccessibilityWorkspace";
+import { PageRenderedPanel } from "./RenderedWorkspace";
 import {
   LinkRoleBadge,
   PageCategoryBadges,
@@ -175,6 +176,7 @@ export function PersistentPageDetailPage() {
           { id: "content", label: "Content" },
           { id: "links", label: "Links" },
           { id: "browser", label: "Browser evidence" },
+          { id: "rendered", label: "Rendered" },
           { id: "performance", label: "Performance" },
           { id: "accessibility", label: "Accessibility" },
           { id: "notes", label: "Notes", count: value.note_count },
@@ -191,6 +193,7 @@ export function PersistentPageDetailPage() {
         {tab === "content" ? <StructuredContentView queryKey={["page-structured-content", siteId, resourceId]} load={() => getPageStructuredContent(siteId, resourceId)} prepare={() => preparePageStructuredContent(siteId, resourceId)} /> : null}
         {tab === "links" ? <LinksTab detail={page.data} /> : null}
         {tab === "browser" ? <BrowserEvidenceTab siteId={siteId} resourceId={resourceId} /> : null}
+        {tab === "rendered" ? <PageRenderedPanel siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "performance" ? <PagePerformancePanel siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "accessibility" ? <PageAccessibilityPanel siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "notes" ? (

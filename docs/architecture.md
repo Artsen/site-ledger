@@ -31,8 +31,9 @@ current implementations.
 - ResourceSnapshot is one Scan-specific observation with representation classification.
 - ResourceOccurrence is one duplicate-preserving reference found in an observation.
 - ContentBlob stores exact compressed response evidence by SHA-256.
-- RenderedObservation optionally attaches browser evidence to one ResourceSnapshot; ArtifactBlob,
-  RenderedArtifact, and bounded event rows preserve that evidence without changing static facts.
+- RenderRun and RenderRunTarget define one durable browser collection over frozen Page identities.
+  RenderedObservation belongs to one target and WebResource; optional Scan/snapshot references are
+  provenance only. ArtifactBlob, RenderedArtifact, and bounded event rows preserve exact evidence.
 - HtmlParseArtifact, HtmlParseAnchor, and HtmlParseResourceReference store reusable deterministic
   parse output.
 - HtmlStructuredContentArtifact and HtmlStructuredContentSection store versioned, ContentBlob-scoped
@@ -66,7 +67,9 @@ Observation where the implementation names would be unnecessarily technical.
 - crawler.static_crawler performs breadth-first traversal and persists partial results.
 - storage.content_store stores exact response bytes as gzip-compressed, content-addressed blobs.
 
-services.scan_execution owns queued Scan terminal state across static and optional rendered phases.
+services.scan_execution owns queued static Scan terminal state and may enqueue an independent
+Render Run after deterministic target selection. services.render_runs owns browser execution,
+Run-local throttling, progress, and immutable observation persistence.
 Browser capture never discovers additional Pages and never replaces static HTML, parse artifacts,
 occurrences, or graph data. See [Browser-rendered observations](browser-rendered-observations.md).
 
@@ -164,8 +167,9 @@ Inventory origins. Dedicated compressed blobs preserve exact accepted text. They
 ## Durable Background Activity
 
 services.background_jobs owns queueing, claiming, leases, heartbeats, progress, cancellation, and
-worker health. Jobs have one constrained subject: a Scan, Source refresh, Scan comparison, or a
-supported Site-scoped operation such as Category Rule evaluation or structured-content preparation.
+worker health. Jobs have one constrained subject: a Scan, Source refresh, Scan comparison, Render
+Run, or a supported Site-scoped operation such as Category Rule evaluation or structured-content
+preparation.
 
 services.job_handlers adapts claimed jobs to crawler and source-refresh services. Cancellation is
 cooperative. Workers recover expired leases on startup and reconcile terminal domain records before

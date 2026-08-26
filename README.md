@@ -15,7 +15,8 @@ observations from separate scans without erasing the evidence captured by each s
 
 - Saves Sites with reusable scope and user-defined classification labels.
 - Runs bounded static HTML scans through durable background jobs.
-- Optionally attaches bounded Chromium-rendered observations to eligible static snapshots.
+- Collects bounded Chromium-rendered observations in durable Render Runs, either manually or from
+  eligible static Scan snapshots.
 - Accepts sitemap, robots-discovered sitemap, and manual URL Sources.
 - Discovers and retains nested AI Document Sources with exact refresh evidence.
 - Maintains a current URL Inventory with source provenance.
@@ -34,7 +35,8 @@ observations from separate scans without erasing the evidence captured by each s
 - Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
 - Materializes versioned, rebuildable indexes for fast immutable terminal-Scan reads while keeping
   raw evidence authoritative.
-- Indexes browser-rendered observations from the Scan workspace with exact evidence links.
+- Indexes browser-rendered observations from Site, Page, Render Run, and historical Scan workspaces
+  with exact evidence links.
 - Supports scan, source, Site, and background Activity lifecycle management.
 
 Site Ledger does not perform browser-only crawling, Resource-body storage, complete website change
@@ -221,7 +223,8 @@ The crawler is an SSRF boundary:
 - Active static scans may retry transient network failures and selected temporary HTTP statuses up
   to `static_max_attempts`; every request remains durable attempt evidence under one final Page
   observation. Retry-After and exponential delays are capped by `static_retry_max_delay_ms`.
-- Completed scans cannot retry an individual Page, and browser-rendered Pages are never retried.
+- Completed Scans cannot retry an individual static Page. Browser observations are never retried or
+  modified in place; an explicit selected rerender creates a new Render Run and new evidence.
 - Scanned HTML is parsed as data and never executed in the application.
 - Browser requests are intercepted before navigation and every HTTP redirect or subresource
   destination is checked against the network policy.

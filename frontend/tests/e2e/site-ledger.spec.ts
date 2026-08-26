@@ -82,6 +82,90 @@ test("Accessibility workspace is responsive and keeps automated evidence explici
   await expect(page.getByRole("link", { name: "Accessibility" })).toHaveAttribute("aria-current", "page");
 });
 
+test("Rendered workspace creates a Run and rerenders selected failed targets", async ({ page }) => {
+  await mockApi(page);
+  let activeRunId = 41;
+  let requestedOutcomes: string[] = [];
+  let rerenderTargets: number[] = [];
+  const run = (id: number) => renderRunFixture(id, id === 41 ? "site_workspace" : "rerender");
+  const observation = (overrides: Record<string, unknown>) => ({
+    id: 301,
+    snapshot_id: null,
+    render_run_target_id: 101,
+    resource_id: 2,
+    page_title: "Successful",
+    static_final_url: "https://example.com/success",
+    browser_final_url: "https://example.com/success",
+    capture_state: "completed",
+    static_http_status: null,
+    navigation_http_status: 200,
+    error_type: null,
+    error_message: null,
+    duration_ms: 120,
+    warning_count: 0,
+    page_error_count: 0,
+    blocked_request_count: 0,
+    console_message_count: 0,
+    has_viewport_screenshot: true,
+    has_full_page_screenshot: true,
+    has_rendered_dom: true,
+    finished_at: "2026-08-26T05:01:00Z",
+    ...overrides,
+  });
+  const mixed = [
+    observation({}),
+    observation({ id: 302, render_run_target_id: 102, resource_id: 3, page_title: "Rate limited", static_final_url: "https://example.com/limited", browser_final_url: "https://example.com/limited", capture_state: "failed", navigation_http_status: 429, error_type: "navigation_rate_limited", has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false }),
+    observation({ id: 303, render_run_target_id: 103, resource_id: 4, page_title: "Not attempted", static_final_url: "https://example.com/skipped", browser_final_url: null, capture_state: "skipped", navigation_http_status: null, error_type: "host_rate_limit_circuit_open", has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false }),
+  ];
+  const observationList = (items: typeof mixed) => ({ items, total: items.length, limit: 50, offset: 0, summary: { successful_renders: 1, no_content_responses: 0, redirect_responses: 0, http_error_responses: 0, rate_limited: 1, skipped_after_throttling: 1, technical_failures: 0, artifacts_retained: 3 } });
+
+  await page.route("**/api/rendering/capabilities", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ defaults: { ...scope, render_mode: "all_eligible" }, limits: { render_viewport_width: { minimum: 320, maximum: 3840 }, render_viewport_height: { minimum: 240, maximum: 2160 }, render_navigation_timeout_seconds: { minimum: 1, maximum: 120 }, render_load_timeout_seconds: { minimum: 0, maximum: 30 } }, supported_modes: [], browser_engine: "chromium", artifact_types: [], allowed_request_methods: ["GET"], service_workers: "blocked" }) }));
+  await page.route(/\/api\/sites\/3\/pages(?:\?.*)?$/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [
+    { resource_id: 2, latest_title: "Successful", normalized_url: "https://example.com/success", workspace_state: "active" },
+    { resource_id: 3, latest_title: "Rate limited", normalized_url: "https://example.com/limited", workspace_state: "active" },
+    { resource_id: 4, latest_title: "Not attempted", normalized_url: "https://example.com/skipped", workspace_state: "active" },
+  ], total: 3, limit: 50, offset: 0 }) }));
+  await page.route(/\/api\/sites\/3\/render-runs(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "POST") {
+      activeRunId = 41;
+      await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(run(41)) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [run(activeRunId)], total: 1, limit: 25, offset: 0 }) });
+  });
+  await page.route("**/api/sites/3/render-runs/41/rerender", async (route) => {
+    rerenderTargets = (await route.request().postDataJSON()).target_ids;
+    activeRunId = 42;
+    await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(run(42)) });
+  });
+  await page.route(/\/api\/sites\/3\/render-runs\/(41|42)\/observations(?:\?.*)?$/, async (route) => {
+    requestedOutcomes = new URL(route.request().url()).searchParams.getAll("outcome");
+    const items = requestedOutcomes.length ? mixed.slice(1) : mixed;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(observationList(items)) });
+  });
+  await page.route(/\/api\/sites\/3\/render-runs\/(41|42)(?:\?.*)?$/, async (route) => {
+    const id = Number(new URL(route.request().url()).pathname.split("/").at(-1));
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...run(id), observations: observationList(mixed) }) });
+  });
+
+  await page.goto("/sites/3/rendered");
+  await page.getByRole("button", { name: "Run renders" }).click();
+  await page.getByRole("checkbox", { name: /Successful/ }).click();
+  await page.getByRole("checkbox", { name: /Rate limited/ }).click();
+  await page.getByRole("checkbox", { name: /Not attempted/ }).click();
+  await page.getByRole("button", { name: "Queue 3 Pages" }).click();
+  await expect(page).toHaveURL(/\/sites\/3\/rendered\/runs\/41/);
+  await expect(page.getByText("HTTP 429")).toBeVisible();
+  await page.getByRole("checkbox", { name: "Rate limited", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Not attempted", exact: true }).click();
+  await expect.poll(() => requestedOutcomes.sort()).toEqual(["not_attempted", "rate_limited"]);
+  await page.getByRole("checkbox", { name: "Select https://example.com/limited" }).click();
+  await page.getByRole("checkbox", { name: "Select https://example.com/skipped" }).click();
+  await page.getByRole("button", { name: "Rerender 2" }).click();
+  await expect(page).toHaveURL(/\/sites\/3\/rendered\/runs\/42/);
+  expect(rerenderTargets).toEqual([102, 103]);
+});
+
 test("Page and Inventory Remove, Restore, and Delete remain distinct", async ({ page }) => {
   await mockApi(page);
   let pageState: "active" | "suppressed" = "active";
@@ -1947,6 +2031,32 @@ function accessibilityObservation() {
 
 function accessibilityRun() {
   return { id: 51, website_property_id: 3, status: "completed", presentation_status: "completed", trigger: "site_workspace", configuration_json: { resource_ids: [8], profiles: ["desktop"] }, target_count: 1, observation_count: 1, completed_count: 1, ready_count: 1, failed_count: 0, retained_observation_count: 1, deleted_observation_count: 0, retained_ready_count: 1, retained_failed_count: 0, deleted_ready_count: 0, deleted_failed_count: 0, axe_core_version: "4.12.1", detector_bundle_sha256: "a".repeat(64), integration_version: "accessibility-engine-v1", normalization_version: "accessibility-normalization-v1", ruleset_profile: "wcag22-aa-v1", ruleset_rule_count: 62, ruleset_sha256: "b".repeat(64), created_at: "2026-08-20T00:00:00Z", started_at: "2026-08-20T00:00:00Z", finished_at: "2026-08-20T00:01:00Z", error_summary: null, job_id: 81 };
+}
+
+function renderRunFixture(id: number, trigger: string) {
+  return {
+    id,
+    website_property_id: 3,
+    source_scan_id: null,
+    source_render_run_id: trigger === "rerender" ? 41 : null,
+    status: "completed_with_errors",
+    presentation_status: "completed_with_errors",
+    trigger,
+    configuration_json: { ...scope, render_mode: "all_eligible", render_max_pages: 3 },
+    target_count: 3,
+    attempted_count: 2,
+    completed_count: 1,
+    failed_count: 1,
+    skipped_count: 1,
+    blocked_request_count: 0,
+    artifact_count: 3,
+    created_at: "2026-08-26T05:00:00Z",
+    started_at: "2026-08-26T05:00:01Z",
+    finished_at: "2026-08-26T05:01:00Z",
+    error_summary: null,
+    job_id: 90 + id,
+    summary: { successful_renders: 1, no_content_responses: 0, redirect_responses: 0, http_error_responses: 0, rate_limited: 1, skipped_after_throttling: 1, technical_failures: 0, artifacts_retained: 3 },
+  };
 }
 
 function resourceItem(overrides: Record<string, unknown>) {

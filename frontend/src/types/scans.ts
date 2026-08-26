@@ -28,6 +28,8 @@ export type Scan = {
   rendered_skipped_count: number;
   rendered_blocked_request_count: number;
   rendered_artifact_count: number;
+  render_run_id?: number | null;
+  render_run_status?: string | null;
   static_request_attempt_count: number;
   static_retry_request_count: number;
   static_recovered_after_retry_count: number;
@@ -389,7 +391,7 @@ export type RenderCapabilities = {
 
 export type RenderedArtifact = { id: number; artifact_type: string; width: number | null; height: number | null; media_type: string; raw_byte_size: number; stored_byte_size: number; sha256: string; metadata_json: Record<string, unknown> };
 export type RenderedObservation = {
-  id: number; snapshot_id: number; capture_state: string; started_at: string | null; finished_at: string | null;
+  id: number; snapshot_id: number | null; render_run_id: number | null; render_run_target_id: number | null; web_resource_id: number | null; capture_state: string; started_at: string | null; finished_at: string | null;
   requested_url: string; final_url: string | null; navigation_http_status: number | null; document_title: string | null;
   browser_engine: string; browser_version: string | null; playwright_version: string | null; renderer_version: string;
   browser_policy_version: string; capture_schema_version: string; user_agent: string | null; viewport_width: number;
@@ -407,7 +409,8 @@ export type RenderedPageError = { id: number; sequence: number; error_name: stri
 
 export type RenderedObservationIndexItem = {
   id: number;
-  snapshot_id: number;
+  snapshot_id: number | null;
+  render_run_target_id: number | null;
   resource_id: number;
   page_title: string | null;
   static_final_url: string | null;
@@ -444,6 +447,33 @@ export type RenderedObservationIndexList = {
     artifacts_retained: number;
   };
 };
+
+export type RenderRun = {
+  id: number;
+  website_property_id: number;
+  source_scan_id: number | null;
+  source_render_run_id: number | null;
+  status: string;
+  trigger: "scan" | "site_workspace" | "page_workspace" | "rerender";
+  configuration_json: ScopeConfig & Record<string, unknown>;
+  target_count: number;
+  attempted_count: number;
+  completed_count: number;
+  failed_count: number;
+  skipped_count: number;
+  blocked_request_count: number;
+  artifact_count: number;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error_summary: string | null;
+  job_id: number | null;
+  presentation_status: string | null;
+  summary: RenderedObservationIndexList["summary"];
+};
+
+export type RenderRunList = { items: RenderRun[]; total: number; limit: number; offset: number };
+export type RenderRunDetail = RenderRun & { observations: RenderedObservationIndexList };
 
 export type ResourceInventoryItem = {
   resource_id: number;

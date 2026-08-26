@@ -14,6 +14,7 @@ from app.models import (
     RenderedNetworkEntry,
     RenderedObservation,
     RenderedPageError,
+    RenderRunTarget,
     ResourceSnapshot,
     Scan,
 )
@@ -57,13 +58,29 @@ def select_render_candidates(
 
 
 def create_observation(
-    db: Session, snapshot: ResourceSnapshot, config: ScopeConfig
+    db: Session,
+    snapshot: ResourceSnapshot | None,
+    config: ScopeConfig,
+    *,
+    target: RenderRunTarget | None = None,
 ) -> RenderedObservation:
+    if snapshot is None and target is None:
+        raise ValueError(
+            "A rendered observation requires legacy Snapshot or RenderRun target identity"
+        )
+    requested_url = (
+        target.requested_url
+        if target is not None
+        else (snapshot.final_url or snapshot.requested_url if snapshot is not None else "")
+    )
     observation = RenderedObservation(
-        snapshot_id=snapshot.id,
+        render_run_id=target.render_run_id if target else None,
+        render_run_target_id=target.id if target else None,
+        web_resource_id=target.web_resource_id if target else None,
+        snapshot_id=(target.source_snapshot_id if target else snapshot.id if snapshot else None),
         capture_state="capturing",
         started_at=datetime.now(UTC),
-        requested_url=snapshot.final_url or snapshot.requested_url,
+        requested_url=requested_url,
         browser_engine="chromium",
         renderer_version=RENDERER_VERSION,
         browser_policy_version=BROWSER_POLICY_VERSION,
@@ -152,6 +169,26 @@ def mark_capturing_interrupted(
             .join(ResourceSnapshot)
             .where(
                 ResourceSnapshot.scan_id == scan_id,
+                RenderedObservation.capture_state == "capturing",
+            )
+        )
+    )
+    for item in observations:
+        item.capture_state = "interrupted"
+        item.error_type = "interrupted"
+        item.error_message = reason[:1000]
+        item.finished_at = datetime.now(UTC)
+    db.commit()
+    return len(observations)
+
+
+def mark_render_run_capturing_interrupted(
+    db: Session, render_run_id: int, reason: str = "worker_interrupted"
+) -> int:
+    observations = list(
+        db.scalars(
+            select(RenderedObservation).where(
+                RenderedObservation.render_run_id == render_run_id,
                 RenderedObservation.capture_state == "capturing",
             )
         )

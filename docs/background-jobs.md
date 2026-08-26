@@ -34,8 +34,9 @@ python -m app.worker --recover-only
 
 `BackgroundJob` stores the durable unit of work. A job has one constrained subject: `scan_id` for
 crawl/projection jobs, `source_refresh_id` for source refresh jobs, `scan_comparison_id` for
-comparison builds, `performance_run_id` for external Performance collection, or
-`website_property_id` for supported Site-scoped Category Rule and structured content operations.
+comparison builds, `performance_run_id` for external Performance collection, `render_run_id` for
+browser collection, or `website_property_id` for supported Site-scoped Category Rule and structured
+content operations.
 
 `JobEvent` stores coarse lifecycle events for debugging and user-visible history. It intentionally
 does not store every discovered URL or crawler detail; page snapshots, occurrences, scan seeds, and
@@ -81,6 +82,11 @@ delay. See [Performance observations](performance-observations.md).
 `accessibility_run` enforces both a bounded Page count and an exact Page/profile audit budget. It
 reuses one Chromium session, commits each immutable observation independently, and checks
 cancellation between audits. See [Automated Accessibility observations](accessibility-observations.md).
+
+`render_run` executes one frozen target set in one Chromium session. It persists one immutable
+observation per target, owns a Run-local host throttling circuit, reports Page counters, and checks
+cancellation between and during bounded captures. A Scan may enqueue this job, but the job and its
+evidence remain independently owned by the Render Run.
 
 The scan comparison build job waits for compatible prepared results, stages materialized
 differences, validates and checksums them, and atomically activates a ready build. Failed,

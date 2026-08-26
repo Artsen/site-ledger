@@ -12,7 +12,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from app.models import BackgroundJob, JobEvent, Scan, SourceRefresh, WorkerInstance
+from app.models import BackgroundJob, JobEvent, RenderRun, Scan, SourceRefresh, WorkerInstance
 from app.schemas.jobs import WorkerHealth
 from app.services.job_types import (
     ACTIVE_JOB_STATUSES,
@@ -26,6 +26,7 @@ from app.services.job_types import (
     JOB_TYPE_ACCESSIBILITY_RUN,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
     JOB_TYPE_PERFORMANCE_RUN,
+    JOB_TYPE_RENDER_RUN,
     JOB_TYPE_SCAN,
     JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
@@ -217,6 +218,18 @@ def enqueue_accessibility_run_job(
     )
 
 
+def enqueue_render_run_job(db: Session, run: RenderRun, *, priority: int = 125) -> BackgroundJob:
+    return _enqueue_job(
+        db,
+        job_type=JOB_TYPE_RENDER_RUN,
+        dedupe_key=f"render-run:{run.id}",
+        render_run_id=run.id,
+        website_property_id=run.website_property_id,
+        priority=priority,
+        payload={"render_run_id": run.id, "site_id": run.website_property_id},
+    )
+
+
 def _enqueue_job(
     db: Session,
     *,
@@ -229,6 +242,7 @@ def _enqueue_job(
     scan_comparison_id: int | None = None,
     performance_run_id: int | None = None,
     accessibility_run_id: int | None = None,
+    render_run_id: int | None = None,
     website_property_id: int | None = None,
 ) -> BackgroundJob:
     existing = db.scalar(select(BackgroundJob).where(BackgroundJob.dedupe_key == dedupe_key))
@@ -246,6 +260,7 @@ def _enqueue_job(
         scan_comparison_id=scan_comparison_id,
         performance_run_id=performance_run_id,
         accessibility_run_id=accessibility_run_id,
+        render_run_id=render_run_id,
         website_property_id=website_property_id,
         dedupe_key=dedupe_key,
         payload_json=payload,
@@ -686,6 +701,15 @@ def recover_expired_jobs(
                 accessibility_run.error_summary = (
                     "Worker lease expired during Accessibility collection."
                 )
+        elif job.job_type == JOB_TYPE_RENDER_RUN:
+            from app.services.rendered_capture import mark_render_run_capturing_interrupted
+
+            render_run = db.get(RenderRun, int(job.payload_json.get("render_run_id", 0)))
+            if render_run and render_run.status not in TERMINAL_JOB_STATUSES:
+                render_run.status = "interrupted"
+                render_run.finished_at = now
+                render_run.error_summary = "Worker lease expired during rendered capture."
+                mark_render_run_capturing_interrupted(db, render_run.id, "lease_expired")
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan and scan.status not in TERMINAL_JOB_STATUSES:
@@ -750,6 +774,9 @@ def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
             AccessibilityRun, int(job.payload_json.get("accessibility_run_id", 0))
         )
         domain_status = accessibility_run.status if accessibility_run else JOB_STATUS_FAILED
+    elif job.job_type == JOB_TYPE_RENDER_RUN:
+        render_run = db.get(RenderRun, int(job.payload_json.get("render_run_id", 0)))
+        domain_status = render_run.status if render_run else JOB_STATUS_FAILED
     elif job.scan_id:
         scan = db.get(Scan, job.scan_id)
         domain_status = scan.status if scan else JOB_STATUS_FAILED

@@ -244,7 +244,7 @@ async def test_unsafe_persisted_scan_fails_normally_before_execution(
         raise AssertionError("Browser must not start")
 
     monkeypatch.setattr("app.services.scan_execution.StaticPageCrawler", forbidden_crawler)
-    monkeypatch.setattr("app.services.scan_execution.BrowserRenderer", forbidden_browser)
+    monkeypatch.setattr("app.services.render_runs.BrowserRenderer", forbidden_browser)
     monkeypatch.setattr(
         "app.services.job_handlers.get_settings",
         lambda: Settings(rendered_artifact_storage_root=tmp_path / "rendered"),

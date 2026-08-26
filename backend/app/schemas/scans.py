@@ -155,6 +155,8 @@ class ScanRead(BaseModel):
     rendered_skipped_count: int = 0
     rendered_blocked_request_count: int = 0
     rendered_artifact_count: int = 0
+    render_run_id: int | None = None
+    render_run_status: str | None = None
     static_request_attempt_count: int = 0
     static_retry_request_count: int = 0
     static_recovered_after_retry_count: int = 0

@@ -19,6 +19,7 @@ from app.models import (
     PageCategoryRule,
     PageCategoryRuleRun,
     PerformanceRun,
+    RenderRun,
     Scan,
     SourceRefresh,
 )
@@ -36,6 +37,7 @@ from app.services.job_types import (
     JOB_TYPE_ACCESSIBILITY_RUN,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
     JOB_TYPE_PERFORMANCE_RUN,
+    JOB_TYPE_RENDER_RUN,
     JOB_TYPE_SCAN,
     JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
@@ -43,6 +45,7 @@ from app.services.job_types import (
     JOB_TYPE_STRUCTURED_CONTENT_BUILD,
 )
 from app.services.performance_collection import execute_performance_run, mark_performance_run_failed
+from app.services.render_runs import execute_render_run, mark_render_run_failed
 from app.services.scan_comparisons import (
     ComparisonBuildCancelled,
     execute_comparison_build,
@@ -473,6 +476,44 @@ class AccessibilityRunJobHandler:
         )
 
 
+class RenderRunJobHandler:
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
+        self.session_factory = session_factory
+
+    async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
+        run_id = job.render_run_id or int(job.payload_json.get("render_run_id", 0))
+        if not run_id:
+            raise ValueError("Rendered capture job is missing render_run_id.")
+        run = await execute_render_run(
+            self.session_factory,
+            run_id,
+            should_cancel=context.check_cancelled,
+            progress=lambda current, total, counters: context.progress(
+                phase="capturing",
+                current_operation="Capturing rendered Page evidence",
+                current=current,
+                total=total,
+                unit="Pages",
+                counters=counters,
+            ),
+        )
+        if run.status == "cancelled":
+            raise JobCancelled("Render Run cancelled by user.")
+        return HandlerResult(
+            status=(
+                JOB_STATUS_COMPLETED_WITH_ERRORS
+                if run.failed_count or run.skipped_count
+                else JOB_STATUS_COMPLETED
+            ),
+            result_json={
+                "render_run_id": run.id,
+                "successful": run.completed_count,
+                "failed": run.failed_count,
+                "skipped": run.skipped_count,
+            },
+        )
+
+
 class JobHandlerRegistry:
     def __init__(self, handlers: dict[str, JobHandler]):
         self.handlers = handlers
@@ -499,6 +540,7 @@ def build_handler_registry(
             ),
             JOB_TYPE_PERFORMANCE_RUN: PerformanceRunJobHandler(session_factory),
             JOB_TYPE_ACCESSIBILITY_RUN: AccessibilityRunJobHandler(session_factory),
+            JOB_TYPE_RENDER_RUN: RenderRunJobHandler(session_factory),
         }
     )
 
@@ -642,6 +684,11 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
             if accessibility_run:
                 accessibility_run.status = "cancelled"
                 accessibility_run.finished_at = now
+        elif job.job_type == JOB_TYPE_RENDER_RUN and job.render_run_id:
+            render_run = db.get(RenderRun, job.render_run_id)
+            if render_run:
+                render_run.status = "cancelled"
+                render_run.finished_at = now
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -697,6 +744,15 @@ def _mark_domain_interrupted(
                 accessibility_run.error_summary = (
                     "Worker interrupted during Accessibility collection."
                 )
+        elif job.job_type == JOB_TYPE_RENDER_RUN and job.render_run_id:
+            render_run = db.get(RenderRun, job.render_run_id)
+            if render_run:
+                render_run.status = "interrupted"
+                render_run.finished_at = now
+                render_run.error_summary = "Worker interrupted during rendered capture."
+                from app.services.rendered_capture import mark_render_run_capturing_interrupted
+
+                mark_render_run_capturing_interrupted(db, render_run.id, reason)
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -745,6 +801,8 @@ def _mark_domain_failed(
             mark_performance_run_failed(db, job.performance_run_id, exc)
         elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN and job.accessibility_run_id:
             mark_accessibility_run_failed(db, job.accessibility_run_id, exc)
+        elif job.job_type == JOB_TYPE_RENDER_RUN and job.render_run_id:
+            mark_render_run_failed(db, job.render_run_id, exc)
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:

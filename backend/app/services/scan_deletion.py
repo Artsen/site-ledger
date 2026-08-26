@@ -13,6 +13,8 @@ from app.models import (
     RenderedNetworkEntry,
     RenderedObservation,
     RenderedPageError,
+    RenderRun,
+    RenderRunTarget,
     ResourceOccurrence,
     ResourceReferenceOccurrence,
     ResourceSnapshot,
@@ -162,8 +164,9 @@ def delete_scan(
     candidate_resource_ids = impact.resource_ids
     snapshot_ids = select(ResourceSnapshot.id).where(ResourceSnapshot.scan_id == scan.id)
     rendered_blob_ids = [blob.id for blob in impact.referenced_artifact_blobs]
-    rendered_ids = select(RenderedObservation.id).where(
-        RenderedObservation.snapshot_id.in_(snapshot_ids)
+    legacy_rendered_ids = select(RenderedObservation.id).where(
+        RenderedObservation.snapshot_id.in_(snapshot_ids),
+        RenderedObservation.render_run_id.is_(None),
     )
     comparison_ids = select(ScanComparison.id).where(
         or_(
@@ -179,6 +182,22 @@ def delete_scan(
     db.execute(delete(ScanComparison).where(ScanComparison.id.in_(comparison_ids)))
     delete_scan_projection_data(db, scan.id)
     db.execute(
+        update(RenderRun).where(RenderRun.source_scan_id == scan.id).values(source_scan_id=None)
+    )
+    db.execute(
+        update(RenderRunTarget)
+        .where(RenderRunTarget.source_snapshot_id.in_(snapshot_ids))
+        .values(source_snapshot_id=None)
+    )
+    db.execute(
+        update(RenderedObservation)
+        .where(
+            RenderedObservation.snapshot_id.in_(snapshot_ids),
+            RenderedObservation.render_run_id.is_not(None),
+        )
+        .values(snapshot_id=None)
+    )
+    db.execute(
         delete(ResourceOccurrence).where(ResourceOccurrence.source_snapshot_id.in_(snapshot_ids))
     )
     db.execute(
@@ -188,21 +207,25 @@ def delete_scan(
     )
     db.execute(
         delete(RenderedNetworkEntry).where(
-            RenderedNetworkEntry.rendered_observation_id.in_(rendered_ids)
+            RenderedNetworkEntry.rendered_observation_id.in_(legacy_rendered_ids)
         )
     )
     db.execute(
         delete(RenderedConsoleMessage).where(
-            RenderedConsoleMessage.rendered_observation_id.in_(rendered_ids)
+            RenderedConsoleMessage.rendered_observation_id.in_(legacy_rendered_ids)
         )
     )
     db.execute(
-        delete(RenderedPageError).where(RenderedPageError.rendered_observation_id.in_(rendered_ids))
+        delete(RenderedPageError).where(
+            RenderedPageError.rendered_observation_id.in_(legacy_rendered_ids)
+        )
     )
     db.execute(
-        delete(RenderedArtifact).where(RenderedArtifact.rendered_observation_id.in_(rendered_ids))
+        delete(RenderedArtifact).where(
+            RenderedArtifact.rendered_observation_id.in_(legacy_rendered_ids)
+        )
     )
-    db.execute(delete(RenderedObservation).where(RenderedObservation.snapshot_id.in_(snapshot_ids)))
+    db.execute(delete(RenderedObservation).where(RenderedObservation.id.in_(legacy_rendered_ids)))
     db.execute(delete(ResourceSnapshot).where(ResourceSnapshot.scan_id == scan.id))
     unreferenced_rendered_blobs = (
         list(
@@ -390,12 +413,14 @@ def _deletion_impact(db: Session, scan: Scan) -> DeletionImpact:
         blob for blob in referenced_blobs if outside_blob_references.get(blob.id, 0) == 0
     ]
     rendered_observation_ids = select(RenderedObservation.id).where(
-        RenderedObservation.snapshot_id.in_(snapshot_ids)
+        RenderedObservation.snapshot_id.in_(snapshot_ids),
+        RenderedObservation.render_run_id.is_(None),
     )
     rendered_observations = (
         db.scalar(
             select(func.count(RenderedObservation.id)).where(
-                RenderedObservation.snapshot_id.in_(snapshot_ids)
+                RenderedObservation.snapshot_id.in_(snapshot_ids),
+                RenderedObservation.render_run_id.is_(None),
             )
         )
         or 0
@@ -523,6 +548,13 @@ def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int
             )
         )
     )
+    still_render_targets = set(
+        db.scalars(
+            select(distinct(RenderRunTarget.web_resource_id)).where(
+                RenderRunTarget.web_resource_id.in_(candidate_resource_ids)
+            )
+        )
+    )
     deletable = sorted(
         set(candidate_resource_ids)
         - still_snapshotted
@@ -531,6 +563,7 @@ def _delete_unreferenced_resources(db: Session, candidate_resource_ids: list[int
         - still_source_entry
         - still_seeded
         - still_site_pages
+        - still_render_targets
     )
     if deletable:
         db.execute(delete(WebResource).where(WebResource.id.in_(deletable)))

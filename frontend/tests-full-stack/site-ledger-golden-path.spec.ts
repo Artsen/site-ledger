@@ -71,7 +71,8 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
       allow_private_networks: true,
       enable_http_revalidation: false,
       enable_parse_reuse: true,
-      render_mode: "none"
+      render_mode: "starting_page",
+      render_max_pages: 1
     }
   });
   expect(site.scope_config.allow_private_networks).toBe(true);
@@ -83,9 +84,21 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(scan1.status).toBe("completed");
   expect(scan1.fetched_count).toBe(4);
   await waitForProjection(request, scan1Id);
+  const scan1RenderRun = await waitForScanRenderRun(request, scan1Id);
   const scan1Ready = Date.now();
   const pages1 = await getJson(request, `${apiUrl}/api/scans/${scan1Id}/pages?limit=50`);
   expect(pages1.total).toBe(4);
+  const rootPage = pages1.items.find((item) => new URL(item.requested_url).pathname === "/");
+  if (!rootPage) throw new Error("Golden Path root Page was not found");
+  const standaloneRenderRun = await postJson(request, `${apiUrl}/api/sites/${site.id}/render-runs`, {
+    resource_ids: [rootPage.resource_id],
+    trigger: "site_workspace",
+    configuration: { render_capture_full_page: false }
+  });
+  const completedStandaloneRenderRun = await waitForRenderRun(request, site.id, standaloneRenderRun.id);
+  const rootRenderHistory = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${rootPage.resource_id}/rendered-observations?direction=asc&limit=50`);
+  expect(rootRenderHistory.total).toBe(2);
+  expect(rootRenderHistory.items.map((item) => item.render_run_target_id)).toHaveLength(2);
   const evidence1 = await collectEvidence(request, site.id, scan1Id);
   expect(evidence1["/"].structured.sections.some((section) => section.direct_text.includes("Version one product copy."))).toBe(true);
 
@@ -100,6 +113,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(scan2.status).toBe("completed");
   expect(scan2.fetched_count).toBe(5);
   await waitForProjection(request, scan2Id);
+  await waitForScanRenderRun(request, scan2Id);
   const scan2Ready = Date.now();
   const evidence2 = await collectEvidence(request, site.id, scan2Id);
   expect(evidence2["/"].structured.sections.some((section) => section.direct_text.includes(expectedTargetCopy))).toBe(true);
@@ -180,6 +194,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   const scan3 = await waitForScan(request, scan3Id);
   expect(["completed", "completed_with_errors"]).toContain(scan3.status);
   await waitForProjection(request, scan3Id);
+  await waitForScanRenderRun(request, scan3Id);
   const recreatedPricing = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}`);
   expect(recreatedPricing.page.site_page_id).not.toBe(pricingPage.site_page_id);
   expect(recreatedPricing.page.workspace_state).toBe("active");
@@ -225,6 +240,10 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     lifecycle_inventory_entry_id: inventoryEntryId,
     lifecycle_source_id: source.id,
     comparison_id: comparisonId,
+    scan_render_run_id: scan1RenderRun.id,
+    standalone_render_run_id: completedStandaloneRenderRun.id,
+    repeated_render_resource_id: rootPage.resource_id,
+    repeated_render_observation_ids: rootRenderHistory.items.map((item) => item.id),
     timings_ms: {
       total: comparisonReady - started,
       scan_1: scan1Completed - scan1Start,
@@ -255,6 +274,24 @@ async function waitForScan(request: APIRequestContext, scanId: number): Promise<
     const scan = await getJson(request, `${apiUrl}/api/scans/${scanId}`);
     return ["completed", "completed_with_errors", "failed", "cancelled", "interrupted"].includes(scan.status) ? scan : null;
   }, `Scan ${scanId}`);
+}
+
+async function waitForScanRenderRun(request: APIRequestContext, scanId: number): Promise<Json> {
+  return poll(async () => {
+    const scan = await getJson(request, `${apiUrl}/api/scans/${scanId}`);
+    if (!scan.render_run_id) return null;
+    return waitForRenderRun(request, Number(scan.website_property_id), Number(scan.render_run_id));
+  }, `Render Run for Scan ${scanId}`);
+}
+
+async function waitForRenderRun(request: APIRequestContext, siteId: number, runId: number): Promise<Json> {
+  return poll(async () => {
+    const run = await getJson(request, `${apiUrl}/api/sites/${siteId}/render-runs/${runId}?limit=1`);
+    if (["failed", "cancelled", "interrupted"].includes(run.status)) {
+      throw new Error(`Render Run ${runId} failed: ${JSON.stringify(run)}`);
+    }
+    return ["completed", "completed_with_errors"].includes(run.status) ? run : null;
+  }, `Render Run ${runId}`);
 }
 
 async function waitForProjection(request: APIRequestContext, scanId: number): Promise<Json> {

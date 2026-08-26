@@ -44,6 +44,7 @@ describe("workspace navigation contract", () => {
     expect(siteAreaFromPath("/sites/3/comparisons/11/resources/9")).toBe("comparisons");
     expect(siteAreaFromPath("/sites/3/performance/runs/12")).toBe("performance");
     expect(siteAreaFromPath("/sites/3/accessibility/rules/image-alt")).toBe("accessibility");
+    expect(siteAreaFromPath("/sites/3/rendered/runs/12")).toBe("rendered");
     expect(siteAreaFromPath("/sites/3/edit")).toBe("settings");
     expect(isSiteAreaActive("/sites/3/resources/7", 3, "resources")).toBe(true);
     expect(isSiteAreaActive("/sites/3/resources/7", 3, "overview")).toBe(false);
@@ -56,6 +57,7 @@ describe("workspace navigation contract", () => {
     expect(siteAreaHref(8, "category-rules")).toBe("/sites/8/category-rules");
     expect(switchSiteHref("/sites/3/performance/runs/12", 8)).toBe("/sites/8/performance");
     expect(switchSiteHref("/sites/3/accessibility/runs/12", 8)).toBe("/sites/8/accessibility");
+    expect(switchSiteHref("/sites/3/rendered/runs/12", 8)).toBe("/sites/8/rendered");
   });
 
   it("persists desktop collapse preference", async () => {
