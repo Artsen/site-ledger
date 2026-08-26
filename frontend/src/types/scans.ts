@@ -415,6 +415,8 @@ export type RenderedObservationIndexItem = {
   capture_state: string;
   static_http_status: number | null;
   navigation_http_status: number | null;
+  error_type: string | null;
+  error_message: string | null;
   duration_ms: number | null;
   warning_count: number;
   blocked_request_count: number;
@@ -431,6 +433,16 @@ export type RenderedObservationIndexList = {
   total: number;
   limit: number;
   offset: number;
+  summary: {
+    successful_renders: number;
+    no_content_responses: number;
+    redirect_responses: number;
+    http_error_responses: number;
+    rate_limited: number;
+    skipped_after_throttling: number;
+    technical_failures: number;
+    artifacts_retained: number;
+  };
 };
 
 export type ResourceInventoryItem = {

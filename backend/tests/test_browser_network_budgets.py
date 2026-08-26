@@ -32,7 +32,7 @@ def test_observed_bytes_override_any_declared_length() -> None:
 def test_browser_budget_provenance_versions() -> None:
     assert BROWSER_POLICY_VERSION == "2"
     assert CAPTURE_SCHEMA_VERSION == "2"
-    assert RENDERER_VERSION == "1"
+    assert RENDERER_VERSION == "2"
 
 
 class _BudgetHandler(BaseHTTPRequestHandler):
@@ -44,6 +44,41 @@ class _BudgetHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/under":
             self._body(b"<html><body><h1>Under budget</h1></body></html>", "text/html")
+            return
+        if path == "/rate-limited":
+            self.send_response(429)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Retry-After", "120")
+            body = b"<html><body><h1>Too many requests</h1></body></html>"
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path in {"/no-content", "/reset-content"}:
+            self.send_response(204 if path == "/no-content" else 205)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path in {"/forbidden", "/missing", "/server-error", "/unavailable"}:
+            status = {
+                "/forbidden": 403,
+                "/missing": 404,
+                "/server-error": 500,
+                "/unavailable": 503,
+            }[path]
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html")
+            if status == 503:
+                self.send_header("Retry-After", "60")
+            body = f"<html><body><h1>HTTP {status}</h1></body></html>".encode()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/disconnect":
+            self.close_connection = True
+            self.connection.shutdown(2)
+            self.connection.close()
             return
         if path in {"/chunked-page", "/honest-page", "/lying-page"}:
             resource = {
@@ -159,6 +194,81 @@ async def test_chromium_under_budget_capture_retains_artifacts(budget_server: st
         "rendered_dom",
         "viewport_screenshot",
     }
+
+
+@pytest.mark.asyncio
+async def test_chromium_rate_limit_retains_evidence_without_page_artifacts(
+    budget_server: str,
+) -> None:
+    url = f"{budget_server}/rate-limited"
+    async with BrowserRenderer(_config(), url) as renderer:
+        result = await renderer.capture(url)
+
+    assert result.status == 429
+    assert result.state == "failed"
+    assert result.error_type == "navigation_rate_limited"
+    assert result.artifacts == []
+    navigation = next(row for row in result.network if row["is_main_navigation"])
+    assert navigation["response_status"] == 429
+    assert navigation["response_headers_json"]["retry-after"] == "120"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("path", "status"), [("/no-content", 204), ("/reset-content", 205)])
+async def test_chromium_no_content_retains_status_without_page_artifacts(
+    budget_server: str, path: str, status: int
+) -> None:
+    url = budget_server + path
+    async with BrowserRenderer(_config(), url) as renderer:
+        result = await renderer.capture(url)
+
+    assert result.status == status
+    assert result.state == "failed"
+    assert result.error_type == "navigation_no_content"
+    assert result.artifacts == []
+    navigation = next(row for row in result.network if row["is_main_navigation"])
+    assert navigation["response_status"] == status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "status", "error_type"),
+    [
+        ("/forbidden", 403, "navigation_http_client_error"),
+        ("/missing", 404, "navigation_http_client_error"),
+        ("/server-error", 500, "navigation_http_server_error"),
+        ("/unavailable", 503, "navigation_http_server_error"),
+    ],
+)
+async def test_chromium_http_errors_retain_status_without_page_artifacts(
+    budget_server: str, path: str, status: int, error_type: str
+) -> None:
+    url = budget_server + path
+    async with BrowserRenderer(_config(), url) as renderer:
+        result = await renderer.capture(url)
+
+    assert result.status == status
+    assert result.state == "failed"
+    assert result.error_type == error_type
+    assert result.artifacts == []
+    navigation = next(row for row in result.network if row["is_main_navigation"])
+    assert navigation["response_status"] == status
+    if status == 503:
+        assert navigation["response_headers_json"]["retry-after"] == "60"
+
+
+@pytest.mark.asyncio
+async def test_chromium_navigation_exception_does_not_capture_partial_page_artifacts(
+    budget_server: str,
+) -> None:
+    url = f"{budget_server}/disconnect"
+    async with BrowserRenderer(_config(), url) as renderer:
+        result = await renderer.capture(url)
+
+    assert result.state == "failed"
+    assert result.status is None
+    assert result.error_type
+    assert result.artifacts == []
 
 
 @pytest.mark.asyncio

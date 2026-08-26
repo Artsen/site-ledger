@@ -38,6 +38,7 @@ RESPONSE_HEADERS = {
     "etag",
     "last-modified",
     "location",
+    "retry-after",
     "server",
     "timing-allow-origin",
 }

@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { listScanRenderedObservations } from "../api/client";
 import { formatDate } from "../utils/format";
 import { useUrlPagination } from "../utils/useUrlPagination";
+import { renderOutcomeLabel } from "../utils/renderedOutcome";
 import { Button } from "./ui/Button";
 import { EmptyState } from "./ui/EmptyState";
 import { ErrorBanner } from "./ui/ErrorBanner";
@@ -13,6 +14,7 @@ import { PaginatedTableControls } from "./ui/PaginatedTableControls";
 import { StatusBadge } from "./ui/StatusBadge";
 import { SortableTableHeader, type SortDirection } from "./ui/SortableTableHeader";
 import { inputClass } from "./ui/styles";
+import type { RenderedObservationIndexList } from "../types/scans";
 
 export function RenderedObservationTable({ scanId, renderMode }: { scanId: string; renderMode: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -23,6 +25,7 @@ export function RenderedObservationTable({ scanId, renderMode }: { scanId: strin
   const controls = <PaginatedTableControls total={rendered.data?.total ?? 0} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="rendered capture" isLoading={rendered.isFetching && !rendered.isLoading} />;
   if (rendered.error) return <ErrorBanner error={rendered.error} title="Could not load rendered captures" />;
   return <div className="space-y-4">
+    {rendered.data?.summary ? <RenderedOutcomeSummary summary={rendered.data.summary} /> : null}
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm"><div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
       <input aria-label="Search rendered captures" value={searchParams.get("search") ?? ""} onChange={(event) => setParam(setSearchParams, "search", event.target.value)} placeholder="Search URL or title" className={`${inputClass()} xl:col-span-2`} />
       <select aria-label="Rendered capture state" value={searchParams.get("render_state") ?? ""} onChange={(event) => setParam(setSearchParams, "render_state", event.target.value)} className={inputClass()}><option value="">All capture states</option>{["completed", "completed_with_warnings", "failed", "skipped", "cancelled", "interrupted"].map((state) => <option key={state} value={state}>{state.replace(/_/g, " ")}</option>)}</select>
@@ -39,13 +42,34 @@ export function RenderedObservationTable({ scanId, renderMode }: { scanId: strin
     {!rendered.isLoading && !rendered.data?.items.length ? <RenderedEmptyState renderMode={renderMode} filtered={hasFilters(searchParams)} /> : null}
     {rendered.data?.items.length ? <div className="overflow-x-auto rounded-md border border-stone-200 bg-white shadow-sm"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr>{[["page_url", "Page"], ["capture_state", "Capture"], ["navigation_status", "Navigation"], ["duration", "Duration"], ["warning_count", "Warnings"], ["browser_evidence", "Browser evidence"], ["capture_time", "Captured"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={searchParams.get("sort")} direction={searchParams.get("direction") as SortDirection | null} onChange={(column, direction) => setRenderedSort(setSearchParams, column, direction)} defaultDirection={column === "capture_time" ? "desc" : "asc"} />)}</tr></thead><tbody>{rendered.data.items.map((item) => <tr key={item.id} className="border-t border-stone-100 align-top hover:bg-stone-50">
       <td className="max-w-xl px-3 py-2"><Link to={`/scans/${scanId}/pages/${item.snapshot_id}?tab=rendered`} className="block truncate underline" aria-label={`Open rendered evidence for ${item.static_final_url ?? item.page_title ?? `snapshot ${item.snapshot_id}`}`}>{item.page_title ?? "Untitled Page"}</Link><span className="block truncate font-mono text-xs text-stone-500">{item.static_final_url}</span></td>
-      <td className="px-3 py-2"><StatusBadge status={item.capture_state} /></td><td className="px-3 py-2">{item.navigation_http_status ?? "Not available"}</td><td className="px-3 py-2">{item.duration_ms == null ? "Not available" : `${item.duration_ms} ms`}</td>
+      <td className="px-3 py-2"><StatusBadge status={item.capture_state} label={renderOutcomeLabel(item)} />{item.error_message ? <span className="mt-1 block max-w-xs text-xs text-stone-500">{item.error_message}</span> : null}</td><td className="px-3 py-2">{item.navigation_http_status == null ? "Not attempted" : `HTTP ${item.navigation_http_status}`}</td><td className="px-3 py-2">{item.duration_ms == null ? "Not available" : `${item.duration_ms} ms`}</td>
       <td className="px-3 py-2">{item.warning_count}<span className="block text-xs text-stone-500">{item.page_error_count} Page errors</span></td>
       <td className="px-3 py-2 text-xs">{[item.has_viewport_screenshot ? "Viewport" : "", item.has_full_page_screenshot ? "Full page" : "", item.has_rendered_dom ? "DOM" : ""].filter(Boolean).join(", ") || "No artifacts"}<span className="block text-stone-500">{item.blocked_request_count} blocked, {item.console_message_count} console</span></td>
       <td className="whitespace-nowrap px-3 py-2">{formatDate(item.finished_at)}</td>
     </tr>)}</tbody></table></div> : null}
     {controls}
   </div>;
+}
+
+function RenderedOutcomeSummary({ summary }: { summary: RenderedObservationIndexList["summary"] }) {
+  const throttled = summary.rate_limited + summary.skipped_after_throttling;
+  return <>
+    {throttled ? <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950" role="alert"><span className="font-medium">Browser rendering was rate limited.</span> HTTP error responses did not receive normal Page artifacts.{summary.skipped_after_throttling ? ` ${summary.skipped_after_throttling} Pages were not attempted after host throttling.` : ""}</div> : null}
+    <section aria-label="Rendered outcome summary" className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+      <SummaryMetric label="Successful renders" value={summary.successful_renders} />
+      <SummaryMetric label="No-content responses" value={summary.no_content_responses} />
+      <SummaryMetric label="HTTP redirects" value={summary.redirect_responses} />
+      <SummaryMetric label="HTTP errors (not 429)" value={summary.http_error_responses} />
+      <SummaryMetric label="Rate limited" value={summary.rate_limited} />
+      <SummaryMetric label="Skipped after throttling" value={summary.skipped_after_throttling} />
+      <SummaryMetric label="Technical failures" value={summary.technical_failures} />
+      <SummaryMetric label="Artifacts retained" value={summary.artifacts_retained} />
+    </section>
+  </>;
+}
+
+function SummaryMetric({ label, value }: { label: string; value: number }) {
+  return <div className="border-l-2 border-stone-300 px-3 py-1"><div className="text-xs font-medium uppercase text-stone-500">{label}</div><div className="mt-1 text-xl font-semibold text-stone-900">{value}</div></div>;
 }
 
 function RenderedEmptyState({ renderMode, filtered }: { renderMode: string; filtered: boolean }) {

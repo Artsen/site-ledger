@@ -501,6 +501,43 @@ describe("scan results workflow", () => {
     await waitFor(() => expect(api.listScanRenderedObservations).toHaveBeenLastCalledWith("1", expect.stringContaining("capture_state=completed_with_warnings")));
   });
 
+  it("distinguishes all rendered operational outcome buckets", async () => {
+    api.getScan.mockResolvedValue({ ...scanFixture, scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" } });
+    const renderedItem = (overrides: Record<string, unknown>) => ({
+      id: 31, snapshot_id: 9, resource_id: 2, capture_state: "completed", static_final_url: "https://example.com/ok", browser_final_url: "https://example.com/ok", page_title: "Rendered Page", static_http_status: 200, navigation_http_status: 200, error_type: null, error_message: null, duration_ms: 450, warning_count: 0, page_error_count: 0, blocked_request_count: 0, console_message_count: 0, has_viewport_screenshot: true, has_full_page_screenshot: true, has_rendered_dom: true, finished_at: "2026-08-06T01:00:01Z", ...overrides
+    });
+    api.listScanRenderedObservations.mockResolvedValue({
+      items: [
+        renderedItem({}),
+        renderedItem({ id: 32, snapshot_id: 10, static_final_url: "https://example.com/missing", navigation_http_status: 404, capture_state: "failed", error_type: "navigation_http_client_error", error_message: "Main-document navigation returned HTTP 404.", has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false }),
+        renderedItem({ id: 33, snapshot_id: 11, static_final_url: "https://example.com/limited", navigation_http_status: 429, capture_state: "failed", error_type: "navigation_rate_limited", error_message: "Main-document navigation was rate limited (HTTP 429).", has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false }),
+        renderedItem({ id: 34, snapshot_id: 12, static_final_url: "https://example.com/skipped", navigation_http_status: null, capture_state: "skipped", error_type: "host_rate_limit_circuit_open", error_message: "Browser capture was not attempted because repeated rate-limit responses opened the host render circuit.", has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false }),
+        renderedItem({ id: 35, snapshot_id: 13, static_final_url: "https://example.com/no-content", navigation_http_status: 204, capture_state: "failed", error_type: "navigation_no_content", error_message: "Main-document navigation returned HTTP 204 with no Page content.", has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false }),
+        renderedItem({ id: 36, snapshot_id: 14, static_final_url: "https://example.com/redirect", navigation_http_status: 302, capture_state: "failed", error_type: "navigation_http_redirect", error_message: "Main-document navigation ended at an unfollowed HTTP 302 response.", has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false })
+      ],
+      total: 6,
+      limit: 50,
+      offset: 0,
+      summary: { successful_renders: 1, no_content_responses: 1, redirect_responses: 1, http_error_responses: 1, rate_limited: 1, skipped_after_throttling: 1, technical_failures: 0, artifacts_retained: 3 }
+    });
+
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=rendered");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Browser rendering was rate limited");
+    expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("Successful renders1");
+    expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("No-content responses1");
+    expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("HTTP redirects1");
+    expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("HTTP errors (not 429)1");
+    expect(screen.getByText("HTTP error")).toBeInTheDocument();
+    expect(screen.getByText("Rate limited", { selector: "span" })).toBeInTheDocument();
+    expect(screen.getByText("No Page content")).toBeInTheDocument();
+    expect(screen.getByText("HTTP redirect")).toBeInTheDocument();
+    expect(screen.getByText("Not attempted - host throttled")).toBeInTheDocument();
+    expect(screen.getAllByText("No artifacts")).toHaveLength(5);
+    expect(screen.getByText("HTTP 404")).toBeInTheDocument();
+    expect(screen.getByText("HTTP 429")).toBeInTheDocument();
+  });
+
   it("distinguishes retry attempts from final failed pages", async () => {
     api.getScan.mockResolvedValue({
       ...scanFixture,

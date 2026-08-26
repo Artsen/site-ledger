@@ -201,6 +201,7 @@ def test_scan_rendered_index_is_filterable_and_exposes_artifact_flags(db_session
     db_session.commit()
     observation = create_observation(db_session, snapshot, ScopeConfig())
     observation.capture_state = "completed_with_warnings"
+    observation.navigation_http_status = 200
     observation.warning_count = 2
     observation.page_error_count = 1
     observation.duration_ms = 125
@@ -231,9 +232,77 @@ def test_scan_rendered_index_is_filterable_and_exposes_artifact_flags(db_session
         )
     finally:
         event.remove(db_session.bind, "before_cursor_execute", before_cursor_execute)
-    assert len(statements) == 2
+    assert len(statements) == 4
     assert result.total == 1
     assert result.items[0].snapshot_id == snapshot.id
     assert result.items[0].resource_id == resource.id
     assert result.items[0].has_viewport_screenshot
     assert not result.items[0].has_full_page_screenshot
+    assert result.summary.successful_renders == 1
+    assert result.summary.http_error_responses == 0
+    assert result.summary.artifacts_retained == 1
+
+
+def test_rendered_summary_classifies_historical_and_current_outcomes(db_session) -> None:
+    scan = Scan(starting_url="https://example.com/", status="completed", scope_config={})
+    db_session.add(scan)
+    db_session.flush()
+
+    def add_observation(
+        suffix: str, state: str, status: int | None, error_type: str | None, renderer_version: str
+    ) -> None:
+        url = f"https://example.com/{suffix}"
+        resource = WebResource(
+            resource_type="page",
+            normalized_url=url,
+            scheme="https",
+            host="example.com",
+            path=f"/{suffix}",
+            query="",
+        )
+        db_session.add(resource)
+        db_session.flush()
+        snapshot = ResourceSnapshot(
+            scan_id=scan.id,
+            resource_id=resource.id,
+            requested_url=url,
+            final_url=url,
+            crawl_depth=0,
+            fetched_at=datetime.now(UTC),
+            fetch_state="fetched",
+        )
+        db_session.add(snapshot)
+        db_session.flush()
+        observation = create_observation(db_session, snapshot, ScopeConfig())
+        observation.capture_state = state
+        observation.navigation_http_status = status
+        observation.error_type = error_type
+        observation.renderer_version = renderer_version
+        db_session.commit()
+
+    add_observation("ok", "completed", 200, None, "2")
+    add_observation("no-content", "failed", 204, "navigation_no_content", "2")
+    add_observation("redirect", "failed", 302, "navigation_http_redirect", "2")
+    add_observation("legacy-rate-limit", "completed", 429, None, "1")
+    add_observation("missing", "failed", 404, "navigation_http_client_error", "2")
+    add_observation("not-attempted", "skipped", None, "host_rate_limit_circuit_open", "2")
+    add_observation("browser-failure", "failed", 200, "callback_failure", "2")
+
+    summary = list_scan_rendered_observations(db_session, scan.id).summary
+    assert summary.successful_renders == 1
+    assert summary.no_content_responses == 1
+    assert summary.redirect_responses == 1
+    assert summary.http_error_responses == 1
+    assert summary.rate_limited == 1
+    assert summary.skipped_after_throttling == 1
+    assert summary.technical_failures == 1
+    assert (
+        summary.successful_renders
+        + summary.no_content_responses
+        + summary.redirect_responses
+        + summary.http_error_responses
+        + summary.rate_limited
+        + summary.skipped_after_throttling
+        + summary.technical_failures
+        == 7
+    )
