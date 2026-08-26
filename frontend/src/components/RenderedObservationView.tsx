@@ -12,6 +12,7 @@ import { StatusBadge } from "./ui/StatusBadge";
 import { SortableTableHeader } from "./ui/SortableTableHeader";
 import { useUrlPagination } from "../utils/useUrlPagination";
 import { useTableSort } from "../utils/useTableSort";
+import { renderOutcomeLabel } from "../utils/renderedOutcome";
 
 type Tab = "overview" | "screenshots" | "dom" | "network" | "console" | "errors";
 
@@ -32,9 +33,9 @@ export function RenderedObservationView({ observation }: { observation: Rendered
   return <div className="space-y-4">
     <div className="flex flex-wrap gap-2 border-b border-stone-200 pb-3">{tabs.map(([id, label]) => <button key={id} type="button" onClick={() => setTab(id)} className={`rounded-md px-3 py-2 text-sm ${tab === id ? "bg-neutral-900 text-white" : "bg-stone-100 text-stone-700"}`}>{label}</button>)}</div>
     {tab === "overview" ? <DefinitionList items={[
-      { label: "Capture state", value: <StatusBadge status={observation.capture_state} /> },
+      { label: "Capture state", value: <StatusBadge status={observation.capture_state} label={renderOutcomeLabel(observation)} /> },
       { label: "Requested URL", value: observation.requested_url }, { label: "Final URL", value: observation.final_url },
-      { label: "Navigation status", value: observation.navigation_http_status }, { label: "Document title", value: observation.document_title },
+      { label: "Navigation status", value: observation.navigation_http_status == null ? "Not attempted" : `HTTP ${observation.navigation_http_status}` }, { label: "Document title", value: observation.document_title },
       { label: "Captured", value: formatDate(observation.finished_at) }, { label: "Duration", value: observation.duration_ms == null ? null : `${observation.duration_ms} ms` },
       { label: "Browser", value: `${observation.browser_engine} ${observation.browser_version ?? ""}` }, { label: "Viewport", value: `${observation.viewport_width} x ${observation.viewport_height} @ ${observation.device_scale_factor}` },
       { label: "Readiness", value: observation.readiness_state }, { label: "Blocked requests", value: observation.blocked_request_count },

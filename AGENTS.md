@@ -254,6 +254,15 @@ Treat crawling and source refresh as SSRF boundaries:
   response safety.
 - Browser byte limits use observed transfer, not declared Content-Length alone. Bump browser policy
   or capture-schema provenance when their semantics change.
+- Treat browser technical success and requested-Page success as separate outcomes. Classify the
+  final main-document response before collecting normal Page screenshots or DOM. HTTP errors retain
+  exact status and bounded diagnostics but receive no normal Page artifacts by default.
+- Rate limiting is one HTTP non-success subtype. Repeated explicit throttling must use a bounded,
+  host-scoped policy; circuit-skipped targets must be retained as not attempted and must not receive
+  copied status, network, or artifact evidence. Browser failures never invalidate valid static Scan
+  evidence.
+- Renderer semantic changes require versioned new observations. Never rewrite historical rendered
+  observations or counters to apply a newer outcome policy.
 - Never claim Chromium DNS pinning unless the actual browser connection is constrained. Keep
   hostile-network cases in focused lower-level tests rather than the Golden Path.
 - Enforce timeout, redirect, response-size, Page, depth, and source-expansion limits.

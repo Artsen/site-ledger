@@ -133,6 +133,8 @@ class RenderedObservationIndexItem(BaseModel):
     capture_state: str
     static_http_status: int | None
     navigation_http_status: int | None
+    error_type: str | None
+    error_message: str | None
     duration_ms: int | None
     warning_count: int
     blocked_request_count: int
@@ -144,8 +146,20 @@ class RenderedObservationIndexItem(BaseModel):
     finished_at: datetime | None
 
 
+class RenderedObservationSummary(BaseModel):
+    successful_renders: int
+    no_content_responses: int
+    redirect_responses: int
+    http_error_responses: int
+    rate_limited: int
+    skipped_after_throttling: int
+    technical_failures: int
+    artifacts_retained: int
+
+
 class RenderedObservationIndexList(BaseModel):
     items: list[RenderedObservationIndexItem]
     total: int
     limit: int
     offset: int
+    summary: RenderedObservationSummary

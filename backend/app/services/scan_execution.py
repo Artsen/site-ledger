@@ -10,6 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.browser.capture import BrowserRenderer, CaptureResult
 from app.browser.config import validate_render_config
+from app.browser.outcomes import (
+    HostRateLimitCircuitBreaker,
+    host_rate_limit_skip_result,
+    is_successful_page_capture,
+    main_navigation_retry_after,
+)
 from app.crawler.config import ScopeConfigValidationError, validate_starting_url_length
 from app.crawler.scope import ScopeConfig
 from app.crawler.static_crawler import StaticPageCrawler
@@ -119,6 +125,7 @@ class ScanExecutionCoordinator:
             self.db.commit()
             rendered_failures = 0
             if renderer:
+                rate_limit_breaker = HostRateLimitCircuitBreaker()
                 for index, snapshot in enumerate(selected, 1):
                     if self.context.check_cancelled():
                         scan.status = "cancelled"
@@ -126,19 +133,22 @@ class ScanExecutionCoordinator:
                             scan, "cancelled_by_user", static.had_errors, rendered_failures
                         )
                     observation = create_observation(self.db, snapshot, config)
-                    scan.rendered_attempted_count += 1
-                    self.db.commit()
+                    target_url = snapshot.final_url or snapshot.requested_url
                     self.context.progress(
                         phase="rendering",
-                        current_operation=snapshot.final_url or snapshot.requested_url,
+                        current_operation=target_url,
                         current=index,
                         total=len(selected),
                         unit="pages",
                         counters=self._render_counters(scan),
                     )
-                    result = await self._bounded_capture(
-                        renderer, snapshot.final_url or snapshot.requested_url, config
-                    )
+                    result: CaptureResult | None
+                    if rate_limit_breaker.is_open(target_url):
+                        result = host_rate_limit_skip_result()
+                    else:
+                        scan.rendered_attempted_count += 1
+                        self.db.commit()
+                        result = await self._bounded_capture(renderer, target_url, config)
                     if result is None:
                         observation.capture_state = "cancelled"
                         observation.error_type = "cancelled"
@@ -151,15 +161,24 @@ class ScanExecutionCoordinator:
                     saved = persist_capture(
                         self.db, observation.id, result, renderer, self.artifact_store
                     )
+                    rate_limit_breaker.record(
+                        target_url,
+                        status=saved.navigation_http_status,
+                        error_type=saved.error_type,
+                        retry_after=main_navigation_retry_after(result.network),
+                    )
                     scan.rendered_blocked_request_count += saved.blocked_request_count
                     scan.rendered_artifact_count += len(saved.artifacts)
-                    if saved.capture_state == "failed":
-                        scan.rendered_failed_count += 1
+                    if is_successful_page_capture(
+                        saved.capture_state, saved.navigation_http_status
+                    ):
+                        scan.rendered_completed_count += 1
+                    elif saved.capture_state == "skipped":
+                        scan.rendered_skipped_count += 1
                         rendered_failures += 1
                     else:
-                        scan.rendered_completed_count += 1
-                        if saved.capture_state == "completed_with_warnings" and saved.error_type:
-                            rendered_failures += 1
+                        scan.rendered_failed_count += 1
+                        rendered_failures += 1
                     self.db.commit()
             scan.status = (
                 "completed_with_errors" if static.had_errors or rendered_failures else "completed"

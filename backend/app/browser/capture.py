@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.browser.config import BROWSER_POLICY_VERSION, CAPTURE_SCHEMA_VERSION, RENDERER_VERSION
+from app.browser.outcomes import classify_main_navigation
 from app.browser.privacy import redact_text, redact_url, sanitize_headers
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.security import validate_public_destination
@@ -171,6 +172,7 @@ class BrowserRenderer:
         page: Any = None
         request_rows: dict[int, dict[str, Any]] = {}
         main_navigation_count = 0
+        main_navigation_status: int | None = None
         network_sequence = 0
         byte_budget = ObservedByteBudget(
             self.config.render_max_resource_bytes,
@@ -254,9 +256,12 @@ class BrowserRenderer:
                 await route.continue_()
 
         async def response_seen(response: Any) -> None:
+            nonlocal main_navigation_status
             row = request_rows.get(id(response.request))
             if not row:
                 return
+            if row["is_main_navigation"]:
+                main_navigation_status = response.status
             headers = await response.all_headers()
             row.update(
                 response_status=response.status,
@@ -431,32 +436,37 @@ class BrowserRenderer:
             )
             result.status = response.status if response else None
             result.readiness_state = "domcontentloaded"
-            try:
-                await page.wait_for_load_state(
-                    "load", timeout=self.config.render_load_timeout_seconds * 1000
-                )
-                result.load_event_reached = True
-                result.readiness_state = "load"
-            except PlaywrightTimeoutError:
-                warning(
-                    "load_event_timeout",
-                    "The load event did not arrive within the configured timeout.",
-                )
-            try:
-                await page.evaluate("document.fonts ? document.fonts.ready : Promise.resolve()")
-                result.fonts_ready_reached = True
-            except Exception:
-                warning("fonts_readiness_failed", "Font readiness could not be confirmed.")
-            await page.wait_for_timeout(250)
             result.final_url = page.url
-            result.title = (await page.title())[:2000]
-            result.user_agent = (await page.evaluate("navigator.userAgent"))[:2000]
-            if after_ready is not None:
-                result.callback_result = await after_ready(page)
-            if capture_artifacts:
-                await self._capture_artifacts(page, result, warning)
-            if result.warnings or result.page_errors:
-                result.state = "completed_with_warnings"
+            outcome = classify_main_navigation(result.status)
+            result.state = outcome.capture_state
+            result.error_type = outcome.error_type
+            result.error_message = outcome.error_message
+            if outcome.artifacts_eligible:
+                result.title = (await page.title())[:2000]
+                result.user_agent = (await page.evaluate("navigator.userAgent"))[:2000]
+                try:
+                    await page.wait_for_load_state(
+                        "load", timeout=self.config.render_load_timeout_seconds * 1000
+                    )
+                    result.load_event_reached = True
+                    result.readiness_state = "load"
+                except PlaywrightTimeoutError:
+                    warning(
+                        "load_event_timeout",
+                        "The load event did not arrive within the configured timeout.",
+                    )
+                try:
+                    await page.evaluate("document.fonts ? document.fonts.ready : Promise.resolve()")
+                    result.fonts_ready_reached = True
+                except Exception:
+                    warning("fonts_readiness_failed", "Font readiness could not be confirmed.")
+                await page.wait_for_timeout(250)
+                if after_ready is not None:
+                    result.callback_result = await after_ready(page)
+                if capture_artifacts:
+                    await self._capture_artifacts(page, result, warning)
+                if result.warnings or result.page_errors:
+                    result.state = "completed_with_warnings"
         except asyncio.CancelledError:
             result.state = "cancelled"
             raise
@@ -467,12 +477,17 @@ class BrowserRenderer:
                 result.error_message = "Browser loading stopped after an observed byte limit."
                 if page and not page.is_closed():
                     result.final_url = page.url
+            elif main_navigation_status in {204, 205}:
+                result.status = main_navigation_status
+                result.final_url = page.url if page and not page.is_closed() else url
+                outcome = classify_main_navigation(main_navigation_status)
+                result.state = outcome.capture_state
+                result.error_type = outcome.error_type
+                result.error_message = outcome.error_message
             else:
                 result.state = "failed"
                 result.error_type = type(exc).__name__[:64]
                 result.error_message = redact_text(str(exc), 8000)
-            if capture_artifacts and page and not page.is_closed():
-                await self._capture_artifacts(page, result, warning)
         finally:
             try:
                 await context.unroute_all(behavior="ignoreErrors")

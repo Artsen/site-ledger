@@ -405,9 +405,13 @@ test("Site Ledger workflow supports creation, filtering, details, inbound links,
   await expect(page.getByRole("link", { name: "Pricing" })).toBeVisible();
 
   await page.goto("/scans/1?tab=rendered");
+  await expect(page.getByRole("alert")).toContainText("Browser rendering was rate limited");
+  await expect(page.getByText("HTTP error", { exact: true })).toBeVisible();
+  await expect(page.getByText("Rate limited", { exact: true }).last()).toBeVisible();
+  await expect(page.getByText("Not attempted - host throttled", { exact: true })).toBeVisible();
   await page.getByLabel("Rendered capture state").selectOption("completed_with_warnings");
   await expect(page).toHaveURL(/render_state=completed_with_warnings/);
-  await page.getByRole("link", { name: /Open rendered evidence/ }).click();
+  await page.getByRole("link", { name: /Open rendered evidence/ }).first().click();
   await expect(page).toHaveURL(/\/scans\/1\/pages\/9\?tab=rendered/);
 
   await page.goto("/scans/1");
@@ -1051,7 +1055,13 @@ async function mockApi(page: Page) {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [resourceItem({ resource_id: 21, normalized_url: "https://example.com/guide.pdf", path: "/guide.pdf", file_extension: "pdf", effective_kind: "document", effective_kind_label: "Document", observed: true, discovered_only: false, snapshot_id: 10, final_url: "https://example.com/guide.pdf", http_status: 200, normalized_mime_type: "application/pdf" }), resourceItem({ resource_id: 22, normalized_url: "https://example.com/hero.webp", path: "/hero.webp", file_extension: "webp", effective_kind: "image", effective_kind_label: "Image" })], total: 2, limit: 50, offset: 0 }) });
   });
   await page.route("**/api/scans/1/rendered-observations**", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ id: 31, snapshot_id: 9, capture_state: "completed_with_warnings", static_final_url: "https://example.com/pricing", page_title: "Pricing", navigation_http_status: 200, duration_ms: 450, warning_count: 1, page_error_count: 0, blocked_request_count: 0, console_message_count: 0, has_viewport_screenshot: true, has_full_page_screenshot: false, has_rendered_dom: true, started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z" }], total: 1, limit: 50, offset: 0 }) });
+    const rendered = (overrides: Record<string, unknown>) => ({ id: 31, snapshot_id: 9, resource_id: 2, capture_state: "completed_with_warnings", static_final_url: "https://example.com/pricing", browser_final_url: "https://example.com/pricing", page_title: "Pricing", static_http_status: 200, navigation_http_status: 200, error_type: null, error_message: null, duration_ms: 450, warning_count: 1, page_error_count: 0, blocked_request_count: 0, console_message_count: 0, has_viewport_screenshot: true, has_full_page_screenshot: false, has_rendered_dom: true, finished_at: "2026-08-06T01:00:01Z", ...overrides });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [
+      rendered({}),
+      rendered({ id: 32, snapshot_id: 10, navigation_http_status: 404, capture_state: "failed", error_type: "navigation_http_client_error", error_message: "Main-document navigation returned HTTP 404.", has_viewport_screenshot: false, has_rendered_dom: false }),
+      rendered({ id: 33, snapshot_id: 11, navigation_http_status: 429, capture_state: "failed", error_type: "navigation_rate_limited", error_message: "Main-document navigation was rate limited (HTTP 429).", has_viewport_screenshot: false, has_rendered_dom: false }),
+      rendered({ id: 34, snapshot_id: 12, navigation_http_status: null, capture_state: "skipped", error_type: "host_rate_limit_circuit_open", error_message: "Browser capture was not attempted because repeated rate-limit responses opened the host render circuit.", has_viewport_screenshot: false, has_rendered_dom: false })
+    ], total: 4, limit: 50, offset: 0, summary: { successful_renders: 1, no_content_responses: 0, redirect_responses: 0, http_error_responses: 1, rate_limited: 1, skipped_after_throttling: 1, technical_failures: 0, artifacts_retained: 2 } }) });
   });
 
   await page.route("**/api/notes/41", async (route) => {

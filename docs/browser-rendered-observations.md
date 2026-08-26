@@ -7,11 +7,24 @@ lowest crawl depth, earliest static observation time, then snapshot ID.
 
 Static HTTP evidence remains authoritative. Each selected ResourceSnapshot receives at most one
 RenderedObservation attempt. Rendered DOM is not parsed into static metadata or links and does not
-enter the graph. HTTP 404 and 500 documents can be successful browser observations when usable
-HTML was captured.
+enter the graph. Browser technical success is distinct from requested-Page success: normal Page
+screenshots and rendered DOM require a final artifact-eligible main-document HTTP 2xx response.
+HTTP 204 and 205 responses retain their exact status but are no-content outcomes, not successful
+rendered Pages, and receive no viewport screenshot, full-page screenshot, or rendered DOM. Final
+non-followed 3xx responses and explicit HTTP 4xx/5xx responses likewise retain exact status and
+bounded diagnostic, network, console, and Page-error evidence, but receive no normal Page
+artifacts. HTTP 200 soft challenge or block documents are not heuristically classified yet.
 
 Browser-rendered Pages are never retried. Bounded retry behavior applies only to eligible static
 requests while their Scan is still active; it never causes a second browser capture.
+
+Three consecutive explicit HTTP 429 outcomes open a render circuit for that requested host. Later
+selected targets on that host are persisted as `skipped` with
+`host_rate_limit_circuit_open`, no navigation status, network rows, or artifacts because Chromium
+was not called. A successful or non-429 response resets the consecutive count, and other hosts are
+independent. `Retry-After` is retained in the safe response-header evidence, parsed as a bounded
+signal, but never causes a worker sleep. Repeated HTTP 503 responses open the circuit only when
+each has a valid `Retry-After`; repeated 403, 404, or generic 5xx responses do not open it.
 
 ## Runtime
 
@@ -64,6 +77,23 @@ from hashes. Rendered DOM is served as `text/plain` and displayed as escaped Rea
 Capture states are `capturing`, `completed`, `completed_with_warnings`, `failed`, `skipped`,
 `cancelled`, and `interrupted`. Page-level browser failures make the Scan
 `completed_with_errors`; browser preflight failure before useful execution makes it `failed`.
+For new Scans, only `completed` or `completed_with_warnings` observations with artifact-eligible
+HTTP 2xx statuses increment `rendered_completed_count`; no-content responses and HTTP errors
+increment `rendered_failed_count`, while circuit-open targets increment `rendered_skipped_count`.
+Historical counters are not rewritten. The Rendered
+workspace derives its outcome summary from retained observations, so legacy renderer-v1 rows such
+as `completed` plus HTTP 429 are still presented truthfully.
+
+Rendered operational summary buckets are mutually exclusive: successful render, no-content
+response, HTTP redirect, HTTP error excluding 429, rate limited (HTTP 429), skipped after host
+throttling, and technical failure. Artifact count is separate evidence-retention information and is
+not an operational outcome. A final non-followed 3xx retains the row label `HTTP redirect` and is
+not a technical browser failure.
+
+Renderer version 2 names the response-first classification and artifact-eligibility semantics.
+Browser policy remains version 2 because request interception and browser safety policy did not
+change, and capture schema remains version 2 because persisted shapes did not change. Renderer-v1
+observations remain readable and are never rewritten.
 
 ## Scan Discoverability
 

@@ -99,6 +99,12 @@ Chromium uses separate route interception and observed CDP byte budgets. It inde
 destinations, so its residual DNS TOCTOU is not equivalent to the pinned static boundary. See
 [Network security](network-security.md).
 
+Browser navigation success does not by itself establish requested-Page success. The renderer
+classifies the final main-document HTTP outcome before collecting normal Page screenshots or DOM.
+HTTP errors retain bounded diagnostic evidence without Page artifacts. Repeated explicit 429
+outcomes open a host-scoped circuit so remaining selected targets are represented as not attempted
+without discarding valid static Scan evidence.
+
 ## Scope And URL Identity
 
 When a scan has no explicit allowed hosts, the exact starting hostname is derived. Sibling hosts

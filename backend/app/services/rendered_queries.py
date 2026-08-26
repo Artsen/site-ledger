@@ -6,7 +6,11 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import RenderedArtifact, RenderedObservation, ResourceSnapshot
-from app.schemas.rendered import RenderedObservationIndexItem, RenderedObservationIndexList
+from app.schemas.rendered import (
+    RenderedObservationIndexItem,
+    RenderedObservationIndexList,
+    RenderedObservationSummary,
+)
 
 
 def list_scan_rendered_observations(
@@ -93,6 +97,87 @@ def list_scan_rendered_observations(
         elif value is False:
             query = query.where(func.coalesce(artifact_column, 0) == 0)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    status = RenderedObservation.navigation_http_status
+    state = RenderedObservation.capture_state
+    error_type = RenderedObservation.error_type
+    is_skipped_after_throttling = func.coalesce(error_type == "host_rate_limit_circuit_open", False)
+    is_rate_limited = (status == 429) | func.coalesce(
+        error_type == "navigation_rate_limited", False
+    )
+    is_operational = ~is_skipped_after_throttling
+    is_technical_status = or_(
+        status.is_(None),
+        status < 200,
+        status >= 600,
+        status.between(200, 299) & status.notin_((204, 205)),
+    )
+    summary_values = db.execute(
+        select(
+            func.sum(
+                case(
+                    (
+                        state.in_(("completed", "completed_with_warnings"))
+                        & is_operational
+                        & ~is_rate_limited
+                        & status.between(200, 299)
+                        & status.notin_((204, 205)),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            func.sum(case((is_operational & status.in_((204, 205)), 1), else_=0)),
+            func.sum(case((is_operational & status.between(300, 399), 1), else_=0)),
+            func.sum(
+                case(
+                    (is_operational & ~is_rate_limited & status.between(400, 599), 1),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (
+                        is_operational
+                        & is_rate_limited
+                        & ~func.coalesce(status.in_((204, 205)), False)
+                        & ~func.coalesce(status.between(300, 399), False),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (is_skipped_after_throttling, 1),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (
+                        is_operational
+                        & ~is_rate_limited
+                        & state.in_(("failed", "cancelled", "interrupted"))
+                        & is_technical_status,
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+        )
+        .select_from(RenderedObservation)
+        .join(ResourceSnapshot)
+        .where(ResourceSnapshot.scan_id == scan_id)
+    ).one()
+    artifact_total = (
+        db.scalar(
+            select(func.count(RenderedArtifact.id))
+            .join(RenderedObservation)
+            .join(ResourceSnapshot)
+            .where(ResourceSnapshot.scan_id == scan_id)
+        )
+        or 0
+    )
     sort_map = {
         "page_url": func.coalesce(ResourceSnapshot.final_url, ResourceSnapshot.requested_url),
         "capture_state": RenderedObservation.capture_state,
@@ -123,6 +208,8 @@ def list_scan_rendered_observations(
                 capture_state=observation.capture_state,
                 static_http_status=snapshot.http_status,
                 navigation_http_status=observation.navigation_http_status,
+                error_type=observation.error_type,
+                error_message=observation.error_message,
                 duration_ms=observation.duration_ms,
                 warning_count=observation.warning_count,
                 blocked_request_count=observation.blocked_request_count,
@@ -138,4 +225,14 @@ def list_scan_rendered_observations(
         total=total,
         limit=limit,
         offset=offset,
+        summary=RenderedObservationSummary(
+            successful_renders=summary_values[0] or 0,
+            no_content_responses=summary_values[1] or 0,
+            redirect_responses=summary_values[2] or 0,
+            http_error_responses=summary_values[3] or 0,
+            rate_limited=summary_values[4] or 0,
+            skipped_after_throttling=summary_values[5] or 0,
+            technical_failures=summary_values[6] or 0,
+            artifacts_retained=artifact_total,
+        ),
     )
