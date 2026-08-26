@@ -18,6 +18,8 @@ from app.models import (
     StaticFetchAttempt,
     WebsiteProperty,
 )
+from app.schemas.page_workspaces import PageWorkspaceStateUpdate
+from app.services.site_pages import update_page_workspace_state
 from app.storage.content_store import LocalContentStore
 
 
@@ -109,6 +111,43 @@ async def test_saved_site_failed_observation_creates_site_page(db_session, tmp_p
     assert snapshot.fetch_state == "failed"
     assert site_page.resource_id == snapshot.resource_id
     assert site_page.website_property_id == site.id
+
+
+@pytest.mark.asyncio
+async def test_later_saved_site_scan_does_not_reactivate_suppressed_page(
+    db_session, tmp_path
+) -> None:
+    site = WebsiteProperty(
+        name="Fixture",
+        base_url="http://fixture.test/",
+        normalized_base_url="http://fixture.test/",
+        group_key="Other",
+        platform_key="Other",
+        ownership_key="Unknown",
+        scope_config={},
+        is_active=True,
+    )
+    db_session.add(site)
+    db_session.flush()
+    config = ScopeConfig(
+        allowed_host_patterns=["fixture.test"], allow_private_networks=True, max_pages=1
+    )
+    first = _scan(db_session, config, website_property_id=site.id)
+    crawler = StaticPageCrawler(
+        db_session, LocalContentStore(tmp_path), transport=fixture_transport()
+    )
+    await crawler.run(first)
+    site_page = db_session.query(SitePage).one()
+    update_page_workspace_state(
+        db_session, site_page, PageWorkspaceStateUpdate(workspace_state="suppressed")
+    )
+
+    second = _scan(db_session, config, website_property_id=site.id)
+    await crawler.run(second)
+
+    assert db_session.query(ResourceSnapshot).count() == 2
+    assert db_session.query(SitePage).count() == 1
+    assert db_session.query(SitePage).one().workspace_state == "suppressed"
 
 
 @pytest.mark.asyncio

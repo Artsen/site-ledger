@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
   createPageNote,
   addPageCategoryExclusion,
+  bulkDeletePages,
   getPageCategoryProvenance,
   getInboundLinks,
   getOutgoingLinks,
@@ -17,6 +18,7 @@ import {
   preparePageStructuredContent,
   removePageCategoryExclusion,
   updatePageMetadata,
+  updatePageWorkspaceState,
 } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
 import { StructuredContentView } from "../components/StructuredContentView";
@@ -33,6 +35,7 @@ import { DefinitionList } from "../components/ui/DefinitionList";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { LoadingBlock } from "../components/ui/Loading";
+import { LifecycleAction } from "../components/ui/LifecycleAction";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { SortableTableHeader } from "../components/ui/SortableTableHeader";
@@ -60,8 +63,10 @@ const WORKFLOWS = [
 
 export function PersistentPageDetailPage() {
   const { siteId = "", resourceId = "" } = useParams();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get("tab") ?? "overview";
+  const queryClient = useQueryClient();
   const page = useQuery({
     queryKey: ["site-page", siteId, resourceId],
     queryFn: () => getSitePage(siteId, resourceId),
@@ -121,6 +126,30 @@ export function PersistentPageDetailPage() {
             </div>
           </div>
           <div className="flex gap-2">
+            <LifecycleAction
+              label={value.workspace_state === "suppressed" ? "Restore to Site Pages" : "Remove from Site Pages"}
+              title={value.workspace_state === "suppressed" ? "Restore this Page to Site Pages?" : "Remove this Page from Site Pages?"}
+              description={value.workspace_state === "suppressed" ? "The Page will return to the active workspace with its retained organization and evidence." : "Historical Scan evidence is retained, and you can restore the Page later."}
+              confirmLabel={value.workspace_state === "suppressed" ? "Restore to Site Pages" : "Remove from Site Pages"}
+              restore={value.workspace_state === "suppressed"}
+              action={async () => {
+                await updatePageWorkspaceState(siteId, resourceId, value.workspace_state === "suppressed" ? "active" : "suppressed");
+                await queryClient.invalidateQueries({ queryKey: ["site-page", siteId, resourceId] });
+                await queryClient.invalidateQueries({ queryKey: ["site-pages", siteId] });
+              }}
+            />
+            <LifecycleAction
+              label="Delete Page"
+              title="Delete this Page workspace?"
+              description="Page notes, categories, owner, and workflow organization will be deleted. Historical Scan evidence will remain. If a later Scan observes the URL again, Site Ledger can create a fresh Page workspace."
+              confirmLabel="Delete Page workspace"
+              variant="danger"
+              action={async () => {
+                await bulkDeletePages(siteId, [Number(resourceId)]);
+                await queryClient.invalidateQueries({ queryKey: ["site-pages", siteId] });
+                navigate(`/sites/${siteId}/pages`);
+              }}
+            />
             <a
               href={value.normalized_url}
               target="_blank"
@@ -133,6 +162,11 @@ export function PersistentPageDetailPage() {
           </div>
         </div>
       </header>
+      {value.workspace_state === "suppressed" ? (
+        <div className="mb-5 border-y border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <strong>Removed from Site Pages.</strong> Historical observations and Page organization remain available.
+        </div>
+      ) : null}
       <Tabs
         tabs={[
           { id: "overview", label: "Overview" },

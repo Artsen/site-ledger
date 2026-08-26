@@ -470,6 +470,26 @@ Do not disable checks or weaken tests to force passing results.
   best-effort file removal; report cleanup failures without resurrecting evidence.
 - Full Site deletion must apply the same reference-aware observability cleanup and must not leak
   unreferenced payload records or files.
+- Never delete immutable Scan evidence to change mutable Site membership. `SitePage` workspace
+  state is distinct from workflow status, and later observations must not reactivate a suppressed
+  Page.
+- URL Inventory is Source truth plus Site-scoped policy. Suppression must preserve Source
+  declarations, survive refresh, retain multi-source grouping, and affect only Inventory-derived
+  seeding rather than ordinary crawler discovery.
+- Manual URL removal retains its `UrlSourceEntry` provenance as non-current. Page and Inventory
+  suppression must leave historical evidence queryable, and future Findings must explicitly honor
+  active or suppressed subject policy.
+- Remove and Delete are distinct lifecycle operations. Page Remove preserves `SitePage`
+  organization and later observations must not reactivate it; Page Delete may destroy mutable
+  `SitePage` organization but never Scan evidence.
+- Inventory Remove is persistent Site suppression policy. Inventory Delete deactivates all current
+  contributors for the grouped identity, clears suppression, and must never physically delete
+  `UrlSourceEntry` or break historical `ScanSeedOrigin` source-entry references.
+- Source refresh may reactivate Inventory-deleted entries, preferably reusing their identity, but
+  rediscovery must not reactivate suppressed entries. UI Removed views mean suppressed and
+  restorable, not deleted.
+- Grouped Inventory bulk semantics are derived and validated server-side from representative entry
+  IDs; clients do not enumerate contributors as authority.
 
 ## Pull Request Format
 

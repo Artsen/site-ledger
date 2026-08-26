@@ -44,6 +44,7 @@ def list_site_pages(
     unassigned_owner: bool = False,
     has_notes: bool | None = None,
     min_observations: int | None = None,
+    workspace_state: Literal["active", "suppressed", "all"] = "active",
     sort: Literal[
         "url",
         "observations",
@@ -73,6 +74,7 @@ def list_site_pages(
         unassigned_owner=unassigned_owner,
         has_notes=has_notes,
         min_observations=min_observations,
+        workspace_state=workspace_state,
     )
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     category_count = (
@@ -323,6 +325,8 @@ def _apply_page_filters(query: Select[Any], **filters: Any) -> Select[Any]:
             func.coalesce(query.selected_columns.observation_count, 0)
             >= filters["min_observations"]
         )
+    if filters["workspace_state"] != "all":
+        query = query.where(SitePage.workspace_state == filters["workspace_state"])
     return query
 
 
@@ -374,6 +378,8 @@ def _page_list_from_rows(
                 query=resource.query,
                 owner_label=site_page.owner_label,
                 workflow_status=site_page.workflow_status,
+                workspace_state=site_page.workspace_state,
+                suppressed_at=site_page.suppressed_at,
                 categories=assigned,
                 category_count=len(assigned),
                 note_count=note_counts.get(site_page.id, 0),

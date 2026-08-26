@@ -120,6 +120,28 @@ def test_preview_is_non_mutating_and_matches_reconciliation(db_session: Session)
     }
 
 
+def test_rule_preview_excludes_suppressed_pages(db_session: Session) -> None:
+    site, pages = _site_with_pages(db_session, ["/blog/active", "/blog/removed"])
+    pages[1].workspace_state = "suppressed"
+    pages[1].suppressed_at = datetime.now(UTC)
+    category = create_category(db_session, site.id, PageCategoryCreate(name="Blog"))
+    assert category is not None
+    db_session.commit()
+
+    preview = preview_rule(
+        db_session,
+        site.id,
+        CategoryRulePreviewRequest(
+            category_id=category.id,
+            conditions=[
+                CategoryRuleConditionPayload(target="path", operator="starts_with", value="/blog/")
+            ],
+        ),
+    )
+    assert preview is not None
+    assert (preview.total_pages_evaluated, preview.matching_pages) == (1, 1)
+
+
 def test_multiple_rule_manual_and_exclusion_support_semantics(db_session: Session) -> None:
     site, pages = _site_with_pages(db_session, ["/blog/article"])
     page = pages[0]

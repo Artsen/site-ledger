@@ -225,6 +225,17 @@ def upsert_source_entry(
         if normalized_url
         else None
     )
+    if existing is None and normalized_url is None:
+        existing = db.scalar(
+            select(UrlSourceEntry)
+            .where(
+                UrlSourceEntry.url_source_id == source.id,
+                UrlSourceEntry.normalized_url.is_(None),
+                UrlSourceEntry.raw_url == raw_url,
+            )
+            .order_by(UrlSourceEntry.id)
+            .limit(1)
+        )
     now = datetime.now(UTC)
     if existing:
         existing.raw_url = raw_url

@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import threading
 import time
@@ -64,6 +65,7 @@ class _BudgetHandler(BaseHTTPRequestHandler):
                   for (let i = 0; i < 20; i++) {
                     try { await fetch('/part?i=' + i); } catch (_) {}
                   }
+                  document.body.dataset.aggregateDone = 'true';
                 })();
                 </script>
             """
@@ -160,6 +162,29 @@ async def test_chromium_under_budget_capture_retains_artifacts(budget_server: st
 
 
 @pytest.mark.asyncio
+async def test_chromium_cancels_capture_with_route_callback_in_flight(
+    budget_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route_entered = asyncio.Event()
+
+    async def stalled_destination_validation(*_args: object) -> None:
+        route_entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        "app.browser.capture.validate_public_destination",
+        stalled_destination_validation,
+    )
+    url = f"{budget_server}/under"
+    async with BrowserRenderer(_config(), url) as renderer:
+        capture = asyncio.create_task(renderer.capture(url))
+        await asyncio.wait_for(route_entered.wait(), timeout=5)
+        capture.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(capture, timeout=5)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("page", "stream"),
     [
@@ -185,8 +210,12 @@ async def test_chromium_stops_oversized_streams(budget_server: str, page: str, s
 async def test_chromium_total_budget_blocks_later_requests(budget_server: str) -> None:
     url = f"{budget_server}/aggregate"
     config = _config(resource_limit=100_000, total_limit=1_000_000)
+
+    async def wait_for_aggregate(page: object) -> None:
+        await page.wait_for_function("document.body.dataset.aggregateDone === 'true'")
+
     async with BrowserRenderer(config, url) as renderer:
-        result = await renderer.capture(url)
+        result = await renderer.capture(url, after_ready=wait_for_aggregate)
     warning_types = {item["type"] for item in result.warnings}
     assert "total_network_budget_exceeded" in warning_types
     assert result.total_network_bytes > 1_000_000

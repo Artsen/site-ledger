@@ -9,11 +9,18 @@ import {
 
 import {
   addManualUrls,
+  bulkCreateInventorySuppressions,
+  bulkDeleteInventoryEntries,
+  bulkDeletePages,
+  bulkRefreshSources,
+  bulkRestoreInventorySuppressions,
+  bulkPageWorkspaceState,
   bulkPageCategories,
   bulkPageMetadata,
   cancelSourceRefresh,
   createSource,
   createAiDocumentSource,
+  createInventorySuppression,
   createPageCategory,
   createSiteNote,
   deletePageCategory,
@@ -31,7 +38,9 @@ import {
   listSitePages,
   listSources,
   refreshSource,
+  removeManualSourceEntry,
   updatePageCategory,
+  updatePageWorkspaceState,
   updateSite,
 } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
@@ -48,6 +57,7 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
 import { LoadingBlock } from "../components/ui/Loading";
+import { LifecycleAction } from "../components/ui/LifecycleAction";
 import { PaginatedTableControls } from "../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { SortableTableHeader, type SortDirection } from "../components/ui/SortableTableHeader";
@@ -237,6 +247,7 @@ export function SitePagesSection({ site }: { site: Site }) {
   const [bulkCategory, setBulkCategory] = useState("");
   const [bulkOwner, setBulkOwner] = useState("");
   const [bulkWorkflow, setBulkWorkflow] = useState("");
+  const workspaceState = searchParams.get("workspace_state") ?? "active";
   const query = new URLSearchParams();
   for (const key of [
     "search",
@@ -250,21 +261,27 @@ export function SitePagesSection({ site }: { site: Site }) {
     "has_notes",
     "sort",
     "direction",
+    "workspace_state",
   ]) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
   query.set("limit", String(pagination.limit));
   query.set("offset", String(pagination.offset));
+  const queryIdentity = query.toString();
   const pages = useQuery({
-    queryKey: ["site-pages", String(site.id), query.toString()],
-    queryFn: () => listSitePages(String(site.id), `?${query.toString()}`),
+    queryKey: ["site-pages", String(site.id), queryIdentity],
+    queryFn: () => listSitePages(String(site.id), `?${queryIdentity}`),
   });
   const categories = useQuery({
     queryKey: ["page-categories", String(site.id)],
     queryFn: () =>
       listPageCategories(String(site.id), "?active_state=all&limit=200"),
   });
+  const selectedPages = pages.data?.items.filter((page) => selected.includes(page.resource_id)) ?? [];
+  const selectedActivePageIds = selectedPages.filter((page) => page.workspace_state === "active").map((page) => page.resource_id);
+  const selectedRemovedPageIds = selectedPages.filter((page) => page.workspace_state === "suppressed").map((page) => page.resource_id);
+  useEffect(() => setSelected([]), [queryIdentity]);
   useEffect(() => pagination.ensureValid(pages.data?.total), [pages.data?.total, pagination]);
   const controls = pages.data ? <PaginatedTableControls total={pages.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="Page" isLoading={pages.isFetching && !pages.isLoading} /> : null;
   const bulk = useMutation({
@@ -293,6 +310,19 @@ export function SitePagesSection({ site }: { site: Site }) {
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-4">
+        <select
+          aria-label="Site Page state"
+          value={searchParams.get("workspace_state") ?? "active"}
+          onChange={(event) => {
+            setSelected([]);
+            setSearchParam(setSearchParams, "workspace_state", event.target.value === "active" ? "" : event.target.value);
+          }}
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        >
+          <option value="active">Active</option>
+          <option value="suppressed">Removed</option>
+          <option value="all">All</option>
+        </select>
         <input
           aria-label="Search site pages"
           value={searchParams.get("search") ?? ""}
@@ -443,6 +473,45 @@ export function SitePagesSection({ site }: { site: Site }) {
           >
             Set workflow
           </Button>
+          {selectedActivePageIds.length ? (
+            <LifecycleAction
+              label={workspaceState === "all" ? `Remove ${plural(selectedActivePageIds.length, "active Page")}` : "Remove selected"}
+              title="Remove selected Pages from Site Pages?"
+              description="Their Page organization and historical Scan evidence will be retained. You can restore them later."
+              confirmLabel="Remove from Site Pages"
+              action={async () => {
+                await bulkPageWorkspaceState(String(site.id), selectedActivePageIds, "suppressed");
+                await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+                setSelected([]);
+              }}
+            />
+          ) : null}
+          {selectedRemovedPageIds.length ? (
+            <LifecycleAction
+              label={workspaceState === "all" ? `Restore ${plural(selectedRemovedPageIds.length, "removed Page")}` : "Restore selected"}
+              title="Restore selected Pages to Site Pages?"
+              description="These Pages will return to the active Site Pages workspace with their existing organization intact."
+              confirmLabel="Restore to Site Pages"
+              restore
+              action={async () => {
+                await bulkPageWorkspaceState(String(site.id), selectedRemovedPageIds, "active");
+                await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+                setSelected([]);
+              }}
+            />
+          ) : null}
+          <LifecycleAction
+            label={workspaceState === "all" ? `Delete ${plural(selected.length, "selected Page")}` : "Delete selected"}
+            title="Delete selected Page workspaces?"
+            description="Page notes, categories, owner, and workflow organization will be deleted. Historical Scan evidence will remain. If a later Scan observes the URLs again, Site Ledger can create fresh Page workspaces."
+            confirmLabel="Delete Page workspaces"
+            variant="danger"
+            action={async () => {
+              await bulkDeletePages(String(site.id), selected);
+              await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+              setSelected([]);
+            }}
+          />
         </div>
       ) : null}
       {bulk.error ? (
@@ -462,6 +531,10 @@ export function SitePagesSection({ site }: { site: Site }) {
           activeSort={searchParams.get("sort")}
           direction={searchParams.get("direction") as SortDirection | null}
           onSort={(column, direction) => setSitePageSort(setSearchParams, column, direction)}
+          onStateChanged={async (resourceId) => {
+            await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+            await queryClient.invalidateQueries({ queryKey: ["site-page", String(site.id), String(resourceId)] });
+          }}
         />
       ) : !pages.isLoading ? (
         <EmptyState
@@ -470,6 +543,7 @@ export function SitePagesSection({ site }: { site: Site }) {
         />
       ) : null}
       {controls ? <div className="mt-4">{controls}</div> : null}
+      <p className="mt-4 text-xs text-stone-600">Deleting a Page removes its workspace organization. Historical Scan observations remain, and later scans can create the Page again.</p>
     </section>
   );
 }
@@ -482,6 +556,7 @@ function SitePagesTable({
   activeSort,
   direction,
   onSort,
+  onStateChanged,
 }: {
   siteId: number;
   pages: PersistentPage[];
@@ -490,6 +565,7 @@ function SitePagesTable({
   activeSort: string | null;
   direction: SortDirection | null;
   onSort: (column: string | null, direction: SortDirection | null) => void;
+  onStateChanged: (resourceId: number) => Promise<void>;
 }) {
   const allSelected =
     pages.length > 0 &&
@@ -588,6 +664,44 @@ function SitePagesTable({
                       Latest observation
                     </Link>
                   ) : null}
+                  {page.workspace_state === "active" ? (
+                    <LifecycleAction
+                      label="Remove"
+                      title="Remove this Page from Site Pages?"
+                      description="Its Page organization and historical Scan evidence will be retained. You can restore it later."
+                      confirmLabel="Remove from Site Pages"
+                      className="min-h-0 justify-start border-0 p-0 text-xs underline"
+                      action={async () => {
+                        await updatePageWorkspaceState(String(siteId), String(page.resource_id), "suppressed");
+                        await onStateChanged(page.resource_id);
+                      }}
+                    />
+                  ) : (
+                    <LifecycleAction
+                      label="Restore"
+                      title="Restore this Page to Site Pages?"
+                      description="The Page will return to the active workspace with its retained organization and evidence."
+                      confirmLabel="Restore to Site Pages"
+                      restore
+                      className="min-h-0 justify-start border-0 p-0 text-xs underline"
+                      action={async () => {
+                        await updatePageWorkspaceState(String(siteId), String(page.resource_id), "active");
+                        await onStateChanged(page.resource_id);
+                      }}
+                    />
+                  )}
+                  <LifecycleAction
+                    label="Delete"
+                    title="Delete this Page workspace?"
+                    description="Page notes, categories, owner, and workflow organization will be deleted. Historical Scan evidence will remain. If a later Scan observes the URL again, Site Ledger can create a fresh Page workspace."
+                    confirmLabel="Delete Page workspace"
+                    variant="danger"
+                    className="min-h-0 justify-start border-0 p-0 text-xs underline"
+                    action={async () => {
+                      await bulkDeletePages(String(siteId), [page.resource_id]);
+                      await onStateChanged(page.resource_id);
+                    }}
+                  />
                 </div>
               </td>
             </tr>
@@ -925,6 +1039,7 @@ export function SiteRecentScansSection({
 
 export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mode?: "sources" | "ai-documents" }) {
   const queryClient = useQueryClient();
+  const [selectedSourceIds, setSelectedSourceIds] = useState<number[]>([]);
   const [sitemapUrl, setSitemapUrl] = useState("");
   const [manualUrls, setManualUrls] = useState("");
   const [aiSourceUrl, setAiSourceUrl] = useState("");
@@ -937,7 +1052,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
     queryKey: ["jobs", "site-sources", String(site.id)],
     queryFn: () =>
       listJobs(
-        `?website_property_id=${site.id}&job_type=source_refresh&limit=50`,
+        `?website_property_id=${site.id}&job_type=source_refresh&limit=100`,
       ),
     refetchInterval: (query) =>
       query.state.data?.items.some((job) => !isTerminalStatus(job.status))
@@ -980,6 +1095,19 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       });
       await queryClient.invalidateQueries({
         queryKey: ["inventory", String(site.id)],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["jobs", "site-sources", String(site.id)],
+      });
+    },
+  });
+  const bulkRefresh = useMutation({
+    mutationFn: (sourceIds: number[]) =>
+      bulkRefreshSources(String(site.id), sourceIds),
+    onSuccess: async () => {
+      setSelectedSourceIds([]);
+      await queryClient.invalidateQueries({
+        queryKey: ["sources", String(site.id)],
       });
       await queryClient.invalidateQueries({
         queryKey: ["jobs", "site-sources", String(site.id)],
@@ -1068,11 +1196,25 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
         ? source.source_type === "ai_document"
         : source.source_type !== "ai_document",
     ) ?? [];
+  const sourceJobStatusKey =
+    sourceJobs.data?.items
+      .map((job) => `${job.id}:${job.status}`)
+      .join("|") ?? "";
+  useEffect(() => {
+    if (!sourceJobStatusKey) return;
+    void queryClient.invalidateQueries({
+      queryKey: ["sources", String(site.id)],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ["inventory", String(site.id)],
+    });
+  }, [queryClient, site.id, sourceJobStatusKey]);
 
   return (
     <div className="space-y-5">
       {addSitemap.error ||
       refresh.error ||
+      bulkRefresh.error ||
       robots.error ||
       manual.error ||
       remove.error ||
@@ -1081,6 +1223,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
           error={
             addSitemap.error ??
             refresh.error ??
+            bulkRefresh.error ??
             robots.error ??
             manual.error ??
             remove.error ??
@@ -1161,6 +1304,20 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       </section> : null}
       <section className="rounded-md border border-stone-200 bg-white shadow-sm">
         <h2 className="p-4 text-base font-semibold">Sources</h2>
+        {selectedSourceIds.length ? (
+          <div className="flex flex-wrap items-center gap-3 border-t border-stone-200 bg-stone-50 px-4 py-3">
+            <span className="text-sm font-medium">
+              {plural(selectedSourceIds.length, "Source")} selected
+            </span>
+            <Button
+              type="button"
+              loading={bulkRefresh.isPending}
+              onClick={() => bulkRefresh.mutate(selectedSourceIds)}
+            >
+              Refresh selected
+            </Button>
+          </div>
+        ) : null}
         {sources.isLoading ? <LoadingBlock label="Loading sources..." /> : null}
         {displayedSources.length ? (
           <SourceTable
@@ -1168,6 +1325,8 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
             sources={displayedSources}
             jobs={sourceJobs.data?.items ?? []}
             workerHealth={workerHealth.data}
+            selectedSourceIds={selectedSourceIds}
+            setSelectedSourceIds={setSelectedSourceIds}
             onRefresh={(source) => refresh.mutate(source)}
             onCancel={(job) => cancelRefresh.mutate(job)}
             onDelete={(source) => {
@@ -1195,6 +1354,8 @@ function SourceTable({
   sources,
   jobs,
   workerHealth,
+  selectedSourceIds,
+  setSelectedSourceIds,
   onRefresh,
   onCancel,
   onDelete,
@@ -1203,17 +1364,39 @@ function SourceTable({
   sources: UrlSource[];
   jobs: Job[];
   workerHealth?: WorkerHealth;
+  selectedSourceIds: number[];
+  setSelectedSourceIds: (sourceIds: number[]) => void;
   onRefresh: (source: UrlSource) => void;
   onCancel: (job: Job) => void;
   onDelete: (source: UrlSource) => void;
 }) {
   const values = { source: (source: UrlSource) => source.name, type: (source: UrlSource) => source.source_type, status: (source: UrlSource) => activeSourceJob(jobs, source.id)?.presentation_status ?? source.last_refresh_status, urls: (source: UrlSource) => source.current_entry_count };
   const { sortedItems, sort, changeSort } = useTableSort(sources, values);
+  const selectableSources = sources.filter(
+    (source) => !activeSourceJob(jobs, source.id),
+  );
+  const allSelected =
+    selectableSources.length > 0 &&
+    selectableSources.every((source) => selectedSourceIds.includes(source.id));
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
+            <th className="px-3 py-2">
+              <input
+                aria-label="Select all refreshable Sources on this loaded page"
+                type="checkbox"
+                checked={allSelected}
+                onChange={(event) =>
+                  setSelectedSourceIds(
+                    event.target.checked
+                      ? selectableSources.map((source) => source.id)
+                      : [],
+                  )
+                }
+              />
+            </th>
             {[["source", "Source"], ["type", "Type"], ["status", "Status"], ["urls", "URLs"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
             <th className="px-3 py-2 font-medium">Actions</th>
           </tr>
@@ -1231,6 +1414,21 @@ function SourceTable({
                 workerHealth?.queued_work_has_worker === false);
             return (
               <tr key={source.id} className="border-t border-stone-100">
+                <td className="px-3 py-2">
+                  <input
+                    aria-label={`Select ${source.name}`}
+                    type="checkbox"
+                    disabled={Boolean(activeJob)}
+                    checked={selectedSourceIds.includes(source.id)}
+                    onChange={(event) =>
+                      setSelectedSourceIds(
+                        event.target.checked
+                          ? [...selectedSourceIds, source.id]
+                          : selectedSourceIds.filter((id) => id !== source.id),
+                      )
+                    }
+                  />
+                </td>
                 <td className="max-w-md px-3 py-2">
                   <span className="block font-medium">{source.name}</span>
                   <span className="block truncate font-mono text-xs text-stone-500">
@@ -1301,30 +1499,75 @@ function activeSourceJob(jobs: Job[], sourceId: number) {
   );
 }
 
+function inventoryItemKey(item: InventoryItem) {
+  return item.normalized_url ?? `raw:${String(item.sources[0]?.entry_id)}`;
+}
+
 export function SiteInventorySection({ site }: { site: Site }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const pagination = useUrlPagination({ prefix: "inventory" });
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = useState<string[]>([]);
+  const visibility = searchParams.get("visibility") ?? "active";
   const query = new URLSearchParams();
   for (const key of [
     "search",
     "source_type",
     "scope_decision",
     "validation_state",
+    "visibility",
   ]) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
   query.set("limit", String(pagination.limit));
   query.set("offset", String(pagination.offset));
+  const queryIdentity = query.toString();
   const inventory = useQuery({
-    queryKey: ["inventory", String(site.id), query.toString()],
-    queryFn: () => listInventory(String(site.id), `?${query.toString()}`),
+    queryKey: ["inventory", String(site.id), queryIdentity],
+    queryFn: () => listInventory(String(site.id), `?${queryIdentity}`),
   });
+  const selectedItems =
+    inventory.data?.items.filter((item) =>
+      selected.includes(inventoryItemKey(item)),
+    ) ?? [];
+  const selectedEntryIds = selectedItems.map((item) => Number(item.sources[0].entry_id));
+  const selectedActiveItems = selectedItems.filter((item) => !item.is_suppressed);
+  const selectedActiveEntryIds = selectedActiveItems.map((item) => Number(item.sources[0].entry_id));
+  const selectedSuppressionIds = selectedItems
+    .filter(
+      (item): item is InventoryItem & { suppression_id: number } =>
+        item.is_suppressed && item.suppression_id !== null,
+    )
+    .map((item) => item.suppression_id);
+  const refreshInventory = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["inventory", String(site.id)] });
+    await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
+    setSelected([]);
+  };
+  useEffect(() => setSelected([]), [queryIdentity]);
   useEffect(() => pagination.ensureValid(inventory.data?.total), [inventory.data?.total, pagination]);
   const controls = inventory.data ? <PaginatedTableControls total={inventory.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inventory URL" isLoading={inventory.isFetching && !inventory.isLoading} /> : null;
   return (
     <section className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+        <select
+          aria-label="Inventory visibility"
+          value={searchParams.get("visibility") ?? "active"}
+          onChange={(event) => {
+            setSelected([]);
+            setSearchParam(
+              setSearchParams,
+              "visibility",
+              event.target.value === "active" ? "" : event.target.value,
+            );
+          }}
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+        >
+          <option value="active">Active</option>
+          <option value="suppressed">Removed</option>
+          <option value="all">All</option>
+        </select>
         <input
           aria-label="Search inventory"
           value={searchParams.get("search") ?? ""}
@@ -1373,9 +1616,69 @@ export function SiteInventorySection({ site }: { site: Site }) {
       {inventory.isLoading ? (
         <LoadingBlock label="Loading inventory..." />
       ) : null}
+      {inventory.error ? (
+        <ErrorBanner error={inventory.error} title="Could not load Inventory" />
+      ) : null}
       {controls ? <div className="mb-4">{controls}</div> : null}
+      {selected.length ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-stone-200 bg-stone-50 p-3">
+          <span className="text-sm font-medium">
+            {plural(selected.length, "URL")} selected
+          </span>
+          {selectedActiveEntryIds.length ? (
+            <LifecycleAction
+              label={visibility === "all" ? `Remove ${plural(selectedActiveEntryIds.length, "active URL")}` : "Remove selected"}
+              title={`Remove ${plural(selectedActiveEntryIds.length, "selected URL")} from active Inventory?`}
+              description="Current Source declarations and historical evidence are retained. The URLs remain removed after Source refresh until you restore them."
+              confirmLabel="Remove from Inventory"
+              action={async () => {
+                await bulkCreateInventorySuppressions(
+                  String(site.id),
+                  selectedActiveEntryIds,
+                );
+                await refreshInventory();
+              }}
+            />
+          ) : null}
+          {selectedSuppressionIds.length ? (
+            <LifecycleAction
+              label={visibility === "all" ? `Restore ${plural(selectedSuppressionIds.length, "removed URL")}` : "Restore selected"}
+              title={`Restore ${plural(selectedSuppressionIds.length, "selected URL")} to Inventory?`}
+              description="The URLs will return to active Inventory and Inventory-derived scan seeding."
+              confirmLabel="Restore to Inventory"
+              restore
+              action={async () => {
+                await bulkRestoreInventorySuppressions(
+                  String(site.id),
+                  selectedSuppressionIds,
+                );
+                await refreshInventory();
+              }}
+            />
+          ) : null}
+          {selectedEntryIds.length ? (
+            <LifecycleAction
+              label={visibility === "all" ? `Delete ${plural(selected.length, "selected URL")}` : "Delete selected"}
+              title={`Delete ${plural(selected.length, "selected URL")} from current Inventory?`}
+              description="Their current Source declarations will be deactivated. Historical Source records and Scan evidence remain. A later Source refresh can make the URLs active again."
+              confirmLabel="Delete from current Inventory"
+              variant="danger"
+              action={async () => {
+                await bulkDeleteInventoryEntries(String(site.id), selectedEntryIds);
+                await refreshInventory();
+              }}
+            />
+          ) : null}
+        </div>
+      ) : null}
       {inventory.data?.items.length ? (
-        <InventoryTable items={inventory.data.items} />
+        <InventoryTable
+          siteId={site.id}
+          items={inventory.data.items}
+          selected={selected}
+          setSelected={setSelected}
+          onChanged={refreshInventory}
+        />
       ) : !inventory.isLoading ? (
         <EmptyState
           title="No inventory URLs"
@@ -1383,19 +1686,51 @@ export function SiteInventorySection({ site }: { site: Site }) {
         />
       ) : null}
       {controls ? <div className="mt-4">{controls}</div> : null}
+      <p className="mt-4 text-xs text-stone-600">
+        Removing an Inventory URL preserves current Source declarations until Restore. Deleting it
+        deactivates current declarations while retaining Source provenance and historical Scan evidence.
+      </p>
     </section>
   );
 }
 
-function InventoryTable({ items }: { items: InventoryItem[] }) {
+function InventoryTable({
+  siteId,
+  items,
+  selected,
+  setSelected,
+  onChanged,
+}: {
+  siteId: number;
+  items: InventoryItem[];
+  selected: string[];
+  setSelected: (keys: string[]) => void;
+  onChanged: () => Promise<void>;
+}) {
   const values = { url: (item: InventoryItem) => item.normalized_url, sources: (item: InventoryItem) => item.source_count, scope: (item: InventoryItem) => item.scope_decision, validation: (item: InventoryItem) => item.validation_state, classification: (item: InventoryItem) => item.classification };
   const { sortedItems, sort, changeSort } = useTableSort(items, values);
+  const allSelected =
+    items.length > 0 &&
+    items.every((item) => selected.includes(inventoryItemKey(item)));
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-stone-100 text-xs uppercase text-stone-500">
           <tr>
+            <th className="px-3 py-2">
+              <input
+                aria-label="Select all Inventory URLs on this loaded page"
+                type="checkbox"
+                checked={allSelected}
+                onChange={(event) =>
+                  setSelected(
+                    event.target.checked ? items.map(inventoryItemKey) : [],
+                  )
+                }
+              />
+            </th>
             {[["url", "URL"], ["sources", "Sources"], ["scope", "Scope"], ["validation", "Validation"], ["classification", "Classification"]].map(([column, label]) => <SortableTableHeader key={column} column={column} label={label} activeColumn={sort?.column ?? null} direction={sort?.direction ?? null} onChange={changeSort} />)}
+            <th className="px-3 py-2">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -1407,6 +1742,21 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
               }
               className="border-t border-stone-100 align-top"
             >
+              <td className="px-3 py-2">
+                <input
+                  aria-label={`Select ${item.normalized_url ?? "invalid URL"}`}
+                  type="checkbox"
+                  checked={selected.includes(inventoryItemKey(item))}
+                  onChange={(event) => {
+                    const key = inventoryItemKey(item);
+                    setSelected(
+                      event.target.checked
+                        ? [...selected, key]
+                        : selected.filter((value) => value !== key),
+                    );
+                  }}
+                />
+              </td>
               <td className="max-w-xl px-3 py-2 font-mono text-xs">
                 {item.normalized_url ?? "Invalid URL"}
               </td>
@@ -1420,6 +1770,23 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
                     {item.sources.map((source) => (
                       <li key={String(source.entry_id)}>
                         {String(source.name)} - {String(source.type)}
+                        {source.type === "manual" ? (
+                          <LifecycleAction
+                            label="Remove manual declaration"
+                            title="Remove this URL from Manual URLs?"
+                            description="The current manual declaration is removed. Historical records remain."
+                            confirmLabel="Remove from Manual URLs"
+                            className="ml-2 min-h-0 border-0 p-0 text-xs underline"
+                            action={async () => {
+                              await removeManualSourceEntry(
+                                String(siteId),
+                                Number(source.id),
+                                Number(source.entry_id),
+                              );
+                              await onChanged();
+                            }}
+                          />
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -1428,6 +1795,46 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
               <td className="px-3 py-2">{item.scope_decision}</td>
               <td className="px-3 py-2">{item.validation_state}</td>
               <td className="px-3 py-2">{item.classification}</td>
+              <td className="px-3 py-2">
+                {item.is_suppressed && item.suppression_id !== null ? (
+                  <LifecycleAction
+                    label="Restore"
+                    title="Restore this URL to Inventory?"
+                    description="The URL will return to active Inventory and Inventory-derived Scan seeding."
+                    confirmLabel="Restore to Inventory"
+                    restore
+                    action={async () => {
+                      await bulkRestoreInventorySuppressions(String(siteId), [item.suppression_id as number]);
+                      await onChanged();
+                    }}
+                  />
+                ) : (
+                  <LifecycleAction
+                    label="Remove"
+                    title="Remove this URL from active Inventory?"
+                    description="Current Source declarations and historical evidence are retained. The URL remains removed after Source refresh until you restore it."
+                    confirmLabel="Remove from Inventory"
+                    action={async () => {
+                      await createInventorySuppression(String(siteId), Number(item.sources[0].entry_id));
+                      await onChanged();
+                    }}
+                  />
+                )}
+                <LifecycleAction
+                  label="Delete"
+                  title="Delete this URL from current Inventory?"
+                  description="Its current Source declarations will be deactivated. Historical Source records and Scan evidence remain. A later Source refresh can make the URL active again."
+                  confirmLabel="Delete from current Inventory"
+                  variant="danger"
+                  action={async () => {
+                    await bulkDeleteInventoryEntries(
+                      String(siteId),
+                      [Number(item.sources[0].entry_id)],
+                    );
+                    await onChanged();
+                  }}
+                />
+              </td>
             </tr>
           ))}
         </tbody>

@@ -122,6 +122,9 @@ class WebsiteProperty(Base):
     site_pages: Mapped[list["SitePage"]] = relationship(
         back_populates="website_property", cascade="all, delete-orphan"
     )
+    inventory_suppressions: Mapped[list["SiteInventorySuppression"]] = relationship(
+        back_populates="website_property", cascade="all, delete-orphan"
+    )
     page_categories: Mapped[list["PageCategory"]] = relationship(
         back_populates="website_property", cascade="all, delete-orphan"
     )
@@ -706,6 +709,8 @@ class SitePage(Base):
     resource_id: Mapped[int] = mapped_column(ForeignKey("web_resources.id"), index=True)
     owner_label: Mapped[str | None] = mapped_column(String(128))
     workflow_status: Mapped[str] = mapped_column(String(32), default="unreviewed", index=True)
+    workspace_state: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    suppressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -722,7 +727,11 @@ class SitePage(Base):
 
     __table_args__ = (
         UniqueConstraint("website_property_id", "resource_id", name="uq_site_page_resource"),
+        CheckConstraint(
+            "workspace_state IN ('active', 'suppressed')", name="ck_site_page_workspace_state"
+        ),
         Index("ix_site_page_site_workflow", "website_property_id", "workflow_status"),
+        Index("ix_site_page_site_workspace", "website_property_id", "workspace_state"),
     )
 
 
@@ -1080,6 +1089,42 @@ class UrlSourceEntry(Base):
     __table_args__ = (
         UniqueConstraint("url_source_id", "normalized_url", name="uq_source_normalized_entry"),
         Index("ix_source_entry_source_current", "url_source_id", "is_current"),
+    )
+
+
+class SiteInventorySuppression(Base):
+    __tablename__ = "site_inventory_suppressions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    website_property_id: Mapped[int] = mapped_column(
+        ForeignKey("website_properties.id", ondelete="CASCADE"), index=True
+    )
+    target_kind: Mapped[str] = mapped_column(String(32))
+    target_value: Mapped[str] = mapped_column(Text)
+    normalization_version: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    website_property: Mapped[WebsiteProperty] = relationship(
+        back_populates="inventory_suppressions"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "target_kind IN ('normalized_url', 'raw_url')",
+            name="ck_site_inventory_suppression_target_kind",
+        ),
+        UniqueConstraint(
+            "website_property_id",
+            "target_kind",
+            "target_value",
+            name="uq_site_inventory_suppression_target",
+        ),
+        Index(
+            "ix_site_inventory_suppression_lookup",
+            "website_property_id",
+            "target_kind",
+            "target_value",
+        ),
     )
 
 

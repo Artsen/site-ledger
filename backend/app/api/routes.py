@@ -29,7 +29,9 @@ from app.schemas.jobs import JobEventList, JobEventRead, JobList, JobRead, Worke
 from app.schemas.page_workspaces import (
     BulkMutationResult,
     BulkPageCategories,
+    BulkPageDelete,
     BulkPageMetadata,
+    BulkPageWorkspaceState,
     NoteCreate,
     NoteList,
     NoteRead,
@@ -41,6 +43,7 @@ from app.schemas.page_workspaces import (
     PageCategoryRead,
     PageCategoryUpdate,
     PageMetadataUpdate,
+    PageWorkspaceStateUpdate,
 )
 from app.schemas.projections import ScanProjectionBuildRead, ScanProjectionStatusRead
 from app.schemas.rendered import (
@@ -86,7 +89,13 @@ from app.schemas.sites import (
     WebsitePropertyUpdate,
 )
 from app.schemas.sources import (
+    BulkInventoryEntryDelete,
+    BulkInventorySuppressionCreate,
+    BulkInventorySuppressionRestore,
+    BulkSourceRefreshCreate,
     InventoryList,
+    InventorySuppressionCreate,
+    InventorySuppressionRead,
     ManualUrlBatchCreate,
     ManualUrlBatchResult,
     ScanSeedList,
@@ -114,6 +123,15 @@ from app.services.graph_queries import (
     get_graph_capabilities,
     get_scan_graph,
     list_graph_edge_occurrences,
+)
+from app.services.inventory_lifecycle import (
+    ManagedSourceEntryError,
+    bulk_create_inventory_suppressions,
+    bulk_delete_inventory_entries,
+    bulk_restore_inventory_suppressions,
+    create_inventory_suppression,
+    delete_inventory_suppression,
+    remove_manual_source_entry,
 )
 from app.services.notes import (
     create_note,
@@ -171,9 +189,12 @@ from app.services.site_management import (
 )
 from app.services.site_pages import (
     bulk_categories,
+    bulk_delete_pages,
     bulk_metadata,
+    bulk_workspace_state,
     find_site_page,
     update_page_metadata,
+    update_page_workspace_state,
 )
 from app.services.site_queries import get_site_detail, list_site_scans, list_sites
 from app.services.source_management import (
@@ -191,7 +212,11 @@ from app.services.source_queries import (
     list_source_entries,
     list_sources,
 )
-from app.services.source_refresh import create_robots_discovery_refresh, create_source_refresh
+from app.services.source_refresh import (
+    create_robots_discovery_refresh,
+    create_source_refresh,
+    enqueue_bulk_source_refreshes,
+)
 from app.services.url_identity import (
     active_url_normalization_version,
     inspect_url_identity_state,
@@ -575,6 +600,25 @@ def post_source_refresh(site_id: int, source_id: int, db: DbSession) -> SourceRe
 
 
 @router.post(
+    "/sites/{site_id}/sources/bulk-refresh",
+    response_model=list[SourceRefreshRead],
+    status_code=202,
+)
+def post_bulk_source_refresh(
+    site_id: int, payload: BulkSourceRefreshCreate, db: DbSession
+) -> list[SourceRefreshRead]:
+    try:
+        refreshes = enqueue_bulk_source_refreshes(db, site_id, payload.source_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if refreshes is None:
+        raise HTTPException(404, "Site not found")
+    return [
+        SourceRefreshRead.model_validate(refresh, from_attributes=True) for refresh in refreshes
+    ]
+
+
+@router.post(
     "/sites/{site_id}/sources/discover-robots",
     response_model=SourceRefreshRead,
     status_code=202,
@@ -615,6 +659,22 @@ def get_source_entries(
     if result is None:
         raise HTTPException(404, "Source not found")
     return result
+
+
+@router.delete(
+    "/sites/{site_id}/sources/{source_id}/entries/{entry_id}",
+    response_model=UrlSourceEntryRead,
+)
+def delete_manual_source_entry(
+    site_id: int, source_id: int, entry_id: int, db: DbSession
+) -> UrlSourceEntryRead:
+    try:
+        entry = remove_manual_source_entry(db, site_id, source_id, entry_id)
+    except ManagedSourceEntryError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if entry is None:
+        raise HTTPException(404, "Source entry not found")
+    return UrlSourceEntryRead.model_validate(entry, from_attributes=True)
 
 
 @router.get(
@@ -680,6 +740,7 @@ def get_site_inventory(
     source_id: int | None = None,
     scope_decision: str | None = None,
     validation_state: str | None = None,
+    visibility: Literal["active", "suppressed", "all"] = "active",
     limit: PageLimit = 50,
     offset: PageOffset = 0,
 ) -> InventoryList:
@@ -691,9 +752,82 @@ def get_site_inventory(
         source_id=source_id,
         scope_decision=scope_decision,
         validation_state=validation_state,
+        visibility=visibility,
         limit=limit,
         offset=offset,
     )
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.post(
+    "/sites/{site_id}/inventory/suppressions",
+    response_model=InventorySuppressionRead,
+    status_code=201,
+)
+def post_inventory_suppression(
+    site_id: int, payload: InventorySuppressionCreate, db: DbSession
+) -> InventorySuppressionRead:
+    suppression = create_inventory_suppression(db, site_id, payload.entry_id)
+    if suppression is None:
+        raise HTTPException(404, "Inventory entry not found")
+    return InventorySuppressionRead.model_validate(suppression, from_attributes=True)
+
+
+@router.delete("/sites/{site_id}/inventory/suppressions/{suppression_id}")
+def remove_inventory_suppression(
+    site_id: int, suppression_id: int, db: DbSession
+) -> dict[str, int]:
+    deleted = delete_inventory_suppression(db, site_id, suppression_id)
+    if deleted is None:
+        raise HTTPException(404, "Inventory suppression not found")
+    return {"deleted_suppression_id": deleted}
+
+
+@router.post(
+    "/sites/{site_id}/inventory/suppressions/bulk",
+    response_model=BulkMutationResult,
+)
+def post_bulk_inventory_suppressions(
+    site_id: int, payload: BulkInventorySuppressionCreate, db: DbSession
+) -> BulkMutationResult:
+    try:
+        result = bulk_create_inventory_suppressions(db, site_id, payload.entry_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.post(
+    "/sites/{site_id}/inventory/suppressions/bulk-restore",
+    response_model=BulkMutationResult,
+)
+def post_bulk_inventory_suppression_restore(
+    site_id: int, payload: BulkInventorySuppressionRestore, db: DbSession
+) -> BulkMutationResult:
+    try:
+        result = bulk_restore_inventory_suppressions(db, site_id, payload.suppression_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Site not found")
+    return result
+
+
+@router.post(
+    "/sites/{site_id}/inventory/bulk-delete",
+    response_model=BulkMutationResult,
+)
+def post_bulk_inventory_delete(
+    site_id: int, payload: BulkInventoryEntryDelete, db: DbSession
+) -> BulkMutationResult:
+    try:
+        result = bulk_delete_inventory_entries(db, site_id, payload.entry_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if result is None:
         raise HTTPException(404, "Site not found")
     return result
@@ -792,6 +926,26 @@ def post_bulk_page_metadata(
         raise HTTPException(422, str(exc)) from exc
 
 
+@router.post("/sites/{site_id}/pages/bulk-workspace-state", response_model=BulkMutationResult)
+def post_bulk_page_workspace_state(
+    site_id: int, payload: BulkPageWorkspaceState, db: DbSession
+) -> BulkMutationResult:
+    try:
+        return bulk_workspace_state(db, site_id, payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/sites/{site_id}/pages/bulk-delete", response_model=BulkMutationResult)
+def post_bulk_page_delete(
+    site_id: int, payload: BulkPageDelete, db: DbSession
+) -> BulkMutationResult:
+    try:
+        return bulk_delete_pages(db, site_id, payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.get("/sites/{site_id}/pages", response_model=PersistentPageList)
 def get_site_pages(
     site_id: int,
@@ -806,6 +960,7 @@ def get_site_pages(
     unassigned_owner: bool = False,
     has_notes: bool | None = None,
     min_observations: int | None = Query(default=None, ge=0),
+    workspace_state: Literal["active", "suppressed", "all"] = "active",
     sort: Literal[
         "url",
         "observations",
@@ -833,6 +988,7 @@ def get_site_pages(
         unassigned_owner=unassigned_owner,
         has_notes=has_notes,
         min_observations=min_observations,
+        workspace_state=workspace_state,
         sort=sort,
         direction=direction,
         limit=limit,
@@ -862,6 +1018,23 @@ def patch_site_page_metadata(
         update_page_metadata(db, site_page, payload)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    result = get_site_page(db, site_id, resource_id)
+    if result is None:
+        raise HTTPException(404, "Page not found")
+    return result
+
+
+@router.patch(
+    "/sites/{site_id}/pages/{resource_id}/workspace-state",
+    response_model=PersistentPageDetail,
+)
+def patch_site_page_workspace_state(
+    site_id: int, resource_id: int, payload: PageWorkspaceStateUpdate, db: DbSession
+) -> PersistentPageDetail:
+    site_page = find_site_page(db, site_id, resource_id)
+    if site_page is None:
+        raise HTTPException(404, "Page not found")
+    update_page_workspace_state(db, site_page, payload)
     result = get_site_page(db, site_id, resource_id)
     if result is None:
         raise HTTPException(404, "Page not found")

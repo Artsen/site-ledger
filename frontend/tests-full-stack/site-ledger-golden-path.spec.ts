@@ -14,6 +14,8 @@ type Json = Record<string, unknown> & {
   online_workers: number;
   fetched_count: number;
   resource_id: number;
+  site_page_id: number;
+  entry_id: number;
   requested_url: string;
   normalized_url: string;
   scan_id: number;
@@ -25,7 +27,13 @@ type Json = Record<string, unknown> & {
   outline_sha256: string;
   sections: Array<{ direct_text: string }>;
   items: Json[];
+  sources: Json[];
+  owner_label: string | null;
+  workflow_status: string;
+  workspace_state: string;
   scope_config: { allow_private_networks: boolean };
+  source: Json;
+  page: Json;
   comparison: Json;
   current_build: Json | null;
   active_build: Json | null;
@@ -115,6 +123,80 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(evidence1["/technical/"].structured.document_text_sha256).toBe(evidence2["/technical/"].structured.document_text_sha256);
   expect(evidence1["/technical/"].structured.outline_sha256).toBe(evidence2["/technical/"].structured.outline_sha256);
 
+  const activePages = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=active&limit=50`);
+  expect(activePages.total).toBe(5);
+  const pricingPage = activePages.items.find((item) => new URL(item.normalized_url).pathname === "/pricing/");
+  if (!pricingPage) throw new Error("Golden Path pricing Page was not found");
+  await patchJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/metadata`, {
+    owner_label: "Golden owner",
+    workflow_status: "approved",
+    category_ids: []
+  });
+  await patchJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/workspace-state`, {
+    workspace_state: "suppressed"
+  });
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=active&limit=50`)).total).toBe(4);
+  const removedPages = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=suppressed&limit=50`);
+  expect(removedPages.total).toBe(1);
+  const retainedObservations = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/observations?limit=100`);
+  expect(retainedObservations.total).toBe(2);
+  await patchJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/workspace-state`, {
+    workspace_state: "active"
+  });
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=active&limit=50`)).total).toBe(5);
+  const restoredPricing = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}`);
+  expect(restoredPricing.page.owner_label).toBe("Golden owner");
+  expect(restoredPricing.page.workflow_status).toBe("approved");
+
+  const source = await postJson(request, `${apiUrl}/api/sites/${site.id}/sources`, {
+    source_type: "sitemap",
+    name: "Golden sitemap",
+    source_url: `${fixtureUrl}/sitemap.xml`,
+    is_active: true,
+    discovery_mode: "configured",
+    settings_json: {}
+  });
+  const firstRefresh = await postJson(request, `${apiUrl}/api/sites/${site.id}/sources/${source.id}/refresh`);
+  await waitForSourceRefresh(request, site.id, source.id, firstRefresh.id);
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(1);
+  const inventoryBeforeDelete = await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`);
+  const inventoryEntryId = inventoryBeforeDelete.items[0].sources[0].entry_id as number;
+  const suppression = await postJson(request, `${apiUrl}/api/sites/${site.id}/inventory/suppressions`, {
+    entry_id: inventoryEntryId
+  });
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(0);
+  const removedInventory = await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=suppressed&limit=50`);
+  expect(removedInventory.total).toBe(1);
+  expect(removedInventory.items[0].source_count).toBe(1);
+  await deleteJson(request, `${apiUrl}/api/sites/${site.id}/inventory/suppressions/${suppression.id}`);
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(1);
+
+  await postJson(request, `${apiUrl}/api/sites/${site.id}/pages/bulk-delete`, {
+    resource_ids: [pricingPage.resource_id]
+  });
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=all&limit=50`)).total).toBe(4);
+
+  const scan3Id = await startScanInUi(page, site.id, true);
+  const scan3 = await waitForScan(request, scan3Id);
+  expect(["completed", "completed_with_errors"]).toContain(scan3.status);
+  await waitForProjection(request, scan3Id);
+  const recreatedPricing = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}`);
+  expect(recreatedPricing.page.site_page_id).not.toBe(pricingPage.site_page_id);
+  expect(recreatedPricing.page.workspace_state).toBe("active");
+  expect(recreatedPricing.page.owner_label).toBeNull();
+  expect(recreatedPricing.page.workflow_status).toBe("unreviewed");
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/observations?limit=100`)).total).toBe(3);
+
+  await postJson(request, `${apiUrl}/api/sites/${site.id}/inventory/bulk-delete`, {
+    entry_ids: [inventoryEntryId]
+  });
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=all&limit=50`)).total).toBe(0);
+  const secondRefresh = await postJson(request, `${apiUrl}/api/sites/${site.id}/sources/${source.id}/refresh`);
+  await waitForSourceRefresh(request, site.id, source.id, secondRefresh.id);
+  const inventoryAfterRefresh = await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`);
+  expect(inventoryAfterRefresh.total).toBe(1);
+  expect(inventoryAfterRefresh.items[0].sources[0].entry_id).toBe(inventoryEntryId);
+
   await page.goto(`/sites/${site.id}/comparisons?comparison_id=${comparisonId}`);
   await expect(page.getByRole("heading", { name: `Scan ${scan1Id} to Scan ${scan2Id}` })).toBeVisible();
   await expect(page.getByText("scan-comparison-v2", { exact: true })).toBeVisible();
@@ -137,6 +219,11 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     site_id: site.id,
     scan_1_id: scan1Id,
     scan_2_id: scan2Id,
+    lifecycle_scan_id: scan3Id,
+    lifecycle_page_resource_id: pricingPage.resource_id,
+    lifecycle_deleted_site_page_id: pricingPage.site_page_id,
+    lifecycle_inventory_entry_id: inventoryEntryId,
+    lifecycle_source_id: source.id,
     comparison_id: comparisonId,
     timings_ms: {
       total: comparisonReady - started,
@@ -151,8 +238,11 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   }, null, 2) + "\n", "utf-8");
 });
 
-async function startScanInUi(page: Page, siteId: number): Promise<number> {
+async function startScanInUi(page: Page, siteId: number, includeInventory = false): Promise<number> {
   await page.goto(`/scans/new?site_id=${siteId}`);
+  if (includeInventory) {
+    await page.getByRole("checkbox", { name: "Include current URL inventory" }).check();
+  }
   const start = page.getByRole("button", { name: "Start scan" });
   await expect(start).toBeEnabled();
   await start.click();
@@ -240,6 +330,40 @@ async function postJson(request: APIRequestContext, url: string, data?: Record<s
   const response = await request.post(url, data ? { data } : undefined);
   const body = await response.text();
   expect(response.ok(), `${response.status()} POST ${url}: ${body}`).toBe(true);
+  return JSON.parse(body) as Json;
+}
+
+async function waitForSourceRefresh(
+  request: APIRequestContext,
+  siteId: number,
+  sourceId: number,
+  refreshId: number,
+): Promise<Json> {
+  return poll(async () => {
+    const url = `${apiUrl}/api/sites/${siteId}/sources/${sourceId}/refreshes?limit=100`;
+    const response = await request.get(url);
+    const body = await response.text();
+    expect(response.ok(), `${response.status()} GET ${url}: ${body}`).toBe(true);
+    const refresh = (JSON.parse(body) as Json[]).find((item) => item.id === refreshId);
+    if (!refresh) return null;
+    if (refresh.status === "failed" || refresh.status === "cancelled") {
+      throw new Error(`Source refresh ${refreshId} failed: ${JSON.stringify(refresh)}`);
+    }
+    return refresh.status === "completed" ? refresh : null;
+  }, `Source refresh ${refreshId}`);
+}
+
+async function patchJson(request: APIRequestContext, url: string, data: Record<string, unknown>): Promise<Json> {
+  const response = await request.patch(url, { data });
+  const body = await response.text();
+  expect(response.ok(), `${response.status()} PATCH ${url}: ${body}`).toBe(true);
+  return JSON.parse(body) as Json;
+}
+
+async function deleteJson(request: APIRequestContext, url: string): Promise<Json> {
+  const response = await request.delete(url);
+  const body = await response.text();
+  expect(response.ok(), `${response.status()} DELETE ${url}: ${body}`).toBe(true);
   return JSON.parse(body) as Json;
 }
 

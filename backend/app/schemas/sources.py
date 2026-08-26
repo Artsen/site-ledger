@@ -83,6 +83,10 @@ class SourceRefreshRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class BulkSourceRefreshCreate(BaseModel):
+    source_ids: list[int] = Field(min_length=1, max_length=100)
+
+
 class UrlSourceEntryRead(BaseModel):
     id: int
     url_source_id: int
@@ -137,6 +141,36 @@ class InventoryItem(BaseModel):
     latest_scan_status: str | None = None
     latest_fetch_date: datetime | None = None
     classification: str
+    suppression_id: int | None = None
+    is_suppressed: bool = False
+    suppressed_at: datetime | None = None
+
+
+class InventorySuppressionCreate(BaseModel):
+    entry_id: int = Field(gt=0)
+
+
+class BulkInventorySuppressionCreate(BaseModel):
+    entry_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BulkInventoryEntryDelete(BaseModel):
+    entry_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BulkInventorySuppressionRestore(BaseModel):
+    suppression_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class InventorySuppressionRead(BaseModel):
+    id: int
+    website_property_id: int
+    target_kind: Literal["normalized_url", "raw_url"]
+    target_value: str
+    normalization_version: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class InventoryList(BaseModel):

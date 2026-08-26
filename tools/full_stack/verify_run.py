@@ -19,6 +19,10 @@ from app.models import (
     ScanComparisonBuild,
     ScanComparisonPageResult,
     ScanProjectionBuild,
+    ScanSeedOrigin,
+    SiteInventorySuppression,
+    SitePage,
+    UrlSourceEntry,
     WebResource,
     WebsiteProperty,
 )
@@ -55,7 +59,8 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         scan_jobs = list(
             db.scalars(
                 select(BackgroundJob).where(
-                    BackgroundJob.scan_id.in_(scan_ids), BackgroundJob.job_type == "scan"
+                    BackgroundJob.scan_id.in_(scan_ids),
+                    BackgroundJob.job_type == "scan",
                 )
             )
         )
@@ -126,6 +131,70 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert root_hashes[0][0] != root_hashes[1][0]
         assert root_hashes[0][1] == root_hashes[1][1]
         assert _artifact_hashes(db, pricing[0]) == _artifact_hashes(db, pricing[1])
+        active_site_pages = db.scalar(
+            select(func.count(SitePage.id)).where(
+                SitePage.website_property_id == site.id,
+                SitePage.workspace_state == "active",
+            )
+        )
+        inventory_suppressions = db.scalar(
+            select(func.count(SiteInventorySuppression.id)).where(
+                SiteInventorySuppression.website_property_id == site.id
+            )
+        )
+        current_source_entries = db.scalar(
+            select(func.count(UrlSourceEntry.id))
+            .join(UrlSourceEntry.url_source)
+            .where(
+                UrlSourceEntry.is_current.is_(True),
+                UrlSourceEntry.url_source.has(website_property_id=site.id),
+            )
+        )
+        snapshot_count = db.scalar(
+            select(func.count(ResourceSnapshot.id)).where(ResourceSnapshot.scan_id.in_(scan_ids))
+        )
+        assert active_site_pages == 5
+        assert inventory_suppressions == 0
+        assert current_source_entries == 1
+        assert snapshot_count == 9
+
+        lifecycle_scan_id = int(result["lifecycle_scan_id"])
+        lifecycle_scan = db.get(Scan, lifecycle_scan_id)
+        assert lifecycle_scan is not None and lifecycle_scan.status in {
+            "completed",
+            "completed_with_errors",
+        }
+        lifecycle_projection = db.scalar(
+            select(ScanProjectionBuild).where(
+                ScanProjectionBuild.scan_id == lifecycle_scan_id,
+                ScanProjectionBuild.status == "ready",
+            )
+        )
+        assert lifecycle_projection is not None
+        assert lifecycle_projection.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
+        resource_id = int(result["lifecycle_page_resource_id"])
+        assert db.get(SitePage, int(result["lifecycle_deleted_site_page_id"])) is None
+        recreated_page = db.scalar(
+            select(SitePage).where(
+                SitePage.website_property_id == site.id,
+                SitePage.resource_id == resource_id,
+            )
+        )
+        assert recreated_page is not None
+        assert recreated_page.owner_label is None
+        assert recreated_page.workflow_status == "unreviewed"
+        inventory_entry_id = int(result["lifecycle_inventory_entry_id"])
+        inventory_entry = db.get(UrlSourceEntry, inventory_entry_id)
+        assert inventory_entry is not None and inventory_entry.is_current
+        seed_origins = list(
+            db.scalars(
+                select(ScanSeedOrigin).where(
+                    ScanSeedOrigin.scan_seed.has(scan_id=lifecycle_scan_id),
+                    ScanSeedOrigin.url_source_entry_id == inventory_entry_id,
+                )
+            )
+        )
+        assert seed_origins
 
         active_jobs = db.scalar(
             select(func.count(BackgroundJob.id)).where(
@@ -151,6 +220,26 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             .having(func.count(HtmlStructuredContentArtifact.id) > 1)
         ).all()
         assert duplicate_artifacts == []
+        duplicate_site_pages = db.execute(
+            select(SitePage.website_property_id, SitePage.resource_id, func.count(SitePage.id))
+            .group_by(SitePage.website_property_id, SitePage.resource_id)
+            .having(func.count(SitePage.id) > 1)
+        ).all()
+        assert duplicate_site_pages == []
+        duplicate_current_source_entries = db.execute(
+            select(
+                UrlSourceEntry.url_source_id,
+                func.coalesce(UrlSourceEntry.normalized_url, UrlSourceEntry.raw_url),
+                func.count(UrlSourceEntry.id),
+            )
+            .where(UrlSourceEntry.is_current.is_(True))
+            .group_by(
+                UrlSourceEntry.url_source_id,
+                func.coalesce(UrlSourceEntry.normalized_url, UrlSourceEntry.raw_url),
+            )
+            .having(func.count(UrlSourceEntry.id) > 1)
+        ).all()
+        assert duplicate_current_source_entries == []
         foreign_key_violations = db.execute(text("PRAGMA foreign_key_check")).all()
         assert foreign_key_violations == []
         blob_count = db.scalar(select(func.count(ContentBlob.id))) or 0
@@ -159,7 +248,15 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
     crawler_requests = [
         entry for entry in requests if entry["user_agent"] == "SiteLedgerGoldenPath/1.0"
     ]
-    allowed_paths = {"/", "/pricing/", "/technical/", "/unchanged/", "/new/"}
+    allowed_paths = {
+        "/",
+        "/pricing/",
+        "/technical/",
+        "/unchanged/",
+        "/new/",
+        "/inventory-only/",
+        "/sitemap.xml",
+    }
     assert crawler_requests
     assert {entry["path"] for entry in crawler_requests} <= allowed_paths
     assert {entry["version"] for entry in crawler_requests} == {1, 2}
@@ -173,7 +270,16 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "crawler_request_count": len(crawler_requests),
         "crawler_request_paths": sorted({entry["path"] for entry in crawler_requests}),
         "duplicate_artifact_identity_count": 0,
+        "duplicate_current_source_identity_count": 0,
+        "duplicate_site_page_identity_count": 0,
         "foreign_key_violation_count": 0,
+        "lifecycle_active_site_page_count": active_site_pages,
+        "lifecycle_current_source_entry_count": current_source_entries,
+        "lifecycle_inventory_suppression_count": inventory_suppressions,
+        "lifecycle_preserved_snapshot_count": snapshot_count,
+        "lifecycle_inventory_entry_id": inventory_entry_id,
+        "lifecycle_seed_origin_count": len(seed_origins),
+        "lifecycle_scan_id": lifecycle_scan_id,
         "projection_algorithm_identities": [build.algorithm_identity for build in projections],
         "projection_versions": [build.projection_version for build in projections],
         "structured_artifact_ids": artifact_ids,

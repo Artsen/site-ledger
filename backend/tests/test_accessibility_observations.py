@@ -264,6 +264,25 @@ def test_run_validates_ownership_caps_profiles_and_logical_uniqueness(
         db_session.flush()
 
 
+def test_new_accessibility_run_rejects_suppressed_page(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site, resource = _site_page(db_session)
+    page = db_session.scalar(select(SitePage).where(SitePage.resource_id == resource.id))
+    assert page is not None
+    page.workspace_state = "suppressed"
+    page.suppressed_at = datetime.now(UTC)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.services.accessibility_collection.get_settings", lambda: _settings(tmp_path)
+    )
+
+    with pytest.raises(ValueError, match="do not belong"):
+        create_accessibility_run(
+            db_session, site.id, AccessibilityRunCreate(resource_ids=[resource.id])
+        )
+
+
 @pytest.mark.asyncio
 async def test_cancellation_and_expired_job_settle_accessibility_run(
     db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
