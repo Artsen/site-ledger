@@ -1,4 +1,4 @@
-import { ArchiveRestore, EyeOff, X } from "lucide-react";
+import { ArchiveRestore, EyeOff, Trash2, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "./Button";
@@ -32,7 +32,7 @@ export function LifecycleAction({
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const Icon = restore ? ArchiveRestore : EyeOff;
+  const Icon = restore ? ArchiveRestore : variant === "danger" ? Trash2 : EyeOff;
 
   useEffect(() => {
     if (!open) return;

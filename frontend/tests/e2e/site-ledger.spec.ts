@@ -82,7 +82,7 @@ test("Accessibility workspace is responsive and keeps automated evidence explici
   await expect(page.getByRole("link", { name: "Accessibility" })).toHaveAttribute("aria-current", "page");
 });
 
-test("Page and Inventory deletion remove workspace and Source entries", async ({ page }) => {
+test("Page and Inventory Remove, Restore, and Delete remain distinct", async ({ page }) => {
   await mockApi(page);
   let pageState: "active" | "suppressed" = "active";
   let pageExists = true;
@@ -126,23 +126,42 @@ test("Page and Inventory deletion remove workspace and Source entries", async ({
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ selected: 1, changed: 1, unchanged: 0, rejected: 0 }) });
   });
   await page.route("**/api/sites/3/inventory/bulk-delete", async (route) => {
-    expect((await route.request().postDataJSON()).entry_ids).toEqual([6, 8]);
+    expect((await route.request().postDataJSON()).entry_ids).toEqual([6]);
     inventoryExists = false;
     inventorySuppressed = false;
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ selected: 2, changed: 2, unchanged: 0, rejected: 0 }) });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ selected: 1, changed: 1, unchanged: 0, rejected: 0 }) });
   });
 
   await page.goto("/sites/3/pages");
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByRole("button", { name: "Remove from Site Pages" }).click();
+  await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
+  await page.getByLabel("Site Page state").selectOption("suppressed");
+  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await page.getByRole("button", { name: "Restore to Site Pages" }).click();
+  await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
+  await page.getByLabel("Site Page state").selectOption("active");
+  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
   await page.getByRole("button", { name: "Delete", exact: true }).click();
-  await page.getByRole("button", { name: "Delete from Site Pages" }).click();
+  await page.getByRole("button", { name: "Delete Page workspace" }).click();
   await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
   await page.getByLabel("Site Page state").selectOption("suppressed");
   await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
 
   await page.goto("/sites/3/inventory");
-  await page.getByLabel("Select all Inventory URLs on this loaded page").check();
-  await page.getByRole("button", { name: "Delete selected" }).click();
-  await page.getByRole("button", { name: "Delete from Inventory" }).click();
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByRole("button", { name: "Remove from Inventory" }).click();
+  await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
+  await page.getByLabel("Inventory visibility").selectOption("suppressed");
+  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await page.getByRole("button", { name: "Restore to Inventory" }).click();
+  await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
+  await page.getByLabel("Inventory visibility").selectOption("active");
+  await expect(page.getByText("https://example.com/pricing")).toBeVisible();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("button", { name: "Delete from current Inventory" }).click();
   await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);
   await page.getByLabel("Inventory visibility").selectOption("suppressed");
   await expect(page.getByText("https://example.com/pricing")).toHaveCount(0);

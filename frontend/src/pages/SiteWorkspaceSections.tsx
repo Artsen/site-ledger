@@ -9,6 +9,7 @@ import {
 
 import {
   addManualUrls,
+  bulkCreateInventorySuppressions,
   bulkDeleteInventoryEntries,
   bulkDeletePages,
   bulkRefreshSources,
@@ -19,6 +20,7 @@ import {
   cancelSourceRefresh,
   createSource,
   createAiDocumentSource,
+  createInventorySuppression,
   createPageCategory,
   createSiteNote,
   deletePageCategory,
@@ -266,15 +268,20 @@ export function SitePagesSection({ site }: { site: Site }) {
   }
   query.set("limit", String(pagination.limit));
   query.set("offset", String(pagination.offset));
+  const queryIdentity = query.toString();
   const pages = useQuery({
-    queryKey: ["site-pages", String(site.id), query.toString()],
-    queryFn: () => listSitePages(String(site.id), `?${query.toString()}`),
+    queryKey: ["site-pages", String(site.id), queryIdentity],
+    queryFn: () => listSitePages(String(site.id), `?${queryIdentity}`),
   });
   const categories = useQuery({
     queryKey: ["page-categories", String(site.id)],
     queryFn: () =>
       listPageCategories(String(site.id), "?active_state=all&limit=200"),
   });
+  const selectedPages = pages.data?.items.filter((page) => selected.includes(page.resource_id)) ?? [];
+  const selectedActivePageIds = selectedPages.filter((page) => page.workspace_state === "active").map((page) => page.resource_id);
+  const selectedRemovedPageIds = selectedPages.filter((page) => page.workspace_state === "suppressed").map((page) => page.resource_id);
+  useEffect(() => setSelected([]), [queryIdentity]);
   useEffect(() => pagination.ensureValid(pages.data?.total), [pages.data?.total, pagination]);
   const controls = pages.data ? <PaginatedTableControls total={pages.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="Page" isLoading={pages.isFetching && !pages.isLoading} /> : null;
   const bulk = useMutation({
@@ -466,31 +473,45 @@ export function SitePagesSection({ site }: { site: Site }) {
           >
             Set workflow
           </Button>
+          {selectedActivePageIds.length ? (
+            <LifecycleAction
+              label={workspaceState === "all" ? `Remove ${plural(selectedActivePageIds.length, "active Page")}` : "Remove selected"}
+              title="Remove selected Pages from Site Pages?"
+              description="Their Page organization and historical Scan evidence will be retained. You can restore them later."
+              confirmLabel="Remove from Site Pages"
+              action={async () => {
+                await bulkPageWorkspaceState(String(site.id), selectedActivePageIds, "suppressed");
+                await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+                setSelected([]);
+              }}
+            />
+          ) : null}
+          {selectedRemovedPageIds.length ? (
+            <LifecycleAction
+              label={workspaceState === "all" ? `Restore ${plural(selectedRemovedPageIds.length, "removed Page")}` : "Restore selected"}
+              title="Restore selected Pages to Site Pages?"
+              description="These Pages will return to the active Site Pages workspace with their existing organization intact."
+              confirmLabel="Restore to Site Pages"
+              restore
+              action={async () => {
+                await bulkPageWorkspaceState(String(site.id), selectedRemovedPageIds, "active");
+                await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+                setSelected([]);
+              }}
+            />
+          ) : null}
           <LifecycleAction
-            label="Delete selected"
-            title="Delete selected Pages from Site Pages?"
-            description="Page organization and Page notes will be deleted. Historical Scan observations remain, and a later scan can create fresh Page records."
-            confirmLabel="Delete from Site Pages"
+            label={workspaceState === "all" ? `Delete ${plural(selected.length, "selected Page")}` : "Delete selected"}
+            title="Delete selected Page workspaces?"
+            description="Page notes, categories, owner, and workflow organization will be deleted. Historical Scan evidence will remain. If a later Scan observes the URLs again, Site Ledger can create fresh Page workspaces."
+            confirmLabel="Delete Page workspaces"
+            variant="danger"
             action={async () => {
               await bulkDeletePages(String(site.id), selected);
               await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
               setSelected([]);
             }}
           />
-          {workspaceState !== "active" ? (
-            <LifecycleAction
-              label="Restore selected"
-              title="Restore selected Pages to Site Pages?"
-              description="These Pages will return to the active Site Pages workspace with their existing organization intact."
-              confirmLabel="Restore to Site Pages"
-              restore
-              action={async () => {
-                await bulkPageWorkspaceState(String(site.id), selected, "active");
-                await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
-                setSelected([]);
-              }}
-            />
-          ) : null}
         </div>
       ) : null}
       {bulk.error ? (
@@ -643,18 +664,19 @@ function SitePagesTable({
                       Latest observation
                     </Link>
                   ) : null}
-                  <LifecycleAction
-                    label="Delete"
-                    title="Delete this Page from Site Pages?"
-                    description="Page organization and Page notes will be deleted. Historical Scan observations remain, and a later scan can create a fresh Page record."
-                    confirmLabel="Delete from Site Pages"
-                    className="min-h-0 justify-start border-0 p-0 text-xs underline"
-                    action={async () => {
-                      await bulkDeletePages(String(siteId), [page.resource_id]);
-                      await onStateChanged(page.resource_id);
-                    }}
-                  />
-                  {page.workspace_state === "suppressed" ? (
+                  {page.workspace_state === "active" ? (
+                    <LifecycleAction
+                      label="Remove"
+                      title="Remove this Page from Site Pages?"
+                      description="Its Page organization and historical Scan evidence will be retained. You can restore it later."
+                      confirmLabel="Remove from Site Pages"
+                      className="min-h-0 justify-start border-0 p-0 text-xs underline"
+                      action={async () => {
+                        await updatePageWorkspaceState(String(siteId), String(page.resource_id), "suppressed");
+                        await onStateChanged(page.resource_id);
+                      }}
+                    />
+                  ) : (
                     <LifecycleAction
                       label="Restore"
                       title="Restore this Page to Site Pages?"
@@ -667,7 +689,19 @@ function SitePagesTable({
                         await onStateChanged(page.resource_id);
                       }}
                     />
-                  ) : null}
+                  )}
+                  <LifecycleAction
+                    label="Delete"
+                    title="Delete this Page workspace?"
+                    description="Page notes, categories, owner, and workflow organization will be deleted. Historical Scan evidence will remain. If a later Scan observes the URL again, Site Ledger can create a fresh Page workspace."
+                    confirmLabel="Delete Page workspace"
+                    variant="danger"
+                    className="min-h-0 justify-start border-0 p-0 text-xs underline"
+                    action={async () => {
+                      await bulkDeletePages(String(siteId), [page.resource_id]);
+                      await onStateChanged(page.resource_id);
+                    }}
+                  />
                 </div>
               </td>
             </tr>
@@ -1474,6 +1508,7 @@ export function SiteInventorySection({ site }: { site: Site }) {
   const pagination = useUrlPagination({ prefix: "inventory" });
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string[]>([]);
+  const visibility = searchParams.get("visibility") ?? "active";
   const query = new URLSearchParams();
   for (const key of [
     "search",
@@ -1487,21 +1522,18 @@ export function SiteInventorySection({ site }: { site: Site }) {
   }
   query.set("limit", String(pagination.limit));
   query.set("offset", String(pagination.offset));
+  const queryIdentity = query.toString();
   const inventory = useQuery({
-    queryKey: ["inventory", String(site.id), query.toString()],
-    queryFn: () => listInventory(String(site.id), `?${query.toString()}`),
+    queryKey: ["inventory", String(site.id), queryIdentity],
+    queryFn: () => listInventory(String(site.id), `?${queryIdentity}`),
   });
   const selectedItems =
     inventory.data?.items.filter((item) =>
       selected.includes(inventoryItemKey(item)),
     ) ?? [];
-  const selectedEntryIds = Array.from(
-    new Set(
-      selectedItems.flatMap((item) =>
-        item.sources.map((source) => Number(source.entry_id)),
-      ),
-    ),
-  );
+  const selectedEntryIds = selectedItems.map((item) => Number(item.sources[0].entry_id));
+  const selectedActiveItems = selectedItems.filter((item) => !item.is_suppressed);
+  const selectedActiveEntryIds = selectedActiveItems.map((item) => Number(item.sources[0].entry_id));
   const selectedSuppressionIds = selectedItems
     .filter(
       (item): item is InventoryItem & { suppression_id: number } =>
@@ -1513,6 +1545,7 @@ export function SiteInventorySection({ site }: { site: Site }) {
     await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
     setSelected([]);
   };
+  useEffect(() => setSelected([]), [queryIdentity]);
   useEffect(() => pagination.ensureValid(inventory.data?.total), [inventory.data?.total, pagination]);
   const controls = inventory.data ? <PaginatedTableControls total={inventory.data.total} limit={pagination.limit} offset={pagination.offset} onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} itemLabel="inventory URL" isLoading={inventory.isFetching && !inventory.isLoading} /> : null;
   return (
@@ -1592,16 +1625,16 @@ export function SiteInventorySection({ site }: { site: Site }) {
           <span className="text-sm font-medium">
             {plural(selected.length, "URL")} selected
           </span>
-          {selectedEntryIds.length ? (
+          {selectedActiveEntryIds.length ? (
             <LifecycleAction
-              label="Delete selected"
-              title={`Delete ${plural(selected.length, "selected URL")} from Inventory?`}
-              description="The selected Source entries will be deleted. Historical scan evidence remains, and a later Source refresh can discover these URLs again."
-              confirmLabel="Delete from Inventory"
+              label={visibility === "all" ? `Remove ${plural(selectedActiveEntryIds.length, "active URL")}` : "Remove selected"}
+              title={`Remove ${plural(selectedActiveEntryIds.length, "selected URL")} from active Inventory?`}
+              description="Current Source declarations and historical evidence are retained. The URLs remain removed after Source refresh until you restore them."
+              confirmLabel="Remove from Inventory"
               action={async () => {
-                await bulkDeleteInventoryEntries(
+                await bulkCreateInventorySuppressions(
                   String(site.id),
-                  selectedEntryIds,
+                  selectedActiveEntryIds,
                 );
                 await refreshInventory();
               }}
@@ -1609,7 +1642,7 @@ export function SiteInventorySection({ site }: { site: Site }) {
           ) : null}
           {selectedSuppressionIds.length ? (
             <LifecycleAction
-              label="Restore selected"
+              label={visibility === "all" ? `Restore ${plural(selectedSuppressionIds.length, "removed URL")}` : "Restore selected"}
               title={`Restore ${plural(selectedSuppressionIds.length, "selected URL")} to Inventory?`}
               description="The URLs will return to active Inventory and Inventory-derived scan seeding."
               confirmLabel="Restore to Inventory"
@@ -1619,6 +1652,19 @@ export function SiteInventorySection({ site }: { site: Site }) {
                   String(site.id),
                   selectedSuppressionIds,
                 );
+                await refreshInventory();
+              }}
+            />
+          ) : null}
+          {selectedEntryIds.length ? (
+            <LifecycleAction
+              label={visibility === "all" ? `Delete ${plural(selected.length, "selected URL")}` : "Delete selected"}
+              title={`Delete ${plural(selected.length, "selected URL")} from current Inventory?`}
+              description="Their current Source declarations will be deactivated. Historical Source records and Scan evidence remain. A later Source refresh can make the URLs active again."
+              confirmLabel="Delete from current Inventory"
+              variant="danger"
+              action={async () => {
+                await bulkDeleteInventoryEntries(String(site.id), selectedEntryIds);
                 await refreshInventory();
               }}
             />
@@ -1641,8 +1687,8 @@ export function SiteInventorySection({ site }: { site: Site }) {
       ) : null}
       {controls ? <div className="mt-4">{controls}</div> : null}
       <p className="mt-4 text-xs text-stone-600">
-        Deleting an Inventory URL removes its current Source declarations. Historical scan
-        evidence remains, and Source refreshes can discover the URL again.
+        Removing an Inventory URL preserves current Source declarations until Restore. Deleting it
+        deactivates current declarations while retaining Source provenance and historical Scan evidence.
       </p>
     </section>
   );
@@ -1750,15 +1796,40 @@ function InventoryTable({
               <td className="px-3 py-2">{item.validation_state}</td>
               <td className="px-3 py-2">{item.classification}</td>
               <td className="px-3 py-2">
+                {item.is_suppressed && item.suppression_id !== null ? (
+                  <LifecycleAction
+                    label="Restore"
+                    title="Restore this URL to Inventory?"
+                    description="The URL will return to active Inventory and Inventory-derived Scan seeding."
+                    confirmLabel="Restore to Inventory"
+                    restore
+                    action={async () => {
+                      await bulkRestoreInventorySuppressions(String(siteId), [item.suppression_id as number]);
+                      await onChanged();
+                    }}
+                  />
+                ) : (
+                  <LifecycleAction
+                    label="Remove"
+                    title="Remove this URL from active Inventory?"
+                    description="Current Source declarations and historical evidence are retained. The URL remains removed after Source refresh until you restore it."
+                    confirmLabel="Remove from Inventory"
+                    action={async () => {
+                      await createInventorySuppression(String(siteId), Number(item.sources[0].entry_id));
+                      await onChanged();
+                    }}
+                  />
+                )}
                 <LifecycleAction
                   label="Delete"
-                  title="Delete this URL from Inventory?"
-                  description="Its current Source declarations will be deleted. Historical scan evidence remains, and a later Source refresh can discover the URL again."
-                  confirmLabel="Delete from Inventory"
+                  title="Delete this URL from current Inventory?"
+                  description="Its current Source declarations will be deactivated. Historical Source records and Scan evidence remain. A later Source refresh can make the URL active again."
+                  confirmLabel="Delete from current Inventory"
+                  variant="danger"
                   action={async () => {
                     await bulkDeleteInventoryEntries(
                       String(siteId),
-                      item.sources.map((source) => Number(source.entry_id)),
+                      [Number(item.sources[0].entry_id)],
                     );
                     await onChanged();
                   }}

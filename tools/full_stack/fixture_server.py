@@ -52,6 +52,16 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "application/javascript; charset=utf-8",
             )
             return
+        if path == "/sitemap.xml":
+            port = self.server.server_address[1]
+            body = (
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                f"<url><loc>http://127.0.0.1:{port}/inventory-only/</loc></url>"
+                "</urlset>\n"
+            )
+            self._send(HTTPStatus.OK, body.encode("utf-8"), "application/xml; charset=utf-8")
+            return
         html = fixture_page(path, self.server.state.version())
         if html is None:
             self._send(HTTPStatus.NOT_FOUND, b"Not found\n", "text/plain; charset=utf-8")

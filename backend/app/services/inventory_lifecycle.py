@@ -151,7 +151,7 @@ def bulk_delete_inventory_entries(
     if site is None:
         return None
     requested_ids = set(entry_ids)
-    entries = list(
+    representatives = list(
         db.scalars(
             select(UrlSourceEntry)
             .join(UrlSource, UrlSource.id == UrlSourceEntry.url_source_id)
@@ -161,25 +161,43 @@ def bulk_delete_inventory_entries(
             )
         )
     )
-    if len(entries) != len(requested_ids):
+    if len(representatives) != len(requested_ids):
         raise ValueError("One or more Inventory entries do not belong to this Site.")
+
+    identities = {inventory_group_identity(db, site, entry): entry for entry in representatives}
+    contributors: dict[tuple[str, str], list[UrlSourceEntry]] = {
+        identity: [] for identity in identities
+    }
+    for entry in db.scalars(
+        select(UrlSourceEntry)
+        .join(UrlSource, UrlSource.id == UrlSourceEntry.url_source_id)
+        .where(UrlSource.website_property_id == site_id)
+    ):
+        identity = inventory_group_identity(db, site, entry)
+        if identity in contributors:
+            contributors[identity].append(entry)
 
     suppressions = inventory_suppression_map(db, site)
     matching_suppressions = {
         suppression.id: suppression
-        for entry in entries
+        for entry in representatives
         if (suppression := matching_inventory_suppression(db, site, entry, suppressions))
         is not None
     }
     for suppression in matching_suppressions.values():
         db.delete(suppression)
-    for entry in entries:
-        db.delete(entry)
+    changed = 0
+    for entries in contributors.values():
+        current_entries = [entry for entry in entries if entry.is_current]
+        if current_entries:
+            changed += 1
+        for entry in current_entries:
+            entry.is_current = False
     db.commit()
     return BulkMutationResult(
-        selected=len(requested_ids),
-        changed=len(entries),
-        unchanged=0,
+        selected=len(identities),
+        changed=changed,
+        unchanged=len(identities) - changed,
     )
 
 
@@ -289,3 +307,10 @@ def inventory_suppression_identity(
         base_url=site.base_url,
     )
     return "normalized_url", normalized.normalized_url, version
+
+
+def inventory_group_identity(
+    db: Session, site: WebsiteProperty, entry: UrlSourceEntry
+) -> tuple[str, str]:
+    kind, value, _version = inventory_suppression_identity(db, site, entry)
+    return kind, value

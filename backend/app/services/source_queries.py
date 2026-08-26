@@ -23,6 +23,7 @@ from app.schemas.sources import (
     UrlSourceRead,
 )
 from app.services.inventory_lifecycle import (
+    inventory_group_identity,
     inventory_suppression_map,
     matching_inventory_suppression,
 )
@@ -168,9 +169,9 @@ def list_inventory(
             )
         )
     )
-    grouped: dict[str, list[UrlSourceEntry]] = defaultdict(list)
+    grouped: dict[tuple[str, str], list[UrlSourceEntry]] = defaultdict(list)
     for entry in entries:
-        key = entry.normalized_url or f"invalid:{entry.id}"
+        key = inventory_group_identity(db, site, entry)
         grouped[key].append(entry)
     suppressions = inventory_suppression_map(db, site)
     suppression_by_key = {

@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
   createPageNote,
   addPageCategoryExclusion,
+  bulkDeletePages,
   getPageCategoryProvenance,
   getInboundLinks,
   getOutgoingLinks,
@@ -62,6 +63,7 @@ const WORKFLOWS = [
 
 export function PersistentPageDetailPage() {
   const { siteId = "", resourceId = "" } = useParams();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get("tab") ?? "overview";
   const queryClient = useQueryClient();
@@ -134,6 +136,18 @@ export function PersistentPageDetailPage() {
                 await updatePageWorkspaceState(siteId, resourceId, value.workspace_state === "suppressed" ? "active" : "suppressed");
                 await queryClient.invalidateQueries({ queryKey: ["site-page", siteId, resourceId] });
                 await queryClient.invalidateQueries({ queryKey: ["site-pages", siteId] });
+              }}
+            />
+            <LifecycleAction
+              label="Delete Page"
+              title="Delete this Page workspace?"
+              description="Page notes, categories, owner, and workflow organization will be deleted. Historical Scan evidence will remain. If a later Scan observes the URL again, Site Ledger can create a fresh Page workspace."
+              confirmLabel="Delete Page workspace"
+              variant="danger"
+              action={async () => {
+                await bulkDeletePages(siteId, [Number(resourceId)]);
+                await queryClient.invalidateQueries({ queryKey: ["site-pages", siteId] });
+                navigate(`/sites/${siteId}/pages`);
               }}
             />
             <a

@@ -134,7 +134,7 @@ DTD/entity loading, and gzip decompression is bounded. Out-of-scope or invalid e
 reviewable but are not crawlable resources.
 
 Source Inventory is input data, not scan output. When selected for a scan, source entries are copied
-into ScanSeed and ScanSeedOrigin records. Later refresh or deletion does not rewrite a scan's input
+into ScanSeed and ScanSeedOrigin records. Later refresh or current-membership deletion does not rewrite a scan's input
 provenance.
 
 `UrlSourceEntry.is_current` records current Source truth. Site-level
@@ -143,6 +143,12 @@ URL appears in active Inventory and Inventory-derived seeding. Suppression never
 declarations, survives refresh and additional matching Sources, and preserves grouped multi-source
 provenance. Manual declaration removal only marks the retained manual entry non-current. Neither
 operation is a global crawl exclusion or an evidence-deletion path.
+
+Inventory Remove and Delete are separate. Remove retains current Source declarations and stores a
+restorable suppression policy. Delete clears that policy and marks every current Source contributor
+for the server-derived grouped Inventory identity non-current. It never physically deletes
+`UrlSourceEntry`, so historical `ScanSeedOrigin.url_source_entry_id` provenance remains resolvable;
+a later refresh can reactivate the same row.
 
 AI Document refreshes reuse Source jobs, safe fetching, Site scope, `WebResource`, and current
 Inventory origins. Dedicated compressed blobs preserve exact accepted text. They never create
@@ -181,6 +187,11 @@ all-sites observation mode can inspect the same normalized Page identity outside
 `SitePage.workspace_state` controls current Site membership independently of workflow status.
 Operational Page selectors use active membership; historical Page and Scan accessors retain
 suppressed associations so later mutable policy never changes what was observed.
+
+Page Remove retains `SitePage` and all Site organization while setting suppressed state. Page
+Delete removes that mutable workspace and its owned notes and organization, but never deletes
+`WebResource`, Scan observations, links, content, Performance, Accessibility, comparison, or
+projection evidence. A later saved-Site observation may create a fresh active `SitePage`.
 
 Parse artifacts are identified by content blob, parser version, parser configuration, and final URL
 resolution base. The base URL is required because relative links and canonical URLs depend on it.

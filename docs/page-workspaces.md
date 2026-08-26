@@ -107,6 +107,23 @@ restoration. New Category Rule evaluation, Performance collection, and Accessibi
 target active Pages. Historical Page detail, observations, structured content, comparisons, and
 existing Performance and Accessibility evidence remain readable for removed Pages.
 
+## Remove And Delete
+
+Remove and Delete are intentionally different lifecycle operations. Removed views contain only
+suppressed, restorable rows; deleting current workspace membership does not create a Removed row.
+
+| Subject | Remove | Delete |
+| --- | --- | --- |
+| Page | Keeps `SitePage`, owner, workflow, categories, exclusions, and notes; sets the workspace state to suppressed; survives later Scans; requires explicit Restore. | Deletes `SitePage` and its Page-owned organization; keeps `WebResource`, Scan observations, links, content, Performance, Accessibility, comparison, and projection evidence; a later saved-Site Scan creates a fresh active, unreviewed workspace. |
+| Inventory URL | Keeps every current Source entry and creates a Site suppression policy; survives Source refresh; requires explicit Restore. | Marks every current contributor for the grouped URL identity non-current and clears suppression; preserves physical `UrlSourceEntry` rows and historical provenance; later Source refresh or manual re-add may reactivate the same rows. |
+
+The Inventory Delete API accepts one representative Source-entry ID per selected grouped row. The
+backend validates Site membership, derives the same normalized or exact-raw identity used by the
+Inventory query, and deactivates all current contributors for that identity. Its `changed` count is
+therefore a count of grouped Inventory URLs, not Source entries. Inventory Delete does not
+physically delete `UrlSourceEntry` and cannot null a retained
+`ScanSeedOrigin.url_source_entry_id` reference.
+
 SQLite query-plan checks confirmed the composite occurrence source/role index serves outgoing role
 filters, the Site/workflow index serves workflow-filtered catalogs, and the assignment Page index
 serves category enrichment. The catalog and graph tests also assert bounded SQL query counts as the
@@ -180,12 +197,17 @@ Deleting one or all Scans preserves `SitePage`, categories, assignments, Page no
 workflow status. A `WebResource` is not orphaned while any SitePage references it. Site deletion
 removes Site-scoped metadata and then permits normal reference-aware cleanup.
 
-URL Inventory removal is a separate Site policy. `SiteInventorySuppression` records a normalized
+URL Inventory Remove is a separate Site policy. `SiteInventorySuppression` records a normalized
 URL identity, or an exact raw URL for an invalid entry, without changing current Source declarations.
 Grouped multi-source URLs retain every contributor and their Source counts in the Removed view.
 Refresh and later matching Sources do not clear suppression. Suppression excludes the URL from
 Inventory-derived Scan seeds, but it does not affect the Scan starting URL or ordinary link
 discovery. Page suppression and Inventory suppression are independent.
+
+Inventory Delete instead deactivates all current Source declarations for the grouped URL and
+removes any matching suppression. It disappears from Active, Removed, and All current Inventory
+views. Refresh reuses and reactivates an existing matching Source row where its uniqueness contract
+allows, so provenance identity and historical Source counters are not rewritten.
 
 Removing an individual Manual URL sets its retained `UrlSourceEntry.is_current` state to false.
 Re-adding the same normalized URL reactivates that row and preserves its provenance. Sitemap,

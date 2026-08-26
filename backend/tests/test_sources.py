@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     BackgroundJob,
     ScanSeed,
+    ScanSeedOrigin,
     SiteInventorySuppression,
     SourceRefresh,
     UrlSourceEntry,
@@ -240,49 +241,145 @@ async def test_sitemap_refresh_does_not_clear_inventory_suppression(
 
 
 @pytest.mark.asyncio
-async def test_inventory_delete_allows_sitemap_refresh_to_recreate_without_duplicates(
+async def test_inventory_delete_preserves_multi_source_seed_provenance_and_reactivates(
     db_session: Session,
 ) -> None:
     site = create_site(
         db_session,
         _site_payload(scope_config=ScopeConfigPayload(allowed_host_patterns=["example.com"])),
     )
-    source = create_source(
+    manual, manual_entries, *_ = add_manual_urls(db_session, site.id, "https://example.com/pricing")
+    sitemap = create_source(
         db_session,
         site.id,
         UrlSourceCreate(name="Main sitemap", source_url="https://example.com/sitemap.xml"),
     )
-    assert source is not None
+    assert manual is not None and sitemap is not None
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(
             200,
             headers={"content-type": "application/xml"},
-            content=b"<urlset><url><loc>https://example.com/foo</loc></url></urlset>",
+            content=b"<urlset><url><loc>https://example.com/pricing</loc></url></urlset>",
         )
     )
-    first_refresh = await refresh_source(db_session, site.id, source.id, transport)
-    original = db_session.query(UrlSourceEntry).one()
-    original_resource_id = original.resource_id
-    suppression = create_inventory_suppression(db_session, site.id, original.id)
+    await refresh_source(db_session, site.id, sitemap.id, transport)
+    sitemap_entry = db_session.scalar(
+        select(UrlSourceEntry).where(UrlSourceEntry.url_source_id == sitemap.id)
+    )
+    manual_entry = manual_entries[0]
+    assert sitemap_entry is not None
+    resource_id = manual_entry.resource_id
+    source_entry_ids = {manual_entry.id, sitemap_entry.id}
+
+    scan = create_scan_from_site(
+        db_session,
+        site.id,
+        ScopeConfigPayload(allowed_host_patterns=["example.com"]),
+        include_inventory=True,
+    )
+    assert scan is not None
+    origins = list(
+        db_session.scalars(
+            select(ScanSeedOrigin).where(ScanSeedOrigin.url_source_entry_id.in_(source_entry_ids))
+        )
+    )
+    assert {origin.url_source_entry_id for origin in origins} == source_entry_ids
+    suppression = create_inventory_suppression(db_session, site.id, manual_entry.id)
     assert suppression is not None
 
-    deleted = bulk_delete_inventory_entries(db_session, site.id, [original.id, original.id])
+    deleted = bulk_delete_inventory_entries(db_session, site.id, [manual_entry.id, manual_entry.id])
     assert deleted is not None
     assert (deleted.selected, deleted.changed, deleted.unchanged) == (1, 1, 0)
-    assert db_session.query(UrlSourceEntry).count() == 0
+    preserved_entries = {
+        entry.id: entry
+        for entry in db_session.scalars(
+            select(UrlSourceEntry).where(UrlSourceEntry.id.in_(source_entry_ids))
+        )
+    }
+    assert set(preserved_entries) == source_entry_ids
+    assert all(not entry.is_current for entry in preserved_entries.values())
     assert db_session.get(SiteInventorySuppression, suppression.id) is None
-    assert db_session.get(WebResource, original_resource_id) is not None
+    assert db_session.get(WebResource, resource_id) is not None
+    db_session.expire_all()
+    assert {
+        origin.url_source_entry_id
+        for origin in db_session.scalars(
+            select(ScanSeedOrigin).where(ScanSeedOrigin.id.in_([item.id for item in origins]))
+        )
+    } == source_entry_ids
+    assert all(
+        db_session.get(UrlSourceEntry, entry_id) is not None for entry_id in source_entry_ids
+    )
+    active = list_inventory(
+        db_session,
+        site.id,
+        search=None,
+        source_type=None,
+        source_id=None,
+        scope_decision=None,
+        validation_state=None,
+        visibility="active",
+        limit=10,
+        offset=0,
+    )
+    removed = list_inventory(
+        db_session,
+        site.id,
+        search=None,
+        source_type=None,
+        source_id=None,
+        scope_decision=None,
+        validation_state=None,
+        visibility="suppressed",
+        limit=10,
+        offset=0,
+    )
+    assert active is not None and active.total == 0
+    assert removed is not None and removed.total == 0
+    sources = list_sources(
+        db_session, site.id, source_type=None, active_state="all", limit=10, offset=0
+    )
+    assert sources is not None
+    assert sorted(source.current_entry_count for source in sources.items) == [0, 0]
 
-    recreated = await refresh_source(db_session, site.id, source.id, transport)
-    recreated_entry = db_session.query(UrlSourceEntry).one()
-    assert first_refresh is not None and first_refresh.entries_added == 1
-    assert recreated is not None and recreated.entries_added == 1
-    assert recreated_entry.resource_id == original_resource_id
+    refreshed = await refresh_source(db_session, site.id, sitemap.id, transport)
+    assert refreshed is not None
+    db_session.expire_all()
+    assert db_session.get(UrlSourceEntry, sitemap_entry.id).is_current is True  # type: ignore[union-attr]
+    assert db_session.get(UrlSourceEntry, manual_entry.id).is_current is False  # type: ignore[union-attr]
+    assert db_session.query(UrlSourceEntry).count() == 2
+    active = list_inventory(
+        db_session,
+        site.id,
+        search=None,
+        source_type=None,
+        source_id=None,
+        scope_decision=None,
+        validation_state=None,
+        visibility="active",
+        limit=10,
+        offset=0,
+    )
+    assert active is not None and active.total == 1
+    assert active.items[0].source_count == 1
 
-    repeated = await refresh_source(db_session, site.id, source.id, transport)
-    assert repeated is not None
-    assert (repeated.entries_added, repeated.entries_updated) == (0, 1)
-    assert db_session.query(UrlSourceEntry).count() == 1
+    _manual, readded, *_ = add_manual_urls(db_session, site.id, "https://example.com/pricing")
+    assert readded[0].id == manual_entry.id
+    assert readded[0].is_current is True
+    active = list_inventory(
+        db_session,
+        site.id,
+        search=None,
+        source_type=None,
+        source_id=None,
+        scope_decision=None,
+        validation_state=None,
+        visibility="active",
+        limit=10,
+        offset=0,
+    )
+    assert active is not None and active.items[0].source_count == 2
+    assert db_session.query(UrlSourceEntry).count() == 2
 
 
 def test_bulk_inventory_delete_is_atomic_across_sites(db_session: Session) -> None:
@@ -524,6 +621,58 @@ def test_managed_entry_removal_is_rejected_and_raw_suppression_is_exact(
     assert delete_inventory_suppression(db_session, other.id, suppression.id) is None
 
 
+def test_inventory_delete_groups_exact_invalid_raw_identity_and_reuses_manual_row(
+    db_session: Session,
+) -> None:
+    site = create_site(db_session, _site_payload())
+    manual, manual_entries, *_ = add_manual_urls(db_session, site.id, "javascript:alert(1)")
+    sitemap = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Sitemap", source_url="https://example.com/sitemap.xml"),
+    )
+    assert manual is not None and sitemap is not None
+    sitemap_entry, _ = upsert_source_entry(
+        db_session,
+        sitemap,
+        "javascript:alert(1)",
+        site=site,
+        source_type="sitemap",
+    )
+    db_session.commit()
+    manual_entry = manual_entries[0]
+    suppression = create_inventory_suppression(db_session, site.id, sitemap_entry.id)
+    assert suppression is not None
+    inventory = list_inventory(
+        db_session,
+        site.id,
+        search=None,
+        source_type=None,
+        source_id=None,
+        scope_decision=None,
+        validation_state=None,
+        visibility="suppressed",
+        limit=10,
+        offset=0,
+    )
+    assert inventory is not None and inventory.total == 1
+    assert inventory.items[0].source_count == 2
+
+    deleted = bulk_delete_inventory_entries(db_session, site.id, [manual_entry.id])
+    assert deleted is not None
+    assert (deleted.selected, deleted.changed, deleted.unchanged) == (1, 1, 0)
+    assert db_session.get(UrlSourceEntry, manual_entry.id) is not None
+    assert db_session.get(UrlSourceEntry, sitemap_entry.id) is not None
+    assert not db_session.get(UrlSourceEntry, manual_entry.id).is_current  # type: ignore[union-attr]
+    assert not db_session.get(UrlSourceEntry, sitemap_entry.id).is_current  # type: ignore[union-attr]
+    assert db_session.get(SiteInventorySuppression, suppression.id) is None
+
+    _manual, readded, *_ = add_manual_urls(db_session, site.id, "javascript:alert(1)")
+    assert readded[0].id == manual_entry.id
+    assert readded[0].is_current is True
+    assert db_session.query(UrlSourceEntry).count() == 2
+
+
 def test_inventory_suppression_remains_compatible_across_url_identity_versions(
     db_session: Session,
 ) -> None:
@@ -568,6 +717,48 @@ def test_inventory_suppression_remains_compatible_across_url_identity_versions(
     assert removed is not None and removed.total == 1
     assert repeated is not None and repeated.id == legacy.id
     assert db_session.query(SiteInventorySuppression).count() == 1
+
+
+def test_inventory_delete_groups_legacy_and_current_normalization_representations(
+    db_session: Session,
+) -> None:
+    site = create_site(db_session, _site_payload())
+    _manual, manual_entries, *_ = add_manual_urls(db_session, site.id, "https://example.com/a%2Fb")
+    sitemap = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Sitemap", source_url="https://example.com/sitemap.xml"),
+    )
+    assert sitemap is not None
+    sitemap_entry, _ = upsert_source_entry(
+        db_session,
+        sitemap,
+        "https://example.com/a%2Fb",
+        site=site,
+        source_type="sitemap",
+    )
+    manual_entry = manual_entries[0]
+    manual_entry.normalized_url = "https://example.com/a/b"
+    db_session.commit()
+
+    inventory = list_inventory(
+        db_session,
+        site.id,
+        search=None,
+        source_type=None,
+        source_id=None,
+        scope_decision=None,
+        validation_state=None,
+        visibility="active",
+        limit=10,
+        offset=0,
+    )
+    assert inventory is not None and inventory.total == 1
+    assert inventory.items[0].source_count == 2
+    deleted = bulk_delete_inventory_entries(db_session, site.id, [manual_entry.id])
+    assert deleted is not None and deleted.changed == 1
+    assert not db_session.get(UrlSourceEntry, manual_entry.id).is_current  # type: ignore[union-attr]
+    assert not db_session.get(UrlSourceEntry, sitemap_entry.id).is_current  # type: ignore[union-attr]
 
 
 def test_bulk_inventory_suppression_is_atomic_deduplicated_and_restorable(

@@ -766,21 +766,31 @@ describe("saved sites workflow", () => {
     expect(screen.getByRole("link", { name: "Open Observation" })).toBeInTheDocument();
   });
 
-  it("removes Pages and deletes Inventory Source entries through accessible confirmations", async () => {
+  it("deletes a Page workspace from Page detail and returns to the list", async () => {
+    renderRoute(<PersistentPageDetailPage />, "/sites/:siteId/pages/:resourceId", "/sites/3/pages/2");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Page" }));
+    expect(screen.getByRole("dialog", { name: "Delete this Page workspace?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete Page workspace" }));
+    await waitFor(() => expect(api.bulkDeletePages).toHaveBeenCalledWith("3", [2]));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete Page" })).not.toBeInTheDocument());
+  });
+
+  it("deletes Page workspaces and current Inventory entries through accessible confirmations", async () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages");
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
-    expect(screen.getByRole("dialog", { name: "Delete this Page from Site Pages?" })).toBeInTheDocument();
-    expect(screen.getAllByText(/Historical Scan observations remain/).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Delete from Site Pages" }));
+    expect(screen.getByRole("dialog", { name: "Delete this Page workspace?" })).toBeInTheDocument();
+    expect(screen.getAllByText(/Historical Scan evidence will remain/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Page workspace" }));
     await waitFor(() => expect(api.bulkDeletePages).toHaveBeenCalledWith("3", [2]));
 
     cleanup();
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
-    expect(screen.getByRole("dialog", { name: "Delete this URL from Inventory?" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Delete from Inventory" }));
-    await waitFor(() => expect(api.bulkDeleteInventoryEntries).toHaveBeenCalledWith("3", [6, 8]));
+    expect(screen.getByRole("dialog", { name: "Delete this URL from current Inventory?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete from current Inventory" }));
+    await waitFor(() => expect(api.bulkDeleteInventoryEntries).toHaveBeenCalledWith("3", [6]));
   });
 
   it("uses independent Page and Inventory state filters", async () => {
@@ -794,15 +804,62 @@ describe("saved sites workflow", () => {
     await waitFor(() => expect(api.listInventory).toHaveBeenLastCalledWith("3", expect.stringContaining("visibility=suppressed")));
   });
 
-  it("selects Inventory rows for bulk delete and restores legacy suppressions", async () => {
+  it("partitions mixed Page bulk lifecycle actions by workspace state", async () => {
+    api.listSitePages.mockResolvedValue({
+      items: [
+        persistentPageFixture,
+        {
+          ...persistentPageFixture,
+          site_page_id: 13,
+          resource_id: 3,
+          normalized_url: "https://example.com/removed",
+          workspace_state: "suppressed",
+          suppressed_at: "2026-08-25T00:00:00Z",
+        },
+      ],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    });
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages&workspace_state=all");
+
+    fireEvent.click(await screen.findByLabelText("Select https://example.com/page"));
+    fireEvent.click(screen.getByLabelText("Select https://example.com/removed"));
+    expect(screen.getByRole("button", { name: "Remove 1 active Page" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore 1 removed Page" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete 2 selected Pages" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove 1 active Page" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove from Site Pages" }));
+    await waitFor(() =>
+      expect(api.bulkPageWorkspaceState).toHaveBeenCalledWith("3", [2], "suppressed"),
+    );
+  });
+
+  it("clears loaded-page selections whenever Page or Inventory query identity changes", async () => {
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=pages");
+    fireEvent.click(await screen.findByLabelText("Select https://example.com/page"));
+    expect(screen.getByText("1 selected on this page")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search site pages"), { target: { value: "other" } });
+    await waitFor(() => expect(screen.queryByText("1 selected on this page")).not.toBeInTheDocument());
+
+    cleanup();
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");
+    fireEvent.click(await screen.findByLabelText("Select https://example.com/a"));
+    expect(screen.getByText("1 URL selected")).toBeInTheDocument();
+    fireEvent.change(screen.getAllByLabelText("inventory URL rows per page")[0], { target: { value: "100" } });
+    await waitFor(() => expect(screen.queryByText("1 URL selected")).not.toBeInTheDocument());
+  });
+
+  it("selects Inventory rows for grouped bulk delete and restores suppressions", async () => {
     renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory");
 
     fireEvent.click(await screen.findByLabelText("Select https://example.com/a"));
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
-    expect(screen.getByRole("dialog", { name: "Delete 1 selected URL from Inventory?" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Delete from Inventory" }));
+    expect(screen.getByRole("dialog", { name: "Delete 1 selected URL from current Inventory?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete from current Inventory" }));
     await waitFor(() =>
-      expect(api.bulkDeleteInventoryEntries).toHaveBeenCalledWith("3", [6, 8]),
+      expect(api.bulkDeleteInventoryEntries).toHaveBeenCalledWith("3", [6]),
     );
 
     cleanup();
@@ -827,6 +884,42 @@ describe("saved sites workflow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restore to Inventory" }));
     await waitFor(() =>
       expect(api.bulkRestoreInventorySuppressions).toHaveBeenCalledWith("3", [15]),
+    );
+  });
+
+  it("partitions mixed Inventory bulk actions and sends one representative per URL", async () => {
+    api.listInventory.mockResolvedValue({
+      items: [
+        inventoryFixture,
+        {
+          ...inventoryFixture,
+          normalized_url: "https://example.com/removed",
+          resource_id: 3,
+          sources: [
+            { id: 9, name: "Secondary sitemap", type: "sitemap", entry_id: 16, raw_url: "https://example.com/removed" },
+            { id: 10, name: "Secondary manual", type: "manual", entry_id: 18, raw_url: "/removed" },
+          ],
+          suppression_id: 17,
+          is_suppressed: true,
+          suppressed_at: "2026-08-25T00:00:00Z",
+        },
+      ],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    });
+    renderRoute(<SiteDetailPage />, "/sites/:siteId", "/sites/3?tab=inventory&visibility=all");
+
+    fireEvent.click(await screen.findByLabelText("Select https://example.com/a"));
+    fireEvent.click(screen.getByLabelText("Select https://example.com/removed"));
+    expect(screen.getByRole("button", { name: "Remove 1 active URL" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore 1 removed URL" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete 2 selected URLs" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete 2 selected URLs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete from current Inventory" }));
+    await waitFor(() =>
+      expect(api.bulkDeleteInventoryEntries).toHaveBeenCalledWith("3", [6, 16]),
     );
   });
 
