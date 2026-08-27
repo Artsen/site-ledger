@@ -32,7 +32,7 @@ def _result(source: str = "materialized", build_id: int | None = 9) -> PageList:
         offset=0,
         projection=ProjectionMetadata(
             projection_source=source,
-            projection_version="scan-projection-v1",
+            projection_version="scan-projection-v2",
             projection_build_id=build_id,
             projection_status="ready" if source == "materialized" else "not_terminal",
         ),

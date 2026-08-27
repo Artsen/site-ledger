@@ -153,7 +153,7 @@ queued/running/cancelling jobs fail closed.
 
 ## Derived History And Compatibility
 
-Affected `scan-projection-v1` and `scan-comparison-v2` rows are invalidated and rebuilt from corrected
+Affected `scan-projection-v2` and `scan-comparison-v3` rows are invalidated and rebuilt from corrected
 evidence. Their algorithms need not change solely because corrected identity inputs produce different
 rows. Page Change History may show a legacy boundary where provenance cannot reconstruct independent
 histories.

@@ -32,7 +32,14 @@ from app.models import (
     WebsiteProperty,
 )
 from app.schemas.scans import ScopeConfigPayload
-from app.services.scan_projections import CURRENT_SCAN_PROJECTION_ALGORITHM
+from app.services.scan_comparisons import (
+    SCAN_COMPARISON_ALGORITHM,
+    SCAN_COMPARISON_VERSION,
+)
+from app.services.scan_projections import (
+    CURRENT_SCAN_PROJECTION_ALGORITHM,
+    SCAN_PROJECTION_VERSION,
+)
 
 
 def main() -> None:
@@ -80,7 +87,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             )
         )
         assert len(projections) == 2
-        assert all(build.projection_version == "scan-projection-v1" for build in projections)
+        assert all(build.projection_version == SCAN_PROJECTION_VERSION for build in projections)
         assert all(
             build.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM for build in projections
         )
@@ -90,6 +97,8 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert (
             build is not None and build.status == "ready" and build.coverage_state == "comparable"
         )
+        assert build.comparison_version == SCAN_COMPARISON_VERSION
+        assert build.algorithm_identity == SCAN_COMPARISON_ALGORITHM
         page_rows = list(
             db.scalars(
                 select(ScanComparisonPageResult).where(

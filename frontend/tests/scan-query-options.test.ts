@@ -6,7 +6,7 @@ import type { ScanProjectionBuild, ScanProjectionStatus } from "../src/types/sca
 const ready: ScanProjectionStatus = {
   scan_id: 1,
   scan_status: "completed",
-  expected_version: "scan-projection-v1",
+  expected_version: "scan-projection-v2",
   projection_source: "materialized",
   projection_status: "ready",
   current_build: { id: 9 } as ScanProjectionBuild,

@@ -193,7 +193,7 @@ beforeEach(() => {
   api.getScanProjectionStatus.mockResolvedValue({
     scan_id: scanFixture.id,
     scan_status: scanFixture.status,
-    expected_version: "scan-projection-v1",
+    expected_version: "scan-projection-v2",
     projection_source: "materialized",
     projection_status: "ready",
     current_build: { id: 9 },
@@ -490,7 +490,7 @@ describe("scan results workflow", () => {
     api.getScanProjectionStatus.mockResolvedValue({
       scan_id: 1,
       scan_status: "completed",
-      expected_version: "scan-projection-v1",
+      expected_version: "scan-projection-v2",
       projection_source: "dynamic",
       projection_status: "building",
       current_build: null,

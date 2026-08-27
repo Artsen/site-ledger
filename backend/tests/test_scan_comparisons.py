@@ -2,8 +2,11 @@ import pytest
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.crawler.scope import ScopeConfig
 from app.models import (
     BackgroundJob,
+    RenderedObservation,
+    RenderRunTarget,
     ResourceOccurrence,
     ResourceReferenceOccurrence,
     ResourceSnapshot,
@@ -23,7 +26,11 @@ from app.services.comparison_queries import (
     page_change_history,
     page_source_diff,
 )
+from app.services.render_runs import create_scan_render_run
+from app.services.rendered_capture import create_observation
 from app.services.scan_comparisons import (
+    SCAN_COMPARISON_ALGORITHM,
+    SCAN_COMPARISON_VERSION,
     ComparisonBuildCancelled,
     ComparisonEligibilityError,
     _coverage,
@@ -176,8 +183,8 @@ def test_build_compares_pages_resources_links_and_is_deterministic(db_session) -
     by_resource = {row.resource_id: row for row in pages}
 
     assert ready.status == "ready"
-    assert ready.comparison_version == "scan-comparison-v2"
-    assert ready.algorithm_identity.endswith("scan-projection-v1")
+    assert ready.comparison_version == "scan-comparison-v3"
+    assert ready.algorithm_identity.endswith("scan-projection-v2")
     assert ready.baseline_projection_checksum
     assert ready.target_projection_checksum
     assert by_resource[resources[0].id].change_state == "metadata_change"
@@ -206,6 +213,92 @@ def test_build_compares_pages_resources_links_and_is_deterministic(db_session) -
     assert rebuilt.comparison_checksum_sha256 == first_checksum
     assert current_comparison_build(db_session, comparison.id).id == rebuilt.id
     assert db_session.get(ScanComparisonBuild, ready.id).status == "superseded"
+
+
+def test_render_differences_do_not_change_comparison_or_page_history(db_session) -> None:
+    site, baseline, target, _ = _fixture(db_session)
+    resource = WebResource(
+        resource_type="page",
+        normalized_url="https://example.com/stable",
+        scheme="https",
+        host="example.com",
+        port=None,
+        path="/stable",
+        query="",
+    )
+    db_session.add(resource)
+    db_session.flush()
+    db_session.add_all(
+        [
+            _snapshot(baseline.id, resource, "stable", "stable-head", "Stable"),
+            _snapshot(target.id, resource, "stable", "stable-head", "Stable"),
+            SitePage(
+                website_property_id=site.id,
+                resource_id=resource.id,
+                workflow_status="unreviewed",
+            ),
+        ]
+    )
+    db_session.commit()
+    _prepare(db_session, baseline, target)
+    baseline_render = _add_scan_render(db_session, baseline, resource, "failed", 429)
+    target_render = _add_scan_render(db_session, target, resource, "completed", 200)
+    comparison = create_comparison(db_session, site.id, baseline.id, target.id)
+    build = create_comparison_build(db_session, comparison.id)
+    db_session.commit()
+    ready = execute_comparison_build(db_session, build.id)
+    first_checksum = ready.comparison_checksum_sha256
+    page = db_session.scalar(
+        select(ScanComparisonPageResult).where(
+            ScanComparisonPageResult.comparison_build_id == ready.id,
+            ScanComparisonPageResult.resource_id == resource.id,
+        )
+    )
+    history = page_change_history(db_session, site.id, resource.id, limit=50, offset=0)
+
+    assert page is not None
+    assert page.primary_change_class == "no_tracked_change"
+    assert page.technical_state == "same"
+    assert page.changed_field_count == 0
+    assert page.rendered_state_changed is False
+    assert page.rendered_counts_changed is False
+    assert "rendered_capture_state" not in page.baseline_json
+    assert "rendered_capture_state" not in page.target_json
+    assert history is not None
+    assert history.items[1].change_label == "No tracked change"
+    assert history.items[1].changed_flags == []
+
+    baseline_render.capture_state = "completed_with_warnings"
+    baseline_render.navigation_http_status = 503
+    target_render.capture_state = "failed"
+    db_session.commit()
+    rebuild = create_comparison_build(db_session, comparison.id, force=True)
+    db_session.commit()
+    rebuilt = execute_comparison_build(db_session, rebuild.id)
+    assert rebuilt.comparison_checksum_sha256 == first_checksum
+
+
+def test_historical_v2_comparison_remains_stored_but_is_not_current(db_session) -> None:
+    site, baseline, target, _ = _fixture(db_session)
+    _prepare(db_session, baseline, target)
+    comparison = create_comparison(db_session, site.id, baseline.id, target.id)
+    build = create_comparison_build(db_session, comparison.id)
+    db_session.commit()
+    ready = execute_comparison_build(db_session, build.id)
+    ready.comparison_version = "scan-comparison-v2"
+    ready.algorithm_identity = (
+        "scan-comparison-v2|source-signals-v1|document-content-v2|incapsula-cb-v1|"
+        "page-v2|resource-v1|link-v1|scan-projection-v1"
+    )
+    db_session.commit()
+
+    assert db_session.get(ScanComparisonBuild, ready.id) is not None
+    assert current_comparison_build(db_session, comparison.id) is None
+    replacement = create_comparison_build(db_session, comparison.id)
+    assert replacement.id != ready.id
+    assert replacement.comparison_version == SCAN_COMPARISON_VERSION
+    assert replacement.algorithm_identity == SCAN_COMPARISON_ALGORITHM
+    assert ready.comparison_version == "scan-comparison-v2"
 
 
 def test_build_releases_sqlite_write_lock_before_progress_callbacks(db_session) -> None:
@@ -781,6 +874,39 @@ def _prepare(db_session, *scans: Scan) -> None:
         build = create_projection_build(db_session, scan.id)
         db_session.commit()
         execute_projection_build(db_session, build.id)
+
+
+def _add_scan_render(
+    db_session,
+    scan: Scan,
+    resource: WebResource,
+    state: str,
+    status: int,
+) -> RenderedObservation:
+    snapshot = db_session.scalar(
+        select(ResourceSnapshot).where(
+            ResourceSnapshot.scan_id == scan.id,
+            ResourceSnapshot.resource_id == resource.id,
+        )
+    )
+    assert snapshot is not None
+    run = create_scan_render_run(db_session, scan, [snapshot])
+    run.status = "completed"
+    db_session.commit()
+    target = db_session.scalar(
+        select(RenderRunTarget).where(RenderRunTarget.render_run_id == run.id)
+    )
+    assert target is not None
+    observation = create_observation(
+        db_session,
+        snapshot,
+        ScopeConfig.from_dict(scan.scope_config),
+        target=target,
+    )
+    observation.capture_state = state
+    observation.navigation_http_status = status
+    db_session.commit()
+    return observation
 
 
 def _web_content_not_found_html(request_id: str, timestamp: str) -> bytes:

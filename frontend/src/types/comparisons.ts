@@ -45,7 +45,6 @@ export type ComparisonPage = {
   final_url_changed: boolean; redirect_state_changed: boolean; content_type_changed: boolean; title_changed: boolean;
   canonical_changed: boolean; robots_changed: boolean; language_changed: boolean; depth_changed: boolean;
   inbound_links_changed: boolean; outbound_links_changed: boolean; embedded_resources_changed: boolean;
-  rendered_state_changed: boolean; rendered_counts_changed: boolean;
   baseline_http_status: number | null; target_http_status: number | null;
   baseline_content_hash: string | null; target_content_hash: string | null;
   baseline_head_hash: string | null; target_head_hash: string | null;
@@ -77,4 +76,4 @@ export type ComparisonLink = {
 export type ComparisonResultList<T> = { items: T[]; total: number; limit: number; offset: number; comparison_build_id: number; comparison_version: string };
 export type SourceDiff = { state: string; diff_text: string; mode: "exact" | "meaningful"; input_truncated: boolean; output_truncated: boolean };
 export type OccurrenceDiff = { items: Array<{ state: string; fingerprint: string; occurrence: Record<string, unknown>; count: number }>; total: number; limit: number; offset: number; compared_baseline_count: number; compared_target_count: number; truncated: boolean };
-export type PageChangeHistory = { items: Array<{ scan_id: number; snapshot_id: number; scan_created_at: string; scan_status: string; observed_at: string | null; http_status: number | null; fetch_state: string; content_hash: string | null; head_hash: string | null; title: string | null; canonical_url: string | null; robots_directives: string | null; rendered_state: string | null; change_label: string; changed_flags: string[]; previous_snapshot_id: number | null; previous_scan_id: number | null; intervening_scan_count: number; intervening_unsuccessful_observation_count: number }>; total: number; limit: number; offset: number };
+export type PageChangeHistory = { items: Array<{ scan_id: number; snapshot_id: number; scan_created_at: string; scan_status: string; observed_at: string | null; http_status: number | null; fetch_state: string; content_hash: string | null; head_hash: string | null; title: string | null; canonical_url: string | null; robots_directives: string | null; change_label: string; changed_flags: string[]; previous_snapshot_id: number | null; previous_scan_id: number | null; intervening_scan_count: number; intervening_unsuccessful_observation_count: number }>; total: number; limit: number; offset: number };

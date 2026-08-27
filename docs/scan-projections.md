@@ -2,18 +2,19 @@
 
 Scan projections are deterministic, versioned database indexes derived from one terminal Scan's
 immutable evidence. They make repeated Page, Resource, link, summary, and graph reads fast. They
-are disposable and rebuildable; the observations, occurrences, stored HTML, browser events,
-artifacts, fetch attempts, and redirect evidence remain authoritative.
+are disposable and rebuildable; the observations, occurrences, stored HTML, fetch attempts, and
+redirect evidence remain authoritative. Browser evidence belongs to its independent RenderRun
+lifecycle and is not an input to current Scan projections.
 
-The current projection version is `scan-projection-v1`. New builds use algorithm identity
-`scan-projection-v1:resource-classifier-v1:link-role-v1`, which describes the projection
+The current projection version is `scan-projection-v2`. New builds use algorithm identity
+`scan-projection-v2:resource-classifier-v1:link-role-v1`, which describes the projection
 computation itself. Upstream evidence producers such as the HTML parser retain their own versioned
 artifact provenance and are not duplicated in the projection identity.
 
-Ready historical builds stamped with
-`scan-projection-v1:html-parser-v3-resource-references:resource-classifier-v1:link-role-v1` remain
-compatible and readable. This compatibility does not rewrite or rebuild them; all new builds store
-only the decoupled current identity. Unknown identities remain incompatible.
+Historical V1 builds, including the earlier HTML-parser-stamped identity, remain stored as
+historical read-model artifacts. Current compatibility selects V2 only. V1 is never relabelled or
+automatically rebuilt; terminal Scans without V2 use dynamic reads until the existing Prepare or
+Rebuild workflow creates a current build.
 
 ## Evidence Boundary
 
@@ -30,9 +31,10 @@ flowchart LR
 ```
 
 `ResourceSnapshot`, `ResourceOccurrence`, `ResourceReferenceOccurrence`, stored HTML, parse
-artifacts, rendered observations, browser event rows, artifacts, and `StaticFetchAttempt` are never
-replaced by projections. Exact Page and Resource detail, occurrence drill-down, browser evidence,
-HTML, retries, and redirects continue reading those raw tables.
+artifacts, and `StaticFetchAttempt` are never replaced by projections. RenderRun observations,
+browser event rows, and artifacts are independent evidence and are neither read nor replaced by a
+V2 projection. Exact Page and Resource detail, occurrence drill-down, browser evidence, HTML,
+retries, and redirects continue reading their authoritative tables.
 
 Terminal statuses are `completed`, `completed_with_errors`, `failed`, `cancelled`, and
 `interrupted`. Collection cannot add evidence after these states. Queued, running, and cancelling
@@ -43,8 +45,9 @@ Scans always use dynamic queries.
 - `ScanProjectionBuild` records one attempt, version, algorithm identity, lifecycle, source and
   output counts, duration, validation data, and deterministic checksum.
 - `ScanProjectionState` contains the atomic pointer to the current ready build for a Scan.
-- `ScanPageProjection` stores one canonical Page row and its inbound/outbound, rendered-summary,
-  seed, response, hash, canonical, and graph-node fields. It does not contain HTML.
+- `ScanPageProjection` stores one canonical Page row and its inbound/outbound, seed, response, hash,
+  canonical, and graph-node fields. It does not contain HTML. Retained `rendered_*` columns are
+  legacy V1 storage and remain null/zero in V2 rows.
 - `ScanResourceProjection` stores the canonical union of observed non-HTML snapshots, embedded
   references, and file-like anchor references.
 - `ScanLinkProjection` stores one directed source-snapshot/target-resource aggregate while raw
@@ -74,7 +77,7 @@ sequenceDiagram
   participant B as Projection build
   participant T as Staging rows
   participant P as Current pointer
-  S->>B: queue scan-projection-v1
+  S->>B: queue scan-projection-v2
   B->>T: write bounded batches
   B->>T: validate counts and checksum
   B->>P: atomically select ready build
@@ -126,6 +129,11 @@ tie-breakers, and observation navigation. Resource summaries read `ScanSummaryPr
 Projection-backed graph loading reads Page and Link projections, including bounded focus traversal;
 edge occurrence inspection remains a paginated raw-evidence query.
 
+Projected Page lists compose `RenderedObservation.capture_state` through one bounded SQL join at
+read time. This preserves Render filtering, sorting, and Page state without putting Render evidence
+in projection rows or checksums. Observation or artifact deletion therefore updates presentation
+without requiring or changing a projection rebuild.
+
 ```mermaid
 flowchart LR
   P[ScanPageProjection] --> G[Graph response]
@@ -134,9 +142,9 @@ flowchart LR
   I --> O[Raw ResourceOccurrence rows]
 ```
 
-Rendered projections contain only availability, state, capture time, and event/artifact counts.
-Network entries, console messages, Page errors, screenshots, rendered DOM, and full capture records
-remain raw browser evidence.
+V2 projection builds do not query RenderedObservation or RenderedArtifact. Retained build and
+summary Render counters are legacy V1 columns and remain zero for V2. Network entries, console
+messages, Page errors, screenshots, rendered DOM, and full capture records remain Render evidence.
 
 ## HTTP And Frontend Caching
 
@@ -204,8 +212,9 @@ flowchart LR
 
 Comparison aligns normalized URL, snapshot/resource identity, content/head hashes, HTTP
 and fetch state, redirects, canonical/indexability fields, link identity, Resource classification,
-and rendered availability. It must compare compatible projection versions or request rebuilds, and
-must open raw evidence for detailed changes. See
+and static source evidence. It must compare compatible projection versions or request rebuilds,
+must not compare independent Render lifecycle state, and must open raw evidence for detailed
+changes. See
 [Deterministic Scan comparisons](scan-comparisons.md).
 
 ## Limitations

@@ -6,8 +6,8 @@ score health, infer URL moves, or claim that an unobserved URL was removed from 
 
 ~~~mermaid
 flowchart LR
-  E[Immutable raw evidence] --> P[scan-projection-v1]
-  P --> C[scan-comparison-v2]
+  E[Immutable static Scan evidence] --> P[scan-projection-v2]
+  P --> C[scan-comparison-v3]
   C -. future .-> F[Finding or interpretation]
 ~~~
 
@@ -19,7 +19,7 @@ different, terminal, saved-Site Scans belonging to the same WebsiteProperty. Fai
 and interrupted Scans may be selected manually and receive strong coverage warnings. Cross-Site,
 ad-hoc, and environment comparison are not supported.
 
-Both sides require a ready compatible scan-projection-v1 build with the expected algorithm
+Both sides require a ready compatible scan-projection-v2 build with the expected algorithm
 identity. Missing projections are queued through the existing durable preparation mechanism. The
 comparison waits without synchronously aggregating raw evidence.
 
@@ -40,7 +40,7 @@ flowchart LR
 ScanComparison is the Site-scoped logical identity for one directional Scan pair. Its unique key is
 Site, Baseline Scan, and Target Scan. Its current-build pointer identifies the active ready result.
 
-ScanComparisonBuild is an immutable attempt. Version 2 separates exact source identity, normalized
+ScanComparisonBuild is an immutable attempt. Version 3 separates exact source identity, normalized
 source identity, document content, metadata, and technical evidence. The build stores its complete
 algorithm identity, lifecycle and timing, coverage fingerprints, warnings, validation, counts, and
 a deterministic checksum. It pins both projection build IDs and copies each projection version,
@@ -49,7 +49,13 @@ projection garbage collection does not erase provenance.
 
 The comparison algorithm identity includes `document-content-v2`. Changing deterministic
 document-content extraction semantics requires a new extractor identity and a rebuild; it does not
-change `scan-projection-v1` or rewrite retained evidence.
+change `scan-projection-v2` or rewrite retained evidence.
+
+Version 3 compares static Scan evidence only. RenderRun state, browser outcomes, event counts, and
+artifact availability do not participate in flags, changed-field counts, technical state, primary
+classification, summary deltas, JSON evidence, or checksums. The retained Render-related result
+columns are legacy V2 storage and remain false for V3. Historical V2 builds remain stored under
+their original identity but are not selected as current V3 results.
 
 Page, Resource, Link, and summary rows are materialized by build. Their IDs can later be referenced
 by deterministic Findings, but this release creates no Finding records.
@@ -109,7 +115,7 @@ flowchart LR
 
 For Pages observed on both sides, comparison records requested/final URL, redirect state, HTTP and
 fetch state, type, exact source/head hashes, title, canonical, robots, language, depth, static link
-and embedded-Resource aggregates, and rendered availability/count summaries. Exact source,
+and embedded-Resource aggregates. Exact source,
 normalized source, document content, metadata, and technical states are independently same,
 changed, unavailable, or not applicable. Timing and transfer-byte deltas remain operational
 measurements and do not alone mark a structural change. Conditional 304 and parse reuse compare the
