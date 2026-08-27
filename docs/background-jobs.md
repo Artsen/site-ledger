@@ -70,8 +70,12 @@ Expired-job recovery atomically claims only rows that are still running and expi
 acts. A legitimate renewal that wins that compare-and-set remains authoritative even if another
 worker observed an older expired value. Once recovery wins, the prior token cannot heartbeat,
 report progress, complete, or fail the job. Confirmed stale ownership is surfaced to the executor
-and fails closed without fabricating an ordinary domain/provider failure. Heartbeats remain mutable
-operational state and do not create permanent `JobEvent` rows.
+as a distinct execution-ownership loss, not user cancellation. Blocking domain work then stops at
+its next progress, cancellation-check, or batch boundary without completing, cancelling, failing,
+or activating stale domain state. Exception terminalization conditionally guards the active lease
+and stages domain and BackgroundJob terminal state in one transaction, so recovery cannot win
+between ownership validation and domain mutation. Heartbeats remain mutable operational state and
+do not create permanent `JobEvent` rows.
 
 Cancellation is cooperative. A queued job can move directly to `cancelled`. A running job stores
 `cancellation_requested_at`; handlers check that flag between fetches or source parsing steps, save

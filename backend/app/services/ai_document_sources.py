@@ -49,6 +49,7 @@ from app.services.ai_document_persistence import (
     AiDocumentResourceResolver,
     link_refresh_children,
 )
+from app.services.job_types import ExecutionOwnershipLost
 from app.services.source_management import (
     DuplicateSourceError,
     _delete_unreferenced_source_resources,
@@ -118,6 +119,8 @@ async def discover_ai_document_sources(
             site, base, 256_000, transport, normalization_version=normalization_version
         )
         candidates.extend(_header_candidates(root_result))
+    except ExecutionOwnershipLost:
+        raise
     except Exception:
         pass
     unique: dict[str, tuple[str, str | None]] = {}
@@ -166,6 +169,8 @@ async def discover_ai_document_sources(
                     already_configured=url in existing,
                 )
             )
+        except ExecutionOwnershipLost:
+            raise
         except Exception as exc:
             results.append(
                 AiDocumentDiscoveryCandidate(
@@ -585,6 +590,8 @@ async def execute_ai_document_refresh(
             evidence.status = source_refresh.status = "cancelled"
             evidence.stop_reason = "cancelled_by_user"
             break
+        except ExecutionOwnershipLost:
+            raise
         except Exception as exc:
             snapshot = AiDocumentSnapshot(
                 refresh_id=evidence.id,

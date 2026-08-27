@@ -4,6 +4,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -44,6 +45,7 @@ from app.services.job_types import (
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
     JOB_TYPE_STRUCTURED_CONTENT_BUILD,
+    ExecutionOwnershipLost,
 )
 from app.services.performance_collection import execute_performance_run, mark_performance_run_failed
 from app.services.render_runs import execute_render_run, mark_render_run_failed
@@ -105,10 +107,17 @@ class JobExecutionContext:
     def mark_lease_lost(self) -> None:
         self._lease_lost.set()
 
+    def raise_if_lease_lost(self) -> None:
+        if self.lease_lost:
+            raise ExecutionOwnershipLost("Job lease ownership was lost.")
+
     def check_cancelled(self) -> bool:
+        self.raise_if_lease_lost()
         with self.session_factory() as db:
             job = db.get(BackgroundJob, self.job_id)
-            return bool(job and job.cancellation_requested_at is not None)
+            cancelled = bool(job and job.cancellation_requested_at is not None)
+        self.raise_if_lease_lost()
+        return cancelled
 
     def raise_if_cancelled(self) -> None:
         if self.check_cancelled():
@@ -137,6 +146,7 @@ class JobExecutionContext:
         unit: str | None = None,
         counters: dict[str, int] | None = None,
     ) -> None:
+        self.raise_if_lease_lost()
         try:
             with self.session_factory() as db:
                 background_jobs.update_progress(
@@ -151,10 +161,11 @@ class JobExecutionContext:
                     unit=unit,
                     counters=counters,
                 )
-        except background_jobs.StaleLeaseError:
+        except background_jobs.StaleLeaseError as exc:
             if not self.lease_lost:
                 self.mark_lease_lost()
                 logger.warning("job lease ownership lost", extra={"job_id": self.job_id})
+            raise ExecutionOwnershipLost("Job lease ownership was lost.") from exc
         except OperationalError as exc:
             if not is_transient_database_lock(exc):
                 raise
@@ -375,6 +386,8 @@ class CategoryRuleEvaluationJobHandler:
                 if run.status == "cancelled":
                     raise JobCancelled("Category Rule evaluation cancelled by user.")
         except JobCancelled:
+            raise
+        except ExecutionOwnershipLost:
             raise
         except Exception as exc:
             with self.session_factory() as db:
@@ -621,32 +634,41 @@ async def run_claimed_job(
         if context.lease_lost:
             return
         try:
-            await asyncio.to_thread(context.heartbeat)
-            await asyncio.to_thread(_mark_domain_cancelled, session_factory, claimed_job.job)
-            await asyncio.to_thread(_persist_cancelled_job, session_factory, claimed_job, str(exc))
+            await asyncio.to_thread(
+                _terminalize_cancelled_job,
+                session_factory,
+                claimed_job,
+                lease_seconds,
+                str(exc),
+            )
         except background_jobs.StaleLeaseError:
             _log_lease_loss(context)
     except asyncio.CancelledError:
         if not context.lease_lost:
             try:
-                await asyncio.to_thread(context.heartbeat)
                 await asyncio.to_thread(
-                    _mark_domain_interrupted,
+                    _terminalize_interrupted_job,
                     session_factory,
-                    claimed_job.job,
-                    "worker_shutdown",
+                    claimed_job,
+                    lease_seconds,
                 )
-                await asyncio.to_thread(_persist_interrupted_job, session_factory, claimed_job)
             except background_jobs.StaleLeaseError:
                 _log_lease_loss(context)
         raise
     except background_jobs.StaleLeaseError:
         _log_lease_loss(context)
+    except ExecutionOwnershipLost:
+        context.mark_lease_lost()
+        _log_lease_loss(context)
     except Exception as exc:
         try:
-            await asyncio.to_thread(context.heartbeat)
-            await asyncio.to_thread(_mark_domain_failed, session_factory, claimed_job.job, exc)
-            await asyncio.to_thread(_persist_failed_job, session_factory, claimed_job, exc)
+            await asyncio.to_thread(
+                _terminalize_failed_job,
+                session_factory,
+                claimed_job,
+                lease_seconds,
+                exc,
+            )
         except background_jobs.StaleLeaseError:
             _log_lease_loss(context)
 
@@ -725,12 +747,20 @@ def _persist_handler_result(
             )
 
 
-def _persist_cancelled_job(
+def _terminalize_cancelled_job(
     session_factory: Callable[[], Session],
     claimed_job: background_jobs.ClaimedJob,
+    lease_seconds: float,
     message: str,
 ) -> None:
     with session_factory() as db:
+        background_jobs.guard_terminalization(
+            db,
+            job_id=claimed_job.job.id,
+            lease_token=claimed_job.lease_token,
+            lease_seconds=lease_seconds,
+        )
+        _mark_domain_cancelled(db, claimed_job.job, commit=False)
         background_jobs.complete_job(
             db,
             job_id=claimed_job.job.id,
@@ -740,10 +770,19 @@ def _persist_cancelled_job(
         )
 
 
-def _persist_interrupted_job(
-    session_factory: Callable[[], Session], claimed_job: background_jobs.ClaimedJob
+def _terminalize_interrupted_job(
+    session_factory: Callable[[], Session],
+    claimed_job: background_jobs.ClaimedJob,
+    lease_seconds: float,
 ) -> None:
     with session_factory() as db:
+        background_jobs.guard_terminalization(
+            db,
+            job_id=claimed_job.job.id,
+            lease_token=claimed_job.lease_token,
+            lease_seconds=lease_seconds,
+        )
+        _mark_domain_interrupted(db, claimed_job.job, "worker_shutdown", commit=False)
         background_jobs.fail_job(
             db,
             job_id=claimed_job.job.id,
@@ -754,12 +793,20 @@ def _persist_interrupted_job(
         )
 
 
-def _persist_failed_job(
+def _terminalize_failed_job(
     session_factory: Callable[[], Session],
     claimed_job: background_jobs.ClaimedJob,
+    lease_seconds: float,
     exc: Exception,
 ) -> None:
     with session_factory() as db:
+        background_jobs.guard_terminalization(
+            db,
+            job_id=claimed_job.job.id,
+            lease_token=claimed_job.lease_token,
+            lease_seconds=lease_seconds,
+        )
+        _mark_domain_failed(db, claimed_job.job, exc, commit=False)
         background_jobs.fail_job(
             db,
             job_id=claimed_job.job.id,
@@ -796,8 +843,11 @@ def _refresh_result(refresh: SourceRefresh) -> dict[str, Any]:
     }
 
 
-def _mark_domain_cancelled(session_factory: Callable[[], Session], job: BackgroundJob) -> None:
-    with session_factory() as db:
+def _mark_domain_cancelled(
+    db_or_factory: Session | Callable[[], Session], job: BackgroundJob, *, commit: bool = True
+) -> None:
+    context = nullcontext(db_or_factory) if isinstance(db_or_factory, Session) else db_or_factory()
+    with context as db:
         now = datetime.now(UTC)
         if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
             mark_projection_build_terminal(
@@ -806,6 +856,7 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 "cancelled",
                 "cancelled",
                 "Projection build cancelled by user.",
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
@@ -814,6 +865,7 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 "cancelled",
                 "cancelled",
                 "Comparison build cancelled by user.",
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
             performance_run = db.get(PerformanceRun, job.performance_run_id)
@@ -847,13 +899,19 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 if refresh.url_source:
                     refresh.url_source.last_refresh_status = "cancelled"
                     refresh.url_source.last_refresh_finished_at = now
-        db.commit()
+        if commit:
+            db.commit()
 
 
 def _mark_domain_interrupted(
-    session_factory: Callable[[], Session], job: BackgroundJob, reason: str
+    db_or_factory: Session | Callable[[], Session],
+    job: BackgroundJob,
+    reason: str,
+    *,
+    commit: bool = True,
 ) -> None:
-    with session_factory() as db:
+    context = nullcontext(db_or_factory) if isinstance(db_or_factory, Session) else db_or_factory()
+    with context as db:
         now = datetime.now(UTC)
         if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
             mark_projection_build_terminal(
@@ -862,6 +920,7 @@ def _mark_domain_interrupted(
                 "failed",
                 reason,
                 "Worker interrupted during projection build.",
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
@@ -870,6 +929,7 @@ def _mark_domain_interrupted(
                 "failed",
                 reason,
                 "Worker interrupted during comparison build.",
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
             performance_run = db.get(PerformanceRun, job.performance_run_id)
@@ -914,13 +974,19 @@ def _mark_domain_interrupted(
                 if refresh.url_source:
                     refresh.url_source.last_refresh_status = "interrupted"
                     refresh.url_source.last_refresh_finished_at = now
-        db.commit()
+        if commit:
+            db.commit()
 
 
 def _mark_domain_failed(
-    session_factory: Callable[[], Session], job: BackgroundJob, exc: Exception
+    db_or_factory: Session | Callable[[], Session],
+    job: BackgroundJob,
+    exc: Exception,
+    *,
+    commit: bool = True,
 ) -> None:
-    with session_factory() as db:
+    context = nullcontext(db_or_factory) if isinstance(db_or_factory, Session) else db_or_factory()
+    with context as db:
         now = datetime.now(UTC)
         if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
             mark_projection_build_terminal(
@@ -929,6 +995,7 @@ def _mark_domain_failed(
                 "failed",
                 type(exc).__name__,
                 str(exc),
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
@@ -937,13 +1004,14 @@ def _mark_domain_failed(
                 "failed",
                 type(exc).__name__,
                 str(exc),
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
-            mark_performance_run_failed(db, job.performance_run_id, exc)
+            mark_performance_run_failed(db, job.performance_run_id, exc, commit=commit)
         elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN and job.accessibility_run_id:
-            mark_accessibility_run_failed(db, job.accessibility_run_id, exc)
+            mark_accessibility_run_failed(db, job.accessibility_run_id, exc, commit=commit)
         elif job.job_type == JOB_TYPE_RENDER_RUN and job.render_run_id:
-            mark_render_run_failed(db, job.render_run_id, exc)
+            mark_render_run_failed(db, job.render_run_id, exc, commit=commit)
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -963,7 +1031,8 @@ def _mark_domain_failed(
                     refresh.url_source.last_error_type = refresh.error_type
                     refresh.url_source.last_error_message = refresh.error_message
                     refresh.url_source.last_refresh_finished_at = now
-        db.commit()
+        if commit:
+            db.commit()
 
 
 def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan) -> None:

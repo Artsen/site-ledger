@@ -213,14 +213,17 @@ def execute_performance_run(
         client.close()
 
 
-def mark_performance_run_failed(db: Session, run_id: int, exc: Exception) -> None:
+def mark_performance_run_failed(
+    db: Session, run_id: int, exc: Exception, *, commit: bool = True
+) -> None:
     run = db.get(PerformanceRun, run_id)
     if run is None:
         return
     run.status = "failed"
     run.finished_at = datetime.now(UTC)
     run.error_summary = f"{type(exc).__name__}: {str(exc)[:800]}"
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def _mark_cancelled(session_factory: Callable[[], Session], run_id: int) -> PerformanceRun:

@@ -408,6 +408,33 @@ def update_progress(
     db.commit()
 
 
+def guard_terminalization(
+    db: Session,
+    *,
+    job_id: int,
+    lease_token: str,
+    lease_seconds: float,
+    now: datetime | None = None,
+) -> None:
+    """Hold current ownership through a shared domain/job terminal transaction."""
+    now = now or datetime.now(UTC)
+    result = cast(
+        CursorResult[Any],
+        db.execute(
+            update(BackgroundJob)
+            .where(
+                BackgroundJob.id == job_id,
+                BackgroundJob.status == JOB_STATUS_RUNNING,
+                BackgroundJob.lease_token == lease_token,
+            )
+            .values(heartbeat_at=now, lease_expires_at=now + timedelta(seconds=lease_seconds))
+        ),
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise StaleLeaseError("Job lease is no longer active.")
+
+
 def _touch_assigned_worker(db: Session, job_id: int, now: datetime) -> None:
     worker_id = db.scalar(select(BackgroundJob.worker_id).where(BackgroundJob.id == job_id))
     if worker_id:

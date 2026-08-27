@@ -458,7 +458,10 @@ Do not disable checks or weaken tests to force passing results.
 - Successful authenticated job progress must renew the current lease atomically. Expired-job
   recovery must revalidate current running/expiry state before taking terminal recovery ownership.
 - A stale lease token may never heartbeat, report progress, complete, or fail a job. Job and worker
-  heartbeats are operational liveness state, not permanent event spam.
+  heartbeats are operational liveness state, not permanent event spam. Confirmed lease loss also
+  removes authority over domain execution: blocking work must stop at its next bounded checkpoint
+  without replacing recovery's domain state. Domain and BackgroundJob terminalization must share a
+  guarded ownership transaction.
 - Do not compensate for event-loop starvation by merely increasing job lease timeout defaults.
 - Avoid unrelated refactors and dependency upgrades.
 - Do not create fake data, placeholder APIs, or controls that do nothing.

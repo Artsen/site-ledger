@@ -2,7 +2,7 @@ import asyncio
 import sqlite3
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -14,9 +14,12 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base, is_transient_database_lock
 from app.models import (
     BackgroundJob,
+    PageCategoryRuleRun,
     Scan,
     ScanComparisonBuild,
     ScanProjectionBuild,
+    ScanProjectionState,
+    WebsiteProperty,
     WorkerInstance,
 )
 from app.schemas.scans import ScopeConfigPayload
@@ -34,9 +37,11 @@ from app.services.job_handlers import (
     run_claimed_job,
 )
 from app.services.job_types import (
+    JOB_TYPE_CATEGORY_RULE_EVALUATION,
     JOB_TYPE_SCAN,
     JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
+    JOB_TYPE_STRUCTURED_CONTENT_BUILD,
 )
 from app.services.scan_comparisons import create_comparison, create_comparison_build
 from app.services.scan_projections import create_projection_build
@@ -410,6 +415,343 @@ async def test_confirmed_stale_heartbeat_prevents_stale_owner_completion(
 
 
 @pytest.mark.asyncio
+async def test_recovery_prevents_stale_projection_activation(tmp_path, monkeypatch) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    with session_factory() as db:
+        scan = Scan(
+            starting_url="https://projection-race.example/",
+            status="completed",
+            scope_config=ScopeConfigPayload().model_dump(),
+        )
+        db.add(scan)
+        db.flush()
+        build = create_projection_build(db, scan.id)
+        job = background_jobs.enqueue_scan_projection_job(db, build.id, scan)
+        db.commit()
+        claimed = background_jobs.claim_next_job(db, worker_id="projection-race", lease_seconds=30)
+        assert claimed is not None
+        job_id, build_id, scan_id = job.id, build.id, scan.id
+
+    started = threading.Event()
+    resume = threading.Event()
+
+    def paused_projection(db, active_build_id, **kwargs):
+        active_build = db.get(ScanProjectionBuild, active_build_id)
+        assert active_build is not None
+        active_build.status = "building"
+        db.commit()
+        started.set()
+        assert resume.wait(timeout=5)
+        kwargs["progress"]("pages", 1, 1)
+        active_build.status = "ready"
+        db.commit()
+        return active_build
+
+    monkeypatch.setattr("app.services.job_handlers.execute_projection_build", paused_projection)
+    monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
+    task = asyncio.create_task(
+        run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry(
+                {JOB_TYPE_SCAN_PROJECTION_BUILD: ScanProjectionJobHandler(session_factory)}
+            ),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 5)
+    assert _force_recovery(session_factory, job_id) == 1
+    resume.set()
+    await task
+
+    with session_factory() as db:
+        persisted_job = db.get(BackgroundJob, job_id)
+        persisted_build = db.get(ScanProjectionBuild, build_id)
+        state = db.get(ScanProjectionState, scan_id)
+        assert persisted_job is not None and persisted_job.status == "interrupted"
+        assert persisted_build is not None and persisted_build.status == "failed"
+        assert persisted_build.error_type == "lease_expired"
+        assert state is not None and state.current_build_id is None
+        assert (
+            not db.query(background_jobs.JobEvent)
+            .filter_by(job_id=job_id, event_type="completed")
+            .count()
+        )
+
+
+@pytest.mark.asyncio
+async def test_recovery_prevents_stale_comparison_readiness(tmp_path, monkeypatch) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    with session_factory() as db:
+        site = create_site(
+            db,
+            WebsitePropertyCreate(
+                name="Comparison race",
+                base_url="https://comparison-race.example/",
+                scope_config=ScopeConfigPayload(),
+            ),
+        )
+        baseline = Scan(
+            website_property_id=site.id,
+            starting_url=site.base_url,
+            status="completed",
+            scope_config=ScopeConfigPayload().model_dump(),
+        )
+        target = Scan(
+            website_property_id=site.id,
+            starting_url=site.base_url,
+            status="completed",
+            scope_config=ScopeConfigPayload().model_dump(),
+        )
+        db.add_all([baseline, target])
+        db.flush()
+        comparison = create_comparison(db, site.id, baseline.id, target.id)
+        build = create_comparison_build(db, comparison.id)
+        job = background_jobs.enqueue_scan_comparison_job(db, build.id, comparison.id, site.id)
+        db.commit()
+        claimed = background_jobs.claim_next_job(db, worker_id="comparison-race", lease_seconds=30)
+        assert claimed is not None
+        job_id, build_id = job.id, build.id
+
+    started = threading.Event()
+    resume = threading.Event()
+
+    def paused_comparison(db, active_build_id, **kwargs):
+        active_build = db.get(ScanComparisonBuild, active_build_id)
+        assert active_build is not None
+        active_build.status = "building"
+        db.commit()
+        started.set()
+        assert resume.wait(timeout=5)
+        kwargs["progress"]("pages", 1, 1)
+        active_build.status = "ready"
+        db.commit()
+        return active_build
+
+    monkeypatch.setattr("app.services.job_handlers.execute_comparison_build", paused_comparison)
+    monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
+    task = asyncio.create_task(
+        run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry(
+                {
+                    JOB_TYPE_SCAN_COMPARISON_BUILD: ScanComparisonJobHandler(
+                        session_factory, LocalContentStore(tmp_path / "comparison-html")
+                    )
+                }
+            ),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 5)
+    assert _force_recovery(session_factory, job_id) == 1
+    resume.set()
+    await task
+
+    with session_factory() as db:
+        persisted_job = db.get(BackgroundJob, job_id)
+        persisted_build = db.get(ScanComparisonBuild, build_id)
+        assert persisted_job is not None and persisted_job.status == "interrupted"
+        assert persisted_build is not None and persisted_build.status == "failed"
+        assert persisted_build.error_type == "lease_expired"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handler_kind", ["category", "structured"])
+async def test_lease_loss_stops_subsequent_blocking_domain_work(
+    tmp_path, monkeypatch, handler_kind
+) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    with session_factory() as db:
+        site = create_site(
+            db,
+            WebsitePropertyCreate(
+                name=f"{handler_kind} race",
+                base_url=f"https://{handler_kind}-race.example/",
+                scope_config=ScopeConfigPayload(),
+            ),
+        )
+        if handler_kind == "category":
+            run = PageCategoryRuleRun(
+                website_property_id=site.id,
+                trigger_type="manual_recalculate",
+                status="queued",
+                configuration_json={},
+                evaluator_version="test-v1",
+            )
+            db.add(run)
+            db.flush()
+            job = background_jobs.enqueue_category_rule_job(db, run.id, site.id)
+            run_id = run.id
+        else:
+            job = background_jobs.enqueue_structured_content_job(db, site.id)
+            run_id = None
+        db.commit()
+        claimed = background_jobs.claim_next_job(
+            db, worker_id=f"{handler_kind}-race", lease_seconds=30
+        )
+        assert claimed is not None
+        job_id, site_id = job.id, site.id
+
+    started = threading.Event()
+    resume = threading.Event()
+
+    if handler_kind == "category":
+
+        def paused_category(db, active_run_id, **kwargs):
+            active_run = db.get(PageCategoryRuleRun, active_run_id)
+            assert active_run is not None
+            active_run.status = "running"
+            active_run.match_count = 1
+            db.commit()
+            started.set()
+            assert resume.wait(timeout=5)
+            kwargs["progress"](1, 2)
+            active_run.match_count = 2
+            db.commit()
+            return active_run
+
+        monkeypatch.setattr("app.services.job_handlers.reconcile_site", paused_category)
+        handler = CategoryRuleEvaluationJobHandler(session_factory)
+        job_type = JOB_TYPE_CATEGORY_RULE_EVALUATION
+    else:
+
+        def paused_structured(db, _store, **kwargs):
+            active_site = db.get(WebsiteProperty, site_id)
+            assert active_site is not None
+            active_site.description = "first batch"
+            db.commit()
+            started.set()
+            assert resume.wait(timeout=5)
+            kwargs["progress"](1, 2, {"ready": 1})
+            active_site.description = "second batch"
+            db.commit()
+            return {"ready": 2, "failed": 0}
+
+        monkeypatch.setattr(
+            "app.services.job_handlers.build_missing_structured_content", paused_structured
+        )
+        handler = StructuredContentBuildJobHandler(
+            session_factory, LocalContentStore(tmp_path / "structured-race-html")
+        )
+        job_type = JOB_TYPE_STRUCTURED_CONTENT_BUILD
+
+    monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
+    task = asyncio.create_task(
+        run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry({job_type: handler}),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 5)
+    assert _force_recovery(session_factory, job_id) == 1
+    resume.set()
+    await task
+
+    with session_factory() as db:
+        persisted_job = db.get(BackgroundJob, job_id)
+        assert persisted_job is not None and persisted_job.status == "interrupted"
+        if handler_kind == "category":
+            persisted_run = db.get(PageCategoryRuleRun, run_id)
+            assert persisted_run is not None and persisted_run.status == "interrupted"
+            assert persisted_run.error_type == "lease_expired"
+            assert persisted_run.match_count == 1
+        else:
+            persisted_site = db.get(WebsiteProperty, site_id)
+            assert persisted_site is not None and persisted_site.description == "first batch"
+
+
+@pytest.mark.asyncio
+async def test_recovery_winning_terminalization_guard_preserves_domain_state(
+    tmp_path, monkeypatch
+) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    with session_factory() as db:
+        scan = Scan(
+            starting_url="https://terminal-race.example/",
+            status="completed",
+            scope_config=ScopeConfigPayload().model_dump(),
+        )
+        db.add(scan)
+        db.flush()
+        build = create_projection_build(db, scan.id)
+        build.status = "building"
+        job = background_jobs.enqueue_scan_projection_job(db, build.id, scan)
+        db.commit()
+        claimed = background_jobs.claim_next_job(db, worker_id="terminal-race", lease_seconds=30)
+        assert claimed is not None
+        job_id, build_id = job.id, build.id
+
+    class FailingHandler:
+        async def execute(self, _job, _context):
+            raise RuntimeError("stale executor failure")
+
+    original_guard = background_jobs.guard_terminalization
+
+    def recovery_wins(db, **kwargs):
+        assert _force_recovery(session_factory, job_id) == 1
+        original_guard(db, **kwargs)
+
+    monkeypatch.setattr(background_jobs, "guard_terminalization", recovery_wins)
+    await run_claimed_job(
+        session_factory=session_factory,
+        registry=JobHandlerRegistry({JOB_TYPE_SCAN_PROJECTION_BUILD: FailingHandler()}),
+        claimed_job=claimed,
+        lease_seconds=30,
+    )
+
+    with session_factory() as db:
+        persisted_job = db.get(BackgroundJob, job_id)
+        persisted_build = db.get(ScanProjectionBuild, build_id)
+        assert persisted_job is not None and persisted_job.status == "interrupted"
+        assert persisted_job.error_type == "lease_expired"
+        assert persisted_build is not None and persisted_build.status == "failed"
+        assert persisted_build.error_type == "lease_expired"
+        assert "stale executor" not in (persisted_build.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_user_cancellation_remains_distinct_from_lease_loss(tmp_path) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    with session_factory() as db:
+        scan = Scan(
+            starting_url="https://cancel.example/",
+            status="running",
+            scope_config=ScopeConfigPayload().model_dump(),
+        )
+        db.add(scan)
+        db.flush()
+        job = background_jobs.enqueue_scan_job(db, scan)
+        db.commit()
+        claimed = background_jobs.claim_next_job(db, worker_id="cancel-worker", lease_seconds=30)
+        assert claimed is not None
+        background_jobs.request_cancellation(db, claimed.job)
+        job_id, scan_id = job.id, scan.id
+
+    class CancellationAwareHandler:
+        async def execute(self, _job, context):
+            context.raise_if_cancelled()
+            return HandlerResult()
+
+    await run_claimed_job(
+        session_factory=session_factory,
+        registry=JobHandlerRegistry({JOB_TYPE_SCAN: CancellationAwareHandler()}),
+        claimed_job=claimed,
+        lease_seconds=30,
+    )
+
+    with session_factory() as db:
+        persisted_job = db.get(BackgroundJob, job_id)
+        persisted_scan = db.get(Scan, scan_id)
+        assert persisted_job is not None and persisted_job.status == "cancelled"
+        assert persisted_scan is not None and persisted_scan.status == "cancelled"
+        assert persisted_scan.stop_reason == "cancelled_by_user"
+
+
+@pytest.mark.asyncio
 async def test_worker_heartbeat_advances_off_loop_during_slow_blocking_work(
     tmp_path, monkeypatch
 ) -> None:
@@ -505,6 +847,16 @@ def _initialized_session_factory(tmp_path):
     )
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+def _force_recovery(session_factory, job_id: int) -> int:
+    with session_factory() as db:
+        job = db.get(BackgroundJob, job_id)
+        assert job is not None
+        job.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+    with session_factory() as db:
+        return background_jobs.recover_expired_jobs(db)
 
 
 def _locked_error() -> OperationalError:

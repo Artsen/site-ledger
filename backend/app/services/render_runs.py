@@ -380,11 +380,14 @@ def _mark_cancelled(session_factory: Callable[[], Session], run_id: int) -> Rend
         return run
 
 
-def mark_render_run_failed(db: Session, run_id: int, exc: Exception) -> None:
+def mark_render_run_failed(
+    db: Session, run_id: int, exc: Exception, *, commit: bool = True
+) -> None:
     run = db.get(RenderRun, run_id)
     if run is None:
         return
     run.status = "failed"
     run.finished_at = datetime.now(UTC)
     run.error_summary = f"{type(exc).__name__}: {str(exc)[:800]}"
-    db.commit()
+    if commit:
+        db.commit()

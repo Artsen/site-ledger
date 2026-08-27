@@ -30,6 +30,7 @@ from app.models import (
     ScanSummaryProjection,
     WebResource,
 )
+from app.services.job_types import ExecutionOwnershipLost
 from app.services.scan_projections import (
     TERMINAL_SCAN_STATUSES,
     current_projection_build,
@@ -263,6 +264,7 @@ def execute_comparison_build(
         checksum = _comparison_checksum(coverage, page_rows, resource_rows, link_rows, summary)
         _report(progress, "validating", 1, 1)
 
+        _check_cancelled(should_cancel)
         prior_id = comparison.current_build_id
         now = datetime.now(UTC)
         build.status = "ready"
@@ -288,6 +290,9 @@ def execute_comparison_build(
         _finish_failed_build(db, build, "cancelled", "cancelled", "Build cancelled by user.")
         raise
     except ComparisonProjectionUnavailable:
+        raise
+    except ExecutionOwnershipLost:
+        db.rollback()
         raise
     except Exception as exc:
         _finish_failed_build(db, build, "failed", type(exc).__name__, str(exc))
@@ -331,11 +336,17 @@ def verify_comparison_build(db: Session, comparison_id: int) -> dict[str, Any]:
 
 
 def mark_comparison_build_terminal(
-    db: Session, build_id: int, status: str, error_type: str, error_message: str
+    db: Session,
+    build_id: int,
+    status: str,
+    error_type: str,
+    error_message: str,
+    *,
+    commit: bool = True,
 ) -> None:
     build = db.get(ScanComparisonBuild, build_id)
     if build is not None and build.status in ACTIVE_COMPARISON_BUILD_STATUSES:
-        _finish_failed_build(db, build, status, error_type, error_message)
+        _finish_failed_build(db, build, status, error_type, error_message, commit=commit)
 
 
 def delete_comparison(db: Session, comparison_id: int) -> bool:
@@ -1405,14 +1416,21 @@ def _report(
 
 
 def _finish_failed_build(
-    db: Session, build: ScanComparisonBuild, status: str, error_type: str, error_message: str
+    db: Session,
+    build: ScanComparisonBuild,
+    status: str,
+    error_type: str,
+    error_message: str,
+    *,
+    commit: bool = True,
 ) -> None:
     build.status = status
     build.active_key = None
     build.failed_at = datetime.now(UTC)
     build.error_type = error_type
     build.error_message = error_message
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def _model_dict(model: Any) -> dict[str, Any]:

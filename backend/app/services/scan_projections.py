@@ -31,6 +31,7 @@ from app.models import (
     ScanSummaryProjection,
 )
 from app.schemas.projections import ProjectionMetadata, ScanProjectionStatusRead
+from app.services.job_types import ExecutionOwnershipLost
 
 SCAN_PROJECTION_VERSION = "scan-projection-v1"
 CURRENT_SCAN_PROJECTION_ALGORITHM = "scan-projection-v1:resource-classifier-v1:link-role-v1"
@@ -308,6 +309,7 @@ def execute_projection_build(
         checksum = _projection_checksum(pages, resources, links, summary)
         state = db.get(ScanProjectionState, scan.id)
         assert state is not None
+        _check_cancelled(should_cancel)
         prior_id = state.current_build_id
         now = datetime.now(UTC)
         build.status = "ready"
@@ -335,6 +337,9 @@ def execute_projection_build(
         return build
     except ProjectionBuildCancelled:
         _finish_failed_build(db, build, "cancelled", "cancelled", "Build cancelled by user.")
+        raise
+    except ExecutionOwnershipLost:
+        db.rollback()
         raise
     except Exception as exc:
         _finish_failed_build(db, build, "failed", type(exc).__name__, str(exc))
@@ -373,11 +378,17 @@ def verify_projection_build(db: Session, scan_id: int) -> dict[str, Any]:
 
 
 def mark_projection_build_terminal(
-    db: Session, build_id: int, status: str, error_type: str, error_message: str
+    db: Session,
+    build_id: int,
+    status: str,
+    error_type: str,
+    error_message: str,
+    *,
+    commit: bool = True,
 ) -> None:
     build = db.get(ScanProjectionBuild, build_id)
     if build is not None and build.status in ACTIVE_BUILD_STATUSES:
-        _finish_failed_build(db, build, status, error_type, error_message)
+        _finish_failed_build(db, build, status, error_type, error_message, commit=commit)
 
 
 def delete_scan_projection_data(db: Session, scan_id: int) -> None:
@@ -815,7 +826,7 @@ def _insert_batches(
             progress(phase, min(batch_number * PROJECTION_BATCH_SIZE, total), total)
 
 
-def _clear_staged_rows(db: Session, build_id: int) -> None:
+def _clear_staged_rows(db: Session, build_id: int, *, commit: bool = True) -> None:
     for model in (
         ScanSummaryProjection,
         ScanLinkProjection,
@@ -823,22 +834,31 @@ def _clear_staged_rows(db: Session, build_id: int) -> None:
         ScanPageProjection,
     ):
         db.execute(delete(model).where(model.projection_build_id == build_id))
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def _finish_failed_build(
-    db: Session, build: ScanProjectionBuild, status: str, error_type: str, error_message: str
+    db: Session,
+    build: ScanProjectionBuild,
+    status: str,
+    error_type: str,
+    error_message: str,
+    *,
+    commit: bool = True,
 ) -> None:
-    db.rollback()
+    if commit:
+        db.rollback()
     build = db.get(ScanProjectionBuild, build.id) or build
-    _clear_staged_rows(db, build.id)
+    _clear_staged_rows(db, build.id, commit=commit)
     build.status = status
     build.active_key = None
     build.failed_at = datetime.now(UTC)
     build.finished_at = build.failed_at
     build.error_type = error_type
     build.error_message = error_message[:2000]
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def _check_cancelled(callback: Callable[[], bool] | None) -> None:
