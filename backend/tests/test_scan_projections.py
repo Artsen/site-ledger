@@ -1,9 +1,15 @@
+import hashlib
 from datetime import UTC, datetime
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import delete, event, func, select
+from sqlalchemy.orm import sessionmaker
 
+from app.api.routes import router
 from app.crawler.scope import ScopeConfig
+from app.database import get_db
 from app.models import (
     ArtifactBlob,
     BackgroundJob,
@@ -200,6 +206,61 @@ def test_render_deletion_does_not_change_projection_or_leave_stale_page_state(
 
     assert second_ready.checksum_sha256 == first_ready.checksum_sha256
     assert _page_projection_payloads(db_session, second_ready.id) == first_rows
+
+
+def test_page_http_cache_tracks_live_render_overlay_without_projection_rebuild(
+    db_session, tmp_path
+) -> None:
+    scan = _fixture(db_session, "completed")
+    build = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    ready = execute_projection_build(db_session, build.id)
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+    app = FastAPI()
+    app.include_router(router)
+
+    def override_db():
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_db
+    page_path = f"/api/scans/{scan.id}/pages"
+    resource_path = f"/api/scans/{scan.id}/resources"
+    legacy_identity = f"{page_path}?|{ready.projection_version}|{ready.id}"
+    legacy_digest = hashlib.sha256(legacy_identity.encode()).hexdigest()
+    legacy_etag = f'"scan-{ready.id}-{legacy_digest[:24]}"'
+
+    with TestClient(app) as client:
+        initial = client.get(page_path)
+        assert initial.status_code == 200
+        assert "etag" not in initial.headers
+        assert initial.headers["x-projection-build-id"] == str(ready.id)
+        assert all(item["rendered_capture_state"] is None for item in initial.json()["items"])
+
+        snapshot, observation = _add_render_evidence(db_session, scan)
+        rendered = client.get(page_path, headers={"If-None-Match": legacy_etag})
+        assert rendered.status_code == 200
+        rendered_item = next(item for item in rendered.json()["items"] if item["id"] == snapshot.id)
+        assert rendered_item["rendered_capture_state"] == "completed"
+
+        deleted = delete_rendered_observations(
+            db_session,
+            [observation.id],
+            artifact_store=LocalArtifactStore(tmp_path / "http-artifacts"),
+        )
+        assert deleted.observations_deleted == 1
+        after_delete = client.get(page_path, headers={"If-None-Match": legacy_etag})
+        assert after_delete.status_code == 200
+        deleted_item = next(
+            item for item in after_delete.json()["items"] if item["id"] == snapshot.id
+        )
+        assert deleted_item["rendered_capture_state"] is None
+
+        static_first = client.get(resource_path)
+        assert static_first.status_code == 200
+        static_etag = static_first.headers["etag"]
+        static_cached = client.get(resource_path, headers={"If-None-Match": static_etag})
+        assert static_cached.status_code == 304
 
 
 def test_v4_derived_scan_builds_decoupled_projection(db_session, tmp_path) -> None:

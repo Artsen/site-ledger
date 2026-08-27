@@ -75,3 +75,19 @@ def test_dynamic_response_does_not_claim_immutable_http_semantics() -> None:
     assert isinstance(result, PageList)
     assert "etag" not in response.headers
     assert response.headers["x-projection-source"] == "dynamic"
+
+
+def test_mutable_overlay_response_keeps_projection_headers_without_etag() -> None:
+    response = Response()
+
+    result = _projection_http_response(
+        _request(etag='"stale-page-validator"'),
+        response,
+        _result(),
+        immutable=False,
+    )
+
+    assert isinstance(result, PageList)
+    assert "etag" not in response.headers
+    assert response.headers["x-projection-source"] == "materialized"
+    assert response.headers["x-projection-build-id"] == "9"

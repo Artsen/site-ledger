@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { forwardRef, useImperativeHandle } from "react";
@@ -444,6 +444,45 @@ describe("new scan workflow", () => {
 });
 
 describe("scan results workflow", () => {
+  it("refetches Scan Pages once when a linked Render Run becomes terminal", async () => {
+    const activeScan = {
+      ...scanFixture,
+      render_run_id: 77,
+      render_run_status: "running",
+    };
+    const terminalScan = { ...activeScan, render_run_status: "completed" };
+    api.getScan.mockResolvedValue(activeScan);
+    let renderCompleted = false;
+    api.listPages.mockImplementation(async () => ({
+      items: [{ ...pageFixture, rendered_capture_state: renderCompleted ? "completed" : null }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/scans/1?tab=pages"]}>
+          <Routes><Route path="/scans/:scanId" element={<ScanDetailPage />} /></Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    expect(await screen.findByText("Not attempted", { selector: "td" })).toBeVisible();
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ["pages", "1"] })).toBe(0));
+    const callsBeforeTerminalTransition = api.listPages.mock.calls.length;
+
+    renderCompleted = true;
+    api.getScan.mockResolvedValue(terminalScan);
+    act(() => queryClient.setQueryData(["scan", "1"], terminalScan));
+
+    expect(await screen.findByRole("link", { name: "Open rendered evidence for https://example.com/page" })).toBeVisible();
+    await waitFor(() => expect(api.listPages).toHaveBeenCalledTimes(callsBeforeTerminalTransition + 1));
+    const terminalPages = queryClient.getQueryCache().find({ queryKey: ["pages", "1", 9, "77:completed"], exact: false });
+    expect(terminalPages?.isStale()).toBe(false);
+  });
+
   it("shows an ad-hoc Scan Render Run in Scan context", async () => {
     api.getScan.mockResolvedValue({
       ...scanFixture,

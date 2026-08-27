@@ -148,15 +148,21 @@ messages, Page errors, screenshots, rendered DOM, and full capture records remai
 
 ## HTTP And Frontend Caching
 
-Projection-backed immutable endpoints return `Cache-Control: private, no-cache`, deterministic
-ETags keyed by build, version, path, and query, and a `304` for matching validators. Dynamic active
-or fallback results do not claim immutable ETag semantics.
+Projection-backed Resource, summary, and Graph endpoints return `Cache-Control: private, no-cache`,
+deterministic ETags keyed by build, version, path, and query, and a `304` for matching validators.
+Projected Page responses retain the `X-Projection-*` provenance headers but do not return an ETag
+or `304`, because each response composes mutable Render state over the immutable Page projection.
+Dynamic active or fallback results do not claim immutable ETag semantics.
 
 TanStack Query uses `staleTime: Infinity`, disables focus and reconnect refetch, and disables
-polling only when a terminal Scan has a compatible ready projection. Cached filter/page variants
-have a bounded 45-minute `gcTime`. Active Scans retain polling. Terminal dynamic fallback is cached
-briefly while projection status polls; when a build becomes ready, query keys are invalidated and
-ordinary routes switch to prepared results. Scan deletion removes Scan-related query entries.
+polling only when a terminal Scan has a compatible ready projection. Page queries remain live while
+a linked Render Run is active and include the Run ID and status in their cache key, so the terminal
+transition performs one final fetch before stable long-lived caching resumes. Resource and Graph
+queries remain immutable for a ready projection. Cached filter/page variants have a bounded
+45-minute `gcTime`. Active Scans retain polling. Terminal dynamic fallback is cached briefly while
+projection status polls; when a build becomes ready, query keys are invalidated and ordinary routes
+switch to prepared results. Scan or Render evidence deletion removes affected Scan Page query
+entries.
 
 The Scan workspace shows a compact Results index state and build/rebuild action. Resources state
 that current evidence remains available while optimized results are prepared.
