@@ -97,6 +97,7 @@ class RenderRunTarget(Base):
     requested_url: Mapped[str] = mapped_column(Text)
     position: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    evidence_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     run: Mapped[RenderRun] = relationship(back_populates="targets")
     web_resource: Mapped[WebResource] = relationship()

@@ -193,6 +193,107 @@ class RenderRunRerender(BaseModel):
         return self
 
 
+class RenderRunTargetRead(BaseModel):
+    target_id: int
+    position: int
+    web_resource_id: int
+    requested_url: str
+    source_snapshot_id: int | None
+    created_at: datetime
+    evidence_deleted_at: datetime | None
+    observation_id: int | None
+    capture_state: str | None
+    navigation_http_status: int | None
+    duration_ms: int | None
+    warning_count: int | None
+    page_error_count: int | None
+    has_page_artifacts: bool
+    finished_at: datetime | None
+    presentation_state: str
+
+
+class RenderRunTargetList(BaseModel):
+    items: list[RenderRunTargetRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class RenderDeleteSelection(BaseModel):
+    target_ids: list[int] = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_target_ids(self) -> "RenderDeleteSelection":
+        if len(self.target_ids) != len(set(self.target_ids)):
+            raise ValueError("target_ids cannot contain duplicates.")
+        return self
+
+
+class LegacyRenderDeleteSelection(BaseModel):
+    observation_ids: list[int] = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_observation_ids(self) -> "LegacyRenderDeleteSelection":
+        if len(self.observation_ids) != len(set(self.observation_ids)):
+            raise ValueError("observation_ids cannot contain duplicates.")
+        return self
+
+
+class RenderDeleteConfirmation(BaseModel):
+    confirmation: str
+
+
+class RenderDeleteImpact(BaseModel):
+    can_delete: bool
+    reason: str | None = None
+    targets_requested: int = 0
+    observations: int = 0
+    targets_already_without_evidence: int = 0
+    runs: int = 0
+    run_targets: int = 0
+    deleted_targets: int = 0
+    unattempted_targets: int = 0
+    legacy_observations: int = 0
+    network_rows: int = 0
+    console_rows: int = 0
+    page_error_rows: int = 0
+    artifact_rows: int = 0
+    artifact_blobs_referenced: int = 0
+    exclusive_artifact_blobs: int = 0
+    shared_artifact_blobs_retained: int = 0
+    raw_bytes_reclaimable: int = 0
+    stored_bytes_reclaimable: int = 0
+    background_jobs: int = 0
+    job_events: int = 0
+    child_rerender_links_detached: int = 0
+
+
+class RenderDeleteResult(BaseModel):
+    deleted_observation_id: int | None = None
+    deleted_run_id: int | None = None
+    purged_site_id: int | None = None
+    purged_scan_id: int | None = None
+    targets_requested: int = 0
+    observations_deleted: int = 0
+    targets_already_without_evidence: int = 0
+    runs_deleted: int = 0
+    run_targets_deleted: int = 0
+    network_rows_deleted: int = 0
+    console_rows_deleted: int = 0
+    page_error_rows_deleted: int = 0
+    artifact_rows_deleted: int = 0
+    artifact_blobs_referenced: int = 0
+    artifact_blob_records_deleted: int = 0
+    artifact_blob_files_deleted: int = 0
+    shared_artifact_blobs_retained: int = 0
+    raw_bytes_reclaimed: int = 0
+    stored_bytes_reclaimed: int = 0
+    background_jobs_deleted: int = 0
+    job_events_deleted: int = 0
+    child_rerender_links_detached: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
 class RenderRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -210,6 +311,10 @@ class RenderRunRead(BaseModel):
     skipped_count: int
     blocked_request_count: int
     artifact_count: int
+    retained_observation_count: int = 0
+    deleted_observation_count: int = 0
+    unattempted_target_count: int = 0
+    retained_artifact_count: int = 0
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

@@ -463,6 +463,10 @@ export type RenderRun = {
   skipped_count: number;
   blocked_request_count: number;
   artifact_count: number;
+  retained_observation_count: number;
+  deleted_observation_count: number;
+  unattempted_target_count: number;
+  retained_artifact_count: number;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -474,6 +478,78 @@ export type RenderRun = {
 
 export type RenderRunList = { items: RenderRun[]; total: number; limit: number; offset: number };
 export type RenderRunDetail = RenderRun & { observations: RenderedObservationIndexList };
+
+export type RenderRunTarget = {
+  target_id: number;
+  position: number;
+  web_resource_id: number;
+  requested_url: string;
+  source_snapshot_id: number | null;
+  created_at: string;
+  evidence_deleted_at: string | null;
+  observation_id: number | null;
+  capture_state: string | null;
+  navigation_http_status: number | null;
+  duration_ms: number | null;
+  warning_count: number | null;
+  page_error_count: number | null;
+  has_page_artifacts: boolean;
+  finished_at: string | null;
+  presentation_state: "successful" | "no_content" | "redirect" | "http_error" | "rate_limited" | "not_attempted_host_throttled" | "technical_failure" | "evidence_deleted" | "not_attempted";
+};
+
+export type RenderRunTargetList = { items: RenderRunTarget[]; total: number; limit: number; offset: number };
+
+export type RenderDeleteImpact = {
+  can_delete: boolean;
+  reason: string | null;
+  targets_requested: number;
+  observations: number;
+  targets_already_without_evidence: number;
+  runs: number;
+  run_targets: number;
+  deleted_targets: number;
+  unattempted_targets: number;
+  legacy_observations: number;
+  network_rows: number;
+  console_rows: number;
+  page_error_rows: number;
+  artifact_rows: number;
+  artifact_blobs_referenced: number;
+  exclusive_artifact_blobs: number;
+  shared_artifact_blobs_retained: number;
+  raw_bytes_reclaimable: number;
+  stored_bytes_reclaimable: number;
+  background_jobs: number;
+  job_events: number;
+  child_rerender_links_detached: number;
+};
+
+export type RenderDeleteResult = {
+  deleted_observation_id: number | null;
+  deleted_run_id: number | null;
+  purged_site_id: number | null;
+  purged_scan_id: number | null;
+  targets_requested: number;
+  observations_deleted: number;
+  targets_already_without_evidence: number;
+  runs_deleted: number;
+  run_targets_deleted: number;
+  network_rows_deleted: number;
+  console_rows_deleted: number;
+  page_error_rows_deleted: number;
+  artifact_rows_deleted: number;
+  artifact_blobs_referenced: number;
+  artifact_blob_records_deleted: number;
+  artifact_blob_files_deleted: number;
+  shared_artifact_blobs_retained: number;
+  raw_bytes_reclaimed: number;
+  stored_bytes_reclaimed: number;
+  background_jobs_deleted: number;
+  job_events_deleted: number;
+  child_rerender_links_detached: number;
+  warnings: string[];
+};
 
 export type ResourceInventoryItem = {
   resource_id: number;

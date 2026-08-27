@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.api.render_routes import router
 from app.database import get_db
 from app.models import (
+    BackgroundJob,
     RenderedObservation,
     RenderRun,
     RenderRunTarget,
@@ -14,11 +15,14 @@ from app.models import (
     WebResource,
     WebsiteProperty,
 )
+from app.storage.artifact_store import LocalArtifactStore
 
 
-def _client(db_session):
+def _client(db_session, artifact_store=None):
     factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
     app = FastAPI()
+    if artifact_store is not None:
+        app.state.artifact_store = artifact_store
     app.include_router(router)
 
     def override_db():
@@ -179,3 +183,138 @@ def test_run_detail_history_and_rerender_create_new_immutable_evidence(db_sessio
     assert rerender.json()["source_render_run_id"] == created["id"]
     with factory() as db:
         assert db.get(RenderedObservation, observation_id).navigation_http_status == 200
+
+
+def test_target_api_preserves_deleted_target_and_enforces_site_ownership(
+    db_session, tmp_path
+) -> None:
+    site, resources = _site_with_pages(db_session, count=2)
+    other = WebsiteProperty(
+        name="Other",
+        base_url="https://other.example/",
+        normalized_base_url="https://other.example/",
+        group_key="Other",
+        platform_key="Other",
+        ownership_key="Unknown",
+        scope_config={},
+    )
+    db_session.add(other)
+    db_session.flush()
+    run = RenderRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=2,
+        attempted_count=1,
+        completed_count=1,
+    )
+    db_session.add(run)
+    db_session.flush()
+    targets = [
+        RenderRunTarget(
+            render_run_id=run.id,
+            web_resource_id=resource.id,
+            requested_url=resource.normalized_url,
+            position=index,
+        )
+        for index, resource in enumerate(resources, 1)
+    ]
+    db_session.add_all(targets)
+    db_session.flush()
+    observation = _completed_observation(targets[0])
+    db_session.add(observation)
+    db_session.commit()
+    client, _factory = _client(db_session, LocalArtifactStore(tmp_path / "rendered-artifacts"))
+
+    with client:
+        before = client.get(f"/api/sites/{site.id}/render-runs/{run.id}/targets")
+        wrong_owner = client.post(
+            f"/api/sites/{other.id}/render-runs/{run.id}/evidence-deletion-preview",
+            json={"target_ids": [targets[0].id]},
+        )
+        deleted = client.post(
+            f"/api/sites/{site.id}/render-runs/{run.id}/delete-evidence",
+            json={"target_ids": [targets[0].id]},
+        )
+        after = client.get(f"/api/sites/{site.id}/render-runs/{run.id}/targets")
+
+    assert before.status_code == 200
+    assert [item["presentation_state"] for item in before.json()["items"]] == [
+        "successful",
+        "not_attempted",
+    ]
+    assert wrong_owner.status_code == 404
+    assert deleted.status_code == 200
+    assert deleted.json()["observations_deleted"] == 1
+    assert [item["presentation_state"] for item in after.json()["items"]] == [
+        "evidence_deleted",
+        "not_attempted",
+    ]
+
+
+def test_active_run_rejects_deleting_targets_without_observations(db_session, tmp_path) -> None:
+    site, resources = _site_with_pages(db_session, count=2)
+    run = RenderRun(
+        website_property_id=site.id,
+        status="running",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=2,
+    )
+    db_session.add(run)
+    db_session.flush()
+    targets = [
+        RenderRunTarget(
+            render_run_id=run.id,
+            web_resource_id=resource.id,
+            requested_url=resource.normalized_url,
+            position=index,
+            evidence_deleted_at=datetime.now(UTC) if index == 2 else None,
+        )
+        for index, resource in enumerate(resources, 1)
+    ]
+    db_session.add_all(targets)
+    db_session.flush()
+    db_session.add(
+        BackgroundJob(
+            job_type="render_run",
+            status="running",
+            render_run_id=run.id,
+            dedupe_key=f"render_run:{run.id}",
+            payload_json={},
+        )
+    )
+    db_session.commit()
+    client, _factory = _client(db_session, LocalArtifactStore(tmp_path / "rendered-artifacts"))
+
+    with client:
+        previews = [
+            client.post(
+                f"/api/sites/{site.id}/render-runs/{run.id}/evidence-deletion-preview",
+                json={"target_ids": selection},
+            )
+            for selection in (
+                [targets[0].id],
+                [targets[1].id],
+                [targets[0].id, targets[1].id],
+            )
+        ]
+        deletes = [
+            client.post(
+                f"/api/sites/{site.id}/render-runs/{run.id}/delete-evidence",
+                json={"target_ids": [target.id]},
+            )
+            for target in targets
+        ]
+
+    assert all(response.status_code == 200 for response in previews)
+    assert all(response.json()["can_delete"] is False for response in previews)
+    assert all(
+        response.json()["reason"] == "Finish or cancel this Render Run before deleting evidence."
+        for response in previews
+    )
+    assert [response.status_code for response in deletes] == [409, 409]
+    db_session.expire_all()
+    assert db_session.get(RenderRunTarget, targets[0].id).evidence_deleted_at is None
+    assert db_session.get(RenderRunTarget, targets[1].id).evidence_deleted_at is not None

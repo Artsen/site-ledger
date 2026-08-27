@@ -493,6 +493,16 @@ Do not disable checks or weaken tests to force passing results.
   best-effort file removal; report cleanup failures without resurrecting evidence.
 - Full Site deletion must apply the same reference-aware observability cleanup and must not leak
   unreferenced payload records or files.
+- Never delete a `RenderRunTarget` solely because its `RenderedObservation` was deleted. A target
+  with `evidence_deleted_at` is deleted evidence; a target without an observation or marker was
+  never attempted. Rerendering always creates a new Run and never restores the old observation.
+- Rendered evidence deletion never rewrites historical Run counters or deletes Pages, Scans,
+  snapshots, Performance, or Accessibility evidence. Current retention counts are query-derived.
+- Rendered `ArtifactBlob` deletion is reference-aware, and physical files are removed only after
+  committed database deletion. Legacy Scan-bound browser evidence remains independently deletable.
+- Site rendered purge owns Site Runs plus legacy observations from that Site's Scans. Scan rendered
+  purge owns legacy observations plus Site-less ad-hoc Runs only; independently Site-owned Runs
+  survive. Active affected Runs always block deletion.
 - Never delete immutable Scan evidence to change mutable Site membership. `SitePage` workspace
   state is distinct from workflow status, and later observations must not reactivate a suppressed
   Page.

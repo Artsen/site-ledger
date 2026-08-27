@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { forwardRef, useImperativeHandle } from "react";
@@ -104,8 +104,29 @@ const api = vi.hoisted(() => ({
   listSiteResources: vi.fn(),
   getSiteResourceSummary: vi.fn(),
   listScanRenderedObservations: vi.fn(),
+  getLegacyRenderedDeletionPreview: vi.fn(),
+  deleteLegacyRenderedObservations: vi.fn(),
+  getScanRenderedDeletionPreview: vi.fn(),
+  purgeScanRenderedEvidence: vi.fn(),
   renderedArtifactUrl: vi.fn((id: number) => `/api/rendered-artifacts/${id}/content`)
 }));
+
+const renderDeletionImpact = {
+  can_delete: true, reason: null, targets_requested: 1, observations: 1,
+  targets_already_without_evidence: 0, runs: 0, run_targets: 0,
+  deleted_targets: 0, unattempted_targets: 0, legacy_observations: 1,
+  network_rows: 1, console_rows: 0, page_error_rows: 0, artifact_rows: 0,
+  artifact_blobs_referenced: 0, exclusive_artifact_blobs: 0,
+  shared_artifact_blobs_retained: 0, raw_bytes_reclaimable: 0,
+  stored_bytes_reclaimable: 0, background_jobs: 0, job_events: 0,
+  child_rerender_links_detached: 0,
+};
+const renderCleanupWarning = "Could not delete rendered artifact file legacy.png: access denied";
+const renderDeletionResult = {
+  observations_deleted: 1,
+  runs_deleted: 0,
+  warnings: [renderCleanupWarning],
+};
 
 vi.mock("../src/api/client", () => ({
   ...api,
@@ -244,6 +265,10 @@ beforeEach(() => {
   api.getScanResourceSummary.mockResolvedValue({ unique_resources: 0, observed_resources: 0, discovered_only_resources: 0, total_occurrences: 0, kind_counts: {} });
   api.getSiteResourceSummary.mockResolvedValue({ unique_resources: 0, observed_resources: 0, discovered_only_resources: 0, total_occurrences: 0, kind_counts: {} });
   api.listScanRenderedObservations.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  api.getLegacyRenderedDeletionPreview.mockResolvedValue(renderDeletionImpact);
+  api.deleteLegacyRenderedObservations.mockResolvedValue(renderDeletionResult);
+  api.getScanRenderedDeletionPreview.mockResolvedValue(renderDeletionImpact);
+  api.purgeScanRenderedEvidence.mockResolvedValue(renderDeletionResult);
   api.cancelScan.mockResolvedValue({ ...scanFixture, status: "cancelled" });
   api.getScanDeletePreview.mockResolvedValue({
     scan_id: 1,
@@ -527,6 +552,40 @@ describe("scan results workflow", () => {
     await waitFor(() => expect(api.listScanRenderedObservations).toHaveBeenLastCalledWith("1", expect.stringContaining("capture_state=completed_with_warnings")));
   });
 
+  it("keeps legacy bulk-deletion cleanup warnings visible on Scan Rendered", async () => {
+    api.getScan.mockResolvedValue({ ...scanFixture, rendered_attempted_count: 1, scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" } });
+    api.listScanRenderedObservations.mockResolvedValue({ items: [{
+      id: 31, snapshot_id: 9, resource_id: 2, render_run_target_id: null, capture_state: "failed", static_final_url: "https://example.com/limited", page_title: "Limited", navigation_http_status: 429, error_type: "navigation_rate_limited", error_message: "Rate limited", duration_ms: 450, warning_count: 1, page_error_count: 0, blocked_request_count: 0, console_message_count: 0, has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false, finished_at: "2026-08-06T01:00:01Z"
+    }], total: 1, limit: 50, offset: 0 });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=rendered");
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Select https://example.com/limited" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected evidence (1)" }));
+    const dialog = await screen.findByRole("dialog");
+    const submit = within(dialog).getByRole("button", { name: "Delete permanently" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    expect(await screen.findByText(renderCleanupWarning)).toBeVisible();
+    expect(screen.getByText("Cleanup warning:")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Delete selected evidence (1)" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Scan rendered-purge cleanup warnings visible", async () => {
+    api.getScan.mockResolvedValue({ ...scanFixture, scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" } });
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1?tab=rendered");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Scan rendered evidence" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "DELETE SCAN RENDERS 1" } });
+    const submit = within(dialog).getByRole("button", { name: "Delete permanently" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    expect(await screen.findByText(renderCleanupWarning)).toBeVisible();
+    expect(screen.getByText("Rendered evidence deleted.")).toBeVisible();
+  });
+
   it("distinguishes all rendered operational outcome buckets", async () => {
     api.getScan.mockResolvedValue({ ...scanFixture, scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" } });
     const renderedItem = (overrides: Record<string, unknown>) => ({
@@ -554,11 +613,11 @@ describe("scan results workflow", () => {
     expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("No-content responses1");
     expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("HTTP redirects1");
     expect(screen.getByRole("region", { name: "Rendered outcome summary" })).toHaveTextContent("HTTP errors (not 429)1");
-    expect(screen.getByText("HTTP error")).toBeInTheDocument();
+    expect(screen.getByText("HTTP error", { selector: "span" })).toBeInTheDocument();
     expect(screen.getByText("Rate limited", { selector: "span" })).toBeInTheDocument();
     expect(screen.getByText("No Page content")).toBeInTheDocument();
-    expect(screen.getByText("HTTP redirect")).toBeInTheDocument();
-    expect(screen.getByText("Not attempted - host throttled")).toBeInTheDocument();
+    expect(screen.getByText("HTTP redirect", { selector: "span" })).toBeInTheDocument();
+    expect(screen.getByText("Not attempted - host throttled", { selector: "span" })).toBeInTheDocument();
     expect(screen.getAllByText("No artifacts")).toHaveLength(5);
     expect(screen.getByText("HTTP 404")).toBeInTheDocument();
     expect(screen.getByText("HTTP 429")).toBeInTheDocument();

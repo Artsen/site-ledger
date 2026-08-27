@@ -88,6 +88,10 @@ observation per target, owns a Run-local host throttling circuit, reports Page c
 cancellation between and during bounded captures. A Scan may enqueue this job, but the job and its
 evidence remain independently owned by the Render Run.
 
+An active `render_run` job blocks observation, bulk, Run, and owner-scope rendered evidence
+deletion for that Run. Terminal Run deletion removes its terminal job/event history; partial
+observation deletion preserves both the Run and historical execution counters.
+
 The scan comparison build job waits for compatible prepared results, stages materialized
 differences, validates and checksums them, and atomically activates a ready build. Failed,
 cancelled, or interrupted rebuilds preserve the prior current result. See

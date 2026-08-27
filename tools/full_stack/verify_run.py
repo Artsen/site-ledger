@@ -201,11 +201,13 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         )
         assert seed_origins
 
-        scan_render_run = db.get(RenderRun, int(result["scan_render_run_id"]))
+        deleted_scan_render_run = db.get(RenderRun, int(result["deleted_scan_render_run_id"]))
         standalone_render_run = db.get(RenderRun, int(result["standalone_render_run_id"]))
-        assert scan_render_run is not None and scan_render_run.source_scan_id == scan_ids[0]
+        rerender_render_run = db.get(RenderRun, int(result["rerender_render_run_id"]))
+        assert deleted_scan_render_run is None
         assert standalone_render_run is not None and standalone_render_run.source_scan_id is None
-        assert scan_render_run.status == standalone_render_run.status == "completed"
+        assert rerender_render_run is not None and rerender_render_run.source_render_run_id is None
+        assert rerender_render_run.status == standalone_render_run.status == "completed"
         repeated_resource_id = int(result["repeated_render_resource_id"])
         repeated_observation_ids = [
             int(value) for value in result["repeated_render_observation_ids"]
@@ -217,8 +219,8 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         ]
         assert all(item is not None for item in repeated_observations)
         assert {item.render_run_id for item in repeated_observations if item is not None} == {
-            scan_render_run.id,
             standalone_render_run.id,
+            rerender_render_run.id,
         }
         assert all(
             item is not None
@@ -227,18 +229,13 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             and item.navigation_http_status == 200
             for item in repeated_observations
         )
-        scan_observation = next(
-            item
-            for item in repeated_observations
-            if item is not None and item.render_run_id == scan_render_run.id
-        )
         standalone_observation = next(
             item
             for item in repeated_observations
             if item is not None and item.render_run_id == standalone_render_run.id
         )
-        assert scan_observation.snapshot_id is not None
         assert standalone_observation.snapshot_id is None
+        assert all(item is not None and item.snapshot_id is None for item in repeated_observations)
 
         active_jobs = db.scalar(
             select(func.count(BackgroundJob.id)).where(
@@ -311,6 +308,12 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             .having(func.count(RenderedArtifact.id) > 1)
         ).all()
         assert duplicate_rendered_artifacts == []
+        duplicate_artifact_blobs = db.execute(
+            select(ArtifactBlob.sha256, func.count(ArtifactBlob.id))
+            .group_by(ArtifactBlob.sha256)
+            .having(func.count(ArtifactBlob.id) > 1)
+        ).all()
+        assert duplicate_artifact_blobs == []
         foreign_key_violations = db.execute(text("PRAGMA foreign_key_check")).all()
         assert foreign_key_violations == []
         blob_count = db.scalar(select(func.count(ContentBlob.id))) or 0
@@ -342,6 +345,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "crawler_request_paths": sorted({entry["path"] for entry in crawler_requests}),
         "duplicate_artifact_identity_count": 0,
         "duplicate_render_run_target_identity_count": 0,
+        "duplicate_artifact_blob_identity_count": 0,
         "duplicate_current_source_identity_count": 0,
         "duplicate_site_page_identity_count": 0,
         "foreign_key_violation_count": 0,
