@@ -888,7 +888,7 @@ def _mark_domain_cancelled(
                 scan.status = "cancelled"
                 scan.stop_reason = "cancelled_by_user"
                 scan.finished_at = now
-                _enqueue_projection_for_terminal_scan(db, scan)
+                _enqueue_projection_for_terminal_scan(db, scan, commit=commit)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:
@@ -953,7 +953,7 @@ def _mark_domain_interrupted(
                 render_run.error_summary = "Worker interrupted during rendered capture."
                 from app.services.rendered_capture import mark_render_run_capturing_interrupted
 
-                mark_render_run_capturing_interrupted(db, render_run.id, reason)
+                mark_render_run_capturing_interrupted(db, render_run.id, reason, commit=commit)
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -962,8 +962,8 @@ def _mark_domain_interrupted(
                 scan.finished_at = now
                 from app.services.rendered_capture import mark_capturing_interrupted
 
-                mark_capturing_interrupted(db, scan.id, reason)
-                _enqueue_projection_for_terminal_scan(db, scan)
+                mark_capturing_interrupted(db, scan.id, reason, commit=commit)
+                _enqueue_projection_for_terminal_scan(db, scan, commit=commit)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:
@@ -1018,7 +1018,7 @@ def _mark_domain_failed(
                 scan.status = "failed"
                 scan.fatal_error_message = str(exc)
                 scan.finished_at = now
-                _enqueue_projection_for_terminal_scan(db, scan)
+                _enqueue_projection_for_terminal_scan(db, scan, commit=commit)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:
@@ -1035,7 +1035,7 @@ def _mark_domain_failed(
             db.commit()
 
 
-def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan) -> None:
+def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan, *, commit: bool = True) -> None:
     if scan.status not in {
         "completed",
         "completed_with_errors",
@@ -1058,4 +1058,5 @@ def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan) -> None:
         from app.services.category_rules import queue_evaluation
 
         queue_evaluation(db, scan.website_property_id, "scan_completed")
-    db.commit()
+    if commit:
+        db.commit()

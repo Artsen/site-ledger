@@ -161,7 +161,11 @@ def persist_capture(
 
 
 def mark_capturing_interrupted(
-    db: Session, scan_id: int, reason: str = "worker_interrupted"
+    db: Session,
+    scan_id: int,
+    reason: str = "worker_interrupted",
+    *,
+    commit: bool = True,
 ) -> int:
     observations = list(
         db.scalars(
@@ -178,12 +182,17 @@ def mark_capturing_interrupted(
         item.error_type = "interrupted"
         item.error_message = reason[:1000]
         item.finished_at = datetime.now(UTC)
-    db.commit()
+    if commit:
+        db.commit()
     return len(observations)
 
 
 def mark_render_run_capturing_interrupted(
-    db: Session, render_run_id: int, reason: str = "worker_interrupted"
+    db: Session,
+    render_run_id: int,
+    reason: str = "worker_interrupted",
+    *,
+    commit: bool = True,
 ) -> int:
     observations = list(
         db.scalars(
@@ -198,5 +207,6 @@ def mark_render_run_capturing_interrupted(
         item.error_type = "interrupted"
         item.error_message = reason[:1000]
         item.finished_at = datetime.now(UTC)
-    db.commit()
+    if commit:
+        db.commit()
     return len(observations)

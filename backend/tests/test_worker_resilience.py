@@ -14,6 +14,8 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base, is_transient_database_lock
 from app.models import (
     BackgroundJob,
+    PageCategory,
+    PageCategoryRule,
     PageCategoryRuleRun,
     Scan,
     ScanComparisonBuild,
@@ -714,6 +716,75 @@ async def test_recovery_winning_terminalization_guard_preserves_domain_state(
 
 
 @pytest.mark.asyncio
+async def test_scan_terminalization_rolls_back_domain_and_followups_when_job_fails(
+    tmp_path, monkeypatch
+) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    claimed, job_id, scan_id = _claimed_scan_with_active_rule(session_factory)
+
+    class FailingHandler:
+        async def execute(self, _job, _context):
+            raise RuntimeError("scan execution failed")
+
+    def fail_before_commit(_db, **_kwargs):
+        raise RuntimeError("terminal BackgroundJob persistence failed")
+
+    monkeypatch.setattr(background_jobs, "fail_job", fail_before_commit)
+    with pytest.raises(RuntimeError, match="terminal BackgroundJob persistence failed"):
+        await run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry({JOB_TYPE_SCAN: FailingHandler()}),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+
+    with session_factory() as db:
+        persisted_job = db.get(BackgroundJob, job_id)
+        persisted_scan = db.get(Scan, scan_id)
+        assert persisted_job is not None and persisted_job.status == "running"
+        assert persisted_scan is not None and persisted_scan.status == "running"
+        assert persisted_scan.fatal_error_message is None
+        assert db.query(ScanProjectionBuild).count() == 0
+        assert db.query(PageCategoryRuleRun).count() == 0
+        assert db.query(BackgroundJob).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_terminalization_commits_domain_job_and_followups_together(tmp_path) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    claimed, job_id, scan_id = _claimed_scan_with_active_rule(session_factory)
+
+    class FailingHandler:
+        async def execute(self, _job, _context):
+            raise RuntimeError("scan execution failed")
+
+    await run_claimed_job(
+        session_factory=session_factory,
+        registry=JobHandlerRegistry({JOB_TYPE_SCAN: FailingHandler()}),
+        claimed_job=claimed,
+        lease_seconds=30,
+    )
+
+    with session_factory() as db:
+        persisted_job = db.get(BackgroundJob, job_id)
+        persisted_scan = db.get(Scan, scan_id)
+        projection_build = db.query(ScanProjectionBuild).one()
+        category_run = db.query(PageCategoryRuleRun).one()
+        assert persisted_job is not None and persisted_job.status == "failed"
+        assert persisted_scan is not None and persisted_scan.status == "failed"
+        assert persisted_scan.fatal_error_message == "scan execution failed"
+        assert projection_build.status == "queued"
+        assert category_run.status == "queued"
+        followup_types = set(
+            db.scalars(select(BackgroundJob.job_type).where(BackgroundJob.id != persisted_job.id))
+        )
+        assert followup_types == {
+            JOB_TYPE_SCAN_PROJECTION_BUILD,
+            JOB_TYPE_CATEGORY_RULE_EVALUATION,
+        }
+
+
+@pytest.mark.asyncio
 async def test_user_cancellation_remains_distinct_from_lease_loss(tmp_path) -> None:
     session_factory = _initialized_session_factory(tmp_path)
     with session_factory() as db:
@@ -847,6 +918,56 @@ def _initialized_session_factory(tmp_path):
     )
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+def _claimed_scan_with_active_rule(session_factory):
+    with session_factory() as db:
+        site = create_site(
+            db,
+            WebsitePropertyCreate(
+                name="Scan terminalization",
+                base_url="https://scan-terminalization.example/",
+                scope_config=ScopeConfigPayload(),
+            ),
+        )
+        category = PageCategory(
+            website_property_id=site.id,
+            name="Docs",
+            normalized_name="docs",
+            description=None,
+            color_key="stone",
+            sort_order=0,
+            is_active=True,
+        )
+        db.add(category)
+        db.flush()
+        db.add(
+            PageCategoryRule(
+                website_property_id=site.id,
+                category_id=category.id,
+                name="Docs rule",
+                description=None,
+                match_mode="all",
+                is_active=True,
+                sort_order=0,
+                current_revision_number=1,
+            )
+        )
+        scan = Scan(
+            website_property_id=site.id,
+            starting_url=site.base_url,
+            status="running",
+            scope_config=ScopeConfigPayload().model_dump(),
+        )
+        db.add(scan)
+        db.flush()
+        job = background_jobs.enqueue_scan_job(db, scan)
+        db.commit()
+        claimed = background_jobs.claim_next_job(
+            db, worker_id="scan-terminalization", lease_seconds=30
+        )
+        assert claimed is not None
+        return claimed, job.id, scan.id
 
 
 def _force_recovery(session_factory, job_id: int) -> int:
