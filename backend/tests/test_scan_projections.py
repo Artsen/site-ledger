@@ -1,9 +1,22 @@
-import pytest
-from sqlalchemy import delete, event, func, select
+import hashlib
+from datetime import UTC, datetime
 
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import delete, event, func, select
+from sqlalchemy.orm import sessionmaker
+
+from app.api.routes import router
+from app.crawler.scope import ScopeConfig
+from app.database import get_db
 from app.models import (
+    ArtifactBlob,
     BackgroundJob,
     PageCategory,
+    RenderedArtifact,
+    RenderedObservation,
+    RenderRunTarget,
     ResourceOccurrence,
     ResourceReferenceOccurrence,
     ResourceSnapshot,
@@ -22,6 +35,9 @@ from app.services.graph_queries import get_scan_graph, get_scan_graph_dynamic
 from app.services.job_handlers import _enqueue_projection_for_terminal_scan
 from app.services.job_types import JOB_TYPE_SCAN_PROJECTION_BUILD
 from app.services.parse_artifacts import HTML_PARSER_VERSION, get_or_create_artifact
+from app.services.render_runs import create_scan_render_run
+from app.services.rendered_capture import create_observation
+from app.services.rendered_deletion import delete_rendered_observations
 from app.services.resource_queries import (
     list_scan_resources,
     list_scan_resources_dynamic,
@@ -41,6 +57,7 @@ from app.services.scan_projections import (
     projection_status,
 )
 from app.services.scan_queries import list_scan_pages_dynamic, list_scan_pages_routed
+from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
 
 LEGACY_V3_PROJECTION_ALGORITHM = (
@@ -91,31 +108,33 @@ def test_projection_build_activates_equivalent_page_resource_and_graph_reads(db_
     ]
 
 
-def test_projection_algorithm_compatibility_accepts_current_and_legacy_only() -> None:
-    assert {LEGACY_V3_PROJECTION_ALGORITHM} == LEGACY_COMPATIBLE_SCAN_PROJECTION_ALGORITHMS
+def test_projection_algorithm_compatibility_accepts_current_v2_only() -> None:
+    assert not LEGACY_COMPATIBLE_SCAN_PROJECTION_ALGORITHMS
     assert is_compatible_projection_algorithm(CURRENT_SCAN_PROJECTION_ALGORITHM)
-    assert is_compatible_projection_algorithm(LEGACY_V3_PROJECTION_ALGORITHM)
+    assert not is_compatible_projection_algorithm(LEGACY_V3_PROJECTION_ALGORITHM)
     assert not is_compatible_projection_algorithm("scan-projection-v1:unknown")
 
 
-def test_legacy_v3_stamped_ready_projection_remains_compatible(db_session) -> None:
+def test_legacy_v1_projection_remains_historical_but_is_not_current(db_session) -> None:
     scan = _fixture(db_session, "completed")
     build = create_projection_build(db_session, scan.id)
     db_session.commit()
     ready = execute_projection_build(db_session, build.id)
+    ready.projection_version = "scan-projection-v1"
     ready.algorithm_identity = LEGACY_V3_PROJECTION_ALGORITHM
     db_session.commit()
 
-    compatible = current_projection_build(db_session, scan.id)
-
-    assert compatible is not None
-    assert compatible.id == ready.id
-    assert create_projection_build(db_session, scan.id).id == ready.id
-    assert _pages(db_session, scan.id).projection.projection_source == "materialized"
+    assert db_session.get(ScanProjectionBuild, ready.id) is not None
+    assert current_projection_build(db_session, scan.id) is None
+    replacement = create_projection_build(db_session, scan.id)
+    assert replacement.id != ready.id
+    assert replacement.projection_version == SCAN_PROJECTION_VERSION
+    assert ready.projection_version == "scan-projection-v1"
+    assert _pages(db_session, scan.id).projection.projection_source == "dynamic"
     status = projection_status(db_session, scan.id)
     assert status is not None
-    assert status.projection_source == "materialized"
-    assert status.can_rebuild is True
+    assert status.projection_source == "dynamic"
+    assert status.can_build is False
 
 
 def test_current_identity_rebuild_preserves_projection_checksum(db_session) -> None:
@@ -130,6 +149,118 @@ def test_current_identity_rebuild_preserves_projection_checksum(db_session) -> N
     assert first_ready.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
     assert second_ready.algorithm_identity == CURRENT_SCAN_PROJECTION_ALGORITHM
     assert first_ready.checksum_sha256 == second_ready.checksum_sha256
+
+
+def test_render_evidence_does_not_change_scan_projection(db_session) -> None:
+    scan = _fixture(db_session, "completed")
+    first = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    first_ready = execute_projection_build(db_session, first.id)
+    first_rows = _page_projection_payloads(db_session, first_ready.id)
+
+    snapshot, observation = _add_render_evidence(db_session, scan)
+
+    rebuild = create_projection_build(db_session, scan.id, force=True)
+    db_session.commit()
+    second_ready = execute_projection_build(db_session, rebuild.id)
+
+    assert second_ready.checksum_sha256 == first_ready.checksum_sha256
+    assert _page_projection_payloads(db_session, second_ready.id) == first_rows
+    rendered_page = next(
+        item for item in _pages(db_session, scan.id).items if item.id == snapshot.id
+    )
+    assert rendered_page.rendered_capture_state == "completed"
+    assert db_session.get(ScanProjectionBuild, second_ready.id).checksum_sha256 == (
+        first_ready.checksum_sha256
+    )
+
+
+def test_render_deletion_does_not_change_projection_or_leave_stale_page_state(
+    db_session, tmp_path
+) -> None:
+    scan = _fixture(db_session, "completed")
+    first = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    first_ready = execute_projection_build(db_session, first.id)
+    first_rows = _page_projection_payloads(db_session, first_ready.id)
+    snapshot, observation = _add_render_evidence(db_session, scan)
+    rendered_page = next(
+        item for item in _pages(db_session, scan.id).items if item.id == snapshot.id
+    )
+    assert rendered_page.rendered_capture_state == "completed"
+
+    result = delete_rendered_observations(
+        db_session,
+        [observation.id],
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+    )
+    assert result.observations_deleted == 1
+    page_after_delete = next(
+        item for item in _pages(db_session, scan.id).items if item.id == snapshot.id
+    )
+    assert page_after_delete.rendered_capture_state is None
+
+    rebuild = create_projection_build(db_session, scan.id, force=True)
+    db_session.commit()
+    second_ready = execute_projection_build(db_session, rebuild.id)
+
+    assert second_ready.checksum_sha256 == first_ready.checksum_sha256
+    assert _page_projection_payloads(db_session, second_ready.id) == first_rows
+
+
+def test_page_http_cache_tracks_live_render_overlay_without_projection_rebuild(
+    db_session, tmp_path
+) -> None:
+    scan = _fixture(db_session, "completed")
+    build = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    ready = execute_projection_build(db_session, build.id)
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+    app = FastAPI()
+    app.include_router(router)
+
+    def override_db():
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_db
+    page_path = f"/api/scans/{scan.id}/pages"
+    resource_path = f"/api/scans/{scan.id}/resources"
+    legacy_identity = f"{page_path}?|{ready.projection_version}|{ready.id}"
+    legacy_digest = hashlib.sha256(legacy_identity.encode()).hexdigest()
+    legacy_etag = f'"scan-{ready.id}-{legacy_digest[:24]}"'
+
+    with TestClient(app) as client:
+        initial = client.get(page_path)
+        assert initial.status_code == 200
+        assert "etag" not in initial.headers
+        assert initial.headers["x-projection-build-id"] == str(ready.id)
+        assert all(item["rendered_capture_state"] is None for item in initial.json()["items"])
+
+        snapshot, observation = _add_render_evidence(db_session, scan)
+        rendered = client.get(page_path, headers={"If-None-Match": legacy_etag})
+        assert rendered.status_code == 200
+        rendered_item = next(item for item in rendered.json()["items"] if item["id"] == snapshot.id)
+        assert rendered_item["rendered_capture_state"] == "completed"
+
+        deleted = delete_rendered_observations(
+            db_session,
+            [observation.id],
+            artifact_store=LocalArtifactStore(tmp_path / "http-artifacts"),
+        )
+        assert deleted.observations_deleted == 1
+        after_delete = client.get(page_path, headers={"If-None-Match": legacy_etag})
+        assert after_delete.status_code == 200
+        deleted_item = next(
+            item for item in after_delete.json()["items"] if item["id"] == snapshot.id
+        )
+        assert deleted_item["rendered_capture_state"] is None
+
+        static_first = client.get(resource_path)
+        assert static_first.status_code == 200
+        static_etag = static_first.headers["etag"]
+        static_cached = client.get(resource_path, headers={"If-None-Match": static_etag})
+        assert static_cached.status_code == 304
 
 
 def test_v4_derived_scan_builds_decoupled_projection(db_session, tmp_path) -> None:
@@ -548,3 +679,71 @@ def _raw_counts(db_session) -> tuple[int, int, int]:
         db_session.scalar(select(func.count(ResourceOccurrence.id))) or 0,
         db_session.scalar(select(func.count(ResourceReferenceOccurrence.id))) or 0,
     )
+
+
+def _page_projection_payloads(db_session, build_id: int) -> list[dict[str, object]]:
+    rows = list(
+        db_session.scalars(
+            select(ScanPageProjection)
+            .where(ScanPageProjection.projection_build_id == build_id)
+            .order_by(ScanPageProjection.snapshot_id)
+        )
+    )
+    excluded = {"id", "projection_build_id"}
+    return [
+        {
+            column.name: getattr(row, column.name)
+            for column in ScanPageProjection.__table__.columns
+            if column.name not in excluded
+        }
+        for row in rows
+    ]
+
+
+def _add_render_evidence(db_session, scan: Scan) -> tuple[ResourceSnapshot, RenderedObservation]:
+    snapshot = db_session.scalar(
+        select(ResourceSnapshot)
+        .where(ResourceSnapshot.scan_id == scan.id)
+        .order_by(ResourceSnapshot.id)
+    )
+    assert snapshot is not None
+    run = create_scan_render_run(db_session, scan, [snapshot])
+    run.status = "completed"
+    db_session.commit()
+    target = db_session.scalar(
+        select(RenderRunTarget).where(RenderRunTarget.render_run_id == run.id)
+    )
+    assert target is not None
+    observation = create_observation(
+        db_session,
+        snapshot,
+        ScopeConfig.from_dict(scan.scope_config),
+        target=target,
+    )
+    observation.capture_state = "completed"
+    observation.finished_at = datetime.now(UTC)
+    observation.network_entry_count = 7
+    observation.console_message_count = 2
+    observation.page_error_count = 1
+    blob = ArtifactBlob(
+        sha256="a" * 64,
+        storage_key="test/render-evidence.png",
+        media_type="image/png",
+        compression_type="none",
+        raw_byte_size=4,
+        stored_byte_size=4,
+    )
+    db_session.add(blob)
+    db_session.flush()
+    db_session.add(
+        RenderedArtifact(
+            rendered_observation_id=observation.id,
+            artifact_blob_id=blob.id,
+            artifact_type="viewport_screenshot",
+            width=1280,
+            height=720,
+            metadata_json={},
+        )
+    )
+    db_session.commit()
+    return snapshot, observation

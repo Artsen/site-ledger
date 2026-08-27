@@ -123,8 +123,6 @@ class ComparisonPageRead(BaseModel):
     inbound_links_changed: bool
     outbound_links_changed: bool
     embedded_resources_changed: bool
-    rendered_state_changed: bool
-    rendered_counts_changed: bool
     baseline_http_status: int | None
     target_http_status: int | None
     baseline_content_hash: str | None
@@ -285,7 +283,6 @@ class PageChangeHistoryItem(BaseModel):
     title: str | None
     canonical_url: str | None
     robots_directives: str | None
-    rendered_state: str | None
     change_label: str
     changed_flags: list[str]
     previous_snapshot_id: int | None

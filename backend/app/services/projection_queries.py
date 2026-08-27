@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.crawler.resource_classification import RESOURCE_KIND_LABELS
 from app.models import (
+    RenderedObservation,
     Scan,
     ScanLinkProjection,
     ScanPageProjection,
@@ -53,7 +54,14 @@ def list_projected_pages(
     build = build or current_projection_build(db, scan_id)
     if build is None:
         return None
-    query = select(ScanPageProjection).where(ScanPageProjection.projection_build_id == build.id)
+    query = (
+        select(ScanPageProjection, RenderedObservation.capture_state)
+        .outerjoin(
+            RenderedObservation,
+            RenderedObservation.snapshot_id == ScanPageProjection.snapshot_id,
+        )
+        .where(ScanPageProjection.projection_build_id == build.id)
+    )
     if search:
         pattern = f"%{search}%"
         query = query.where(
@@ -80,13 +88,13 @@ def list_projected_pages(
     elif error_state == "without_errors":
         query = query.where(ScanPageProjection.error_type.is_(None))
     if rendered_state == "not_requested":
-        query = query.where(ScanPageProjection.rendered_capture_state.is_(None))
+        query = query.where(RenderedObservation.id.is_(None))
     elif rendered_state == "captured":
-        query = query.where(ScanPageProjection.rendered_capture_state == "completed")
+        query = query.where(RenderedObservation.capture_state == "completed")
     elif rendered_state == "captured_with_warnings":
-        query = query.where(ScanPageProjection.rendered_capture_state == "completed_with_warnings")
+        query = query.where(RenderedObservation.capture_state == "completed_with_warnings")
     elif rendered_state != "any":
-        query = query.where(ScanPageProjection.rendered_capture_state == rendered_state)
+        query = query.where(RenderedObservation.capture_state == rendered_state)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     sort_map = {
         "requested_url": ScanPageProjection.requested_url,
@@ -96,7 +104,7 @@ def list_projected_pages(
         "content_type": ScanPageProjection.content_type,
         "duration": ScanPageProjection.response_time_ms,
         "inbound": ScanPageProjection.inbound_occurrence_count,
-        "rendered_state": func.coalesce(ScanPageProjection.rendered_capture_state, "not_requested"),
+        "rendered_state": func.coalesce(RenderedObservation.capture_state, "not_requested"),
         "error": ScanPageProjection.error_type,
     }
     order = sort_map[sort].desc() if direction == "desc" else sort_map[sort].asc()
@@ -105,9 +113,9 @@ def list_projected_pages(
         if direction == "desc"
         else ScanPageProjection.snapshot_id.asc()
     )
-    rows = db.scalars(query.order_by(order, id_order).limit(limit).offset(offset))
+    rows = db.execute(query.order_by(order, id_order).limit(limit).offset(offset)).all()
     return PageList(
-        items=[_page_read(row) for row in rows],
+        items=[_page_read(row, rendered_capture_state) for row, rendered_capture_state in rows],
         total=total,
         limit=limit,
         offset=offset,
@@ -379,7 +387,7 @@ def get_projected_graph(
     )
 
 
-def _page_read(row: ScanPageProjection) -> PageRead:
+def _page_read(row: ScanPageProjection, rendered_capture_state: str | None = None) -> PageRead:
     return PageRead(
         id=row.snapshot_id,
         resource_id=row.resource_id,
@@ -396,7 +404,7 @@ def _page_read(row: ScanPageProjection) -> PageRead:
         fetch_state=row.fetch_state,
         error_type=row.error_type,
         network_bytes_transferred=row.network_bytes_transferred,
-        rendered_capture_state=row.rendered_capture_state,
+        rendered_capture_state=rendered_capture_state,
     )
 
 

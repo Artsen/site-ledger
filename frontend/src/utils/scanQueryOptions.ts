@@ -26,6 +26,25 @@ export function scanResultQueryOptions(
   };
 }
 
+export function scanPageQueryOptions(
+  scanStatus: string | undefined,
+  projection: ScanProjectionStatus | undefined,
+  renderRunId: number | null | undefined,
+  renderRunStatus: string | null | undefined
+) {
+  const activeRenderRun = renderRunId != null && !["completed", "completed_with_errors", "failed", "cancelled", "interrupted"].includes(renderRunStatus ?? "");
+  if (activeRenderRun) {
+    return {
+      staleTime: 0,
+      gcTime: TERMINAL_SCAN_GC_TIME_MS,
+      refetchInterval: 1500,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true
+    };
+  }
+  return scanResultQueryOptions(scanStatus, projection);
+}
+
 export function projectionStatusRefetchInterval(status: ScanProjectionStatus | undefined) {
   if (!status || status.projection_status === "queued" || status.projection_status === "building" || status.projection_status === "missing") return 2000;
   return false as const;

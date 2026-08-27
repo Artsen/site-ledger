@@ -240,8 +240,6 @@ def _classification(baseline, target, categories: list[str]) -> str:
             "inbound_links_changed",
             "outbound_links_changed",
             "embedded_resources_changed",
-            "rendered_state_changed",
-            "rendered_counts_changed",
         )
     }
     document_state = (

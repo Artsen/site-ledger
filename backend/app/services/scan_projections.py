@@ -9,14 +9,12 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, TypeVar
 
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, func, insert, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     ContentBlob,
-    RenderedArtifact,
-    RenderedObservation,
     ResourceOccurrence,
     ResourceReferenceOccurrence,
     ResourceSnapshot,
@@ -33,11 +31,9 @@ from app.models import (
 from app.schemas.projections import ProjectionMetadata, ScanProjectionStatusRead
 from app.services.job_types import ExecutionOwnershipLost
 
-SCAN_PROJECTION_VERSION = "scan-projection-v1"
-CURRENT_SCAN_PROJECTION_ALGORITHM = "scan-projection-v1:resource-classifier-v1:link-role-v1"
-LEGACY_COMPATIBLE_SCAN_PROJECTION_ALGORITHMS = frozenset(
-    {"scan-projection-v1:html-parser-v3-resource-references:resource-classifier-v1:link-role-v1"}
-)
+SCAN_PROJECTION_VERSION = "scan-projection-v2"
+CURRENT_SCAN_PROJECTION_ALGORITHM = "scan-projection-v2:resource-classifier-v1:link-role-v1"
+LEGACY_COMPATIBLE_SCAN_PROJECTION_ALGORITHMS: frozenset[str] = frozenset()
 # Retain the original exported name for callers while new code uses the explicit current identity.
 SCAN_PROJECTION_ALGORITHM = CURRENT_SCAN_PROJECTION_ALGORITHM
 TERMINAL_SCAN_STATUSES = {
@@ -320,7 +316,7 @@ def execute_projection_build(
         build.link_edge_count = len(links)
         build.graph_node_count = len(pages)
         build.graph_edge_count = len(links)
-        build.rendered_page_count = sum(bool(row["rendered_capture_state"]) for row in pages)
+        build.rendered_page_count = 0
         build.source_snapshot_count = validation["source_snapshot_count"]
         build.source_link_occurrence_count = validation["source_link_occurrence_count"]
         build.source_resource_reference_count = validation["source_resource_reference_count"]
@@ -405,52 +401,40 @@ def delete_scan_projection_data(db: Session, scan_id: int) -> None:
 
 
 def _page_rows(db: Session, scan: Scan) -> list[dict[str, Any]]:
-    from app.services.scan_queries import list_scan_pages_dynamic
-
-    first = list_scan_pages_dynamic(
-        db, scan.id, None, None, None, None, None, None, None, "any", "requested_url", "asc", 1, 0
-    )
-    listed = list_scan_pages_dynamic(
-        db,
-        scan.id,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        "any",
-        "requested_url",
-        "asc",
-        max(first.total, 1),
-        0,
-    )
-    snapshot_ids = [item.id for item in listed.items]
-    snapshots = {
-        item.id: item
-        for item in db.scalars(
+    snapshots = list(
+        db.scalars(
             select(ResourceSnapshot)
             .options(joinedload(ResourceSnapshot.resource), joinedload(ResourceSnapshot.blob))
-            .where(ResourceSnapshot.id.in_(snapshot_ids))
-        )
-    }
-    rendered = {
-        item.snapshot_id: item
-        for item in db.scalars(
-            select(RenderedObservation).where(RenderedObservation.snapshot_id.in_(snapshot_ids))
-        )
-    }
-    artifact_counts: dict[int, int] = {
-        snapshot_id: count
-        for snapshot_id, count in db.execute(
-            select(RenderedObservation.snapshot_id, func.count(RenderedArtifact.id))
-            .join(
-                RenderedArtifact, RenderedArtifact.rendered_observation_id == RenderedObservation.id
+            .where(
+                ResourceSnapshot.scan_id == scan.id,
+                or_(
+                    ResourceSnapshot.representation_kind == "html_page",
+                    ResourceSnapshot.html_blob_id.is_not(None),
+                    ResourceSnapshot.content_type.ilike("text/html%"),
+                    ResourceSnapshot.content_type.ilike("application/xhtml+xml%"),
+                ),
             )
-            .where(RenderedObservation.snapshot_id.in_(snapshot_ids))
-            .group_by(RenderedObservation.snapshot_id)
+            .order_by(ResourceSnapshot.requested_url, ResourceSnapshot.id)
         )
+    )
+    snapshot_ids = [item.id for item in snapshots]
+    inbound: dict[int, tuple[int, int, str | None]] = {
+        resource_id: (occurrence_count, source_count, discovery_source)
+        for resource_id, occurrence_count, source_count, discovery_source in db.execute(
+            select(
+                ResourceOccurrence.target_resource_id,
+                func.count(ResourceOccurrence.id),
+                func.count(func.distinct(ResourceOccurrence.source_snapshot_id)),
+                func.min(func.coalesce(ResourceSnapshot.final_url, ResourceSnapshot.requested_url)),
+            )
+            .join(
+                ResourceSnapshot,
+                ResourceSnapshot.id == ResourceOccurrence.source_snapshot_id,
+            )
+            .where(ResourceSnapshot.scan_id == scan.id)
+            .group_by(ResourceOccurrence.target_resource_id)
+        )
+        if resource_id is not None
     }
     outbound = {
         snapshot_id: (occurrence_count, target_count)
@@ -489,11 +473,10 @@ def _page_rows(db: Session, scan: Scan) -> list[dict[str, Any]]:
         if resource_id is not None
     }
     rows: list[dict[str, Any]] = []
-    for item in listed.items:
-        snapshot = snapshots[item.id]
+    for snapshot in snapshots:
         resource = snapshot.resource
-        capture = rendered.get(snapshot.id)
         outbound_values = outbound.get(snapshot.id, (0, 0))
+        inbound_values = inbound.get(resource.id, (0, 0, None))
         blob: ContentBlob | None = snapshot.blob
         rows.append(
             {
@@ -523,22 +506,22 @@ def _page_rows(db: Session, scan: Scan) -> list[dict[str, Any]]:
                 "network_bytes_transferred": snapshot.network_bytes_transferred,
                 "raw_html_size": blob.raw_byte_size if blob else None,
                 "stored_html_size": blob.stored_byte_size if blob else None,
-                "inbound_source_page_count": item.inbound_source_page_count,
-                "inbound_occurrence_count": item.inbound_occurrence_count,
+                "inbound_source_page_count": inbound_values[1],
+                "inbound_occurrence_count": inbound_values[0],
                 "outbound_target_count": outbound_values[1],
                 "outbound_occurrence_count": outbound_values[0],
                 "embedded_resource_count": embedded.get(snapshot.id, 0),
-                "discovery_source": item.discovery_source,
+                "discovery_source": inbound_values[2],
                 "is_seed": resource.id in seed_counts,
                 "seed_origin_count": seed_counts.get(resource.id, 0),
                 "is_starting_page": scan.starting_url
                 in {snapshot.requested_url, snapshot.final_url},
-                "rendered_capture_state": capture.capture_state if capture else None,
-                "rendered_network_count": capture.network_entry_count if capture else 0,
-                "rendered_console_count": capture.console_message_count if capture else 0,
-                "rendered_page_error_count": capture.page_error_count if capture else 0,
-                "rendered_artifact_count": artifact_counts.get(snapshot.id, 0),
-                "rendered_captured_at": capture.finished_at if capture else None,
+                "rendered_capture_state": None,
+                "rendered_network_count": 0,
+                "rendered_console_count": 0,
+                "rendered_page_error_count": 0,
+                "rendered_artifact_count": 0,
+                "rendered_captured_at": None,
                 "fetched_at": snapshot.fetched_at,
             }
         )
@@ -697,8 +680,8 @@ def _summary_row(
         "resource_occurrence_total": resource_summary.total_occurrences if resource_summary else 0,
         "link_occurrence_total": sum(row["occurrence_count"] for row in links),
         "link_edge_total": len(links),
-        "rendered_page_total": sum(bool(row["rendered_capture_state"]) for row in pages),
-        "rendered_artifact_total": sum(row["rendered_artifact_count"] for row in pages),
+        "rendered_page_total": 0,
+        "rendered_artifact_total": 0,
         "retry_total": scan.static_retry_request_count,
         "recovered_page_total": scan.static_recovered_after_retry_count,
         "error_counts_json": dict(Counter(row["error_type"] for row in pages if row["error_type"])),

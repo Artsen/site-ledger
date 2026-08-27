@@ -32,13 +32,13 @@ const scans = [
 const build = {
   id: 9,
   scan_comparison_id: 7,
-  comparison_version: "scan-comparison-v2",
-  algorithm_identity: "scan-comparison-v2|source-signals-v1|document-content-v2|incapsula-cb-v1|page-v2|resource-v1|link-v1|scan-projection-v1",
+  comparison_version: "scan-comparison-v3",
+  algorithm_identity: "scan-comparison-v3|source-signals-v1|document-content-v2|incapsula-cb-v1|page-v2|resource-v1|link-v1|scan-projection-v2",
   status: "ready",
   baseline_projection_build_id: 4,
   target_projection_build_id: 5,
-  baseline_projection_version: "scan-projection-v1",
-  target_projection_version: "scan-projection-v1",
+  baseline_projection_version: "scan-projection-v2",
+  target_projection_version: "scan-projection-v2",
   baseline_projection_algorithm_identity: "projection",
   target_projection_algorithm_identity: "projection",
   baseline_projection_checksum: "a",
@@ -86,9 +86,9 @@ describe("Scan comparison workspace", () => {
     api.getComparisonStatus.mockResolvedValue({ comparison, summary: null });
     api.getComparison.mockResolvedValue({ comparison, summary: { pages: { newly_observed: 1, substantive_change: 1, technical_change: 2, normalization_only: 3 }, resources: { total: 0 }, links: { total: 0 }, scan: {} } });
     api.createComparison.mockResolvedValue({ comparison, summary: null });
-    api.listComparisonPages.mockResolvedValue({ items: [{ id: 1, resource_id: 3, normalized_url: "https://example.com/old", host: "example.com", path: "/old", presence_state: "not_observed_in_target", change_state: "not_applicable", primary_change_class: "not_applicable", content_state: "not_applicable", document_content_state: "not_applicable", metadata_state: "not_applicable", technical_state: "not_applicable", exact_source_state: "not_applicable", head_state: "not_applicable", changed_field_count: 0, baseline_http_status: 200, target_http_status: null, response_time_ms_delta: null, network_bytes_delta: null }], total: 1, limit: 25, offset: 0, comparison_build_id: 9, comparison_version: "scan-comparison-v2" });
-    api.listComparisonResources.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0, comparison_build_id: 9, comparison_version: "scan-comparison-v2" });
-    api.listComparisonLinks.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0, comparison_build_id: 9, comparison_version: "scan-comparison-v2" });
+    api.listComparisonPages.mockResolvedValue({ items: [{ id: 1, resource_id: 3, normalized_url: "https://example.com/old", host: "example.com", path: "/old", presence_state: "not_observed_in_target", change_state: "not_applicable", primary_change_class: "not_applicable", content_state: "not_applicable", document_content_state: "not_applicable", metadata_state: "not_applicable", technical_state: "not_applicable", exact_source_state: "not_applicable", head_state: "not_applicable", changed_field_count: 0, baseline_http_status: 200, target_http_status: null, response_time_ms_delta: null, network_bytes_delta: null }], total: 1, limit: 25, offset: 0, comparison_build_id: 9, comparison_version: "scan-comparison-v3" });
+    api.listComparisonResources.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0, comparison_build_id: 9, comparison_version: "scan-comparison-v3" });
+    api.listComparisonLinks.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0, comparison_build_id: 9, comparison_version: "scan-comparison-v3" });
   });
 
   it("defaults Baseline to the previous Scan and Target to the latest Scan", async () => {

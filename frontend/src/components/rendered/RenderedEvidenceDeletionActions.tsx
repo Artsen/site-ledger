@@ -38,7 +38,7 @@ function Impact({ value }: { value: RenderDeleteImpact }) {
 
 async function invalidateRendered(queryClient: ReturnType<typeof useQueryClient>) {
   await queryClient.invalidateQueries({
-    predicate: (query) => query.queryKey.some((part) => {
+    predicate: (query) => query.queryKey[0] === "pages" || query.queryKey.some((part) => {
       const value = String(part);
       return value.includes("render") || value === "scan";
     }),

@@ -31,7 +31,7 @@ def test_ready_comparison_response_has_build_specific_private_etag() -> None:
     assert result == {"items": []}
     assert first_response.headers["cache-control"] == "private, no-cache"
     assert first_response.headers["etag"] == second_response.headers["etag"]
-    assert first_response.headers["x-comparison-version"] == "scan-comparison-v2"
+    assert first_response.headers["x-comparison-version"] == "scan-comparison-v3"
     assert first_response.headers["x-comparison-build-id"] == "9"
 
 

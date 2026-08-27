@@ -43,11 +43,11 @@ from app.services.source_comparison import (
 )
 from app.storage.content_store import BlobNotFoundError, LocalContentStore
 
-SCAN_COMPARISON_VERSION = "scan-comparison-v2"
+SCAN_COMPARISON_VERSION = "scan-comparison-v3"
 SCAN_COMPARISON_ALGORITHM = (
-    "scan-comparison-v2|source-signals-v1|"
+    "scan-comparison-v3|source-signals-v1|"
     f"{DOCUMENT_CONTENT_EXTRACTOR_VERSION}|incapsula-cb-v1|page-v2|resource-v1|"
-    "link-v1|scan-projection-v1"
+    "link-v1|scan-projection-v2"
 )
 ACTIVE_COMPARISON_BUILD_STATUSES = {"queued", "waiting_for_projections", "building"}
 NORMAL_SCAN_STOP_REASONS = {"completed", "queue_empty", "queue_exhausted"}
@@ -951,8 +951,6 @@ def _summary_delta(
         "resource_occurrence_total",
         "link_occurrence_total",
         "link_edge_total",
-        "rendered_page_total",
-        "rendered_artifact_total",
         "retry_total",
         "recovered_page_total",
     )
@@ -1000,13 +998,6 @@ def _page_flags(before: dict[str, Any] | None, after: dict[str, Any] | None) -> 
         "inbound_links_changed": ("inbound_source_page_count", "inbound_occurrence_count"),
         "outbound_links_changed": ("outbound_target_count", "outbound_occurrence_count"),
         "embedded_resources_changed": ("embedded_resource_count",),
-        "rendered_state_changed": ("rendered_capture_state",),
-        "rendered_counts_changed": (
-            "rendered_network_count",
-            "rendered_console_count",
-            "rendered_page_error_count",
-            "rendered_artifact_count",
-        ),
     }
     return {
         name: bool(before and after and any(before[field] != after[field] for field in fields))
@@ -1090,8 +1081,6 @@ def _technical_state(flags: dict[str, bool], categories: list[str], presence: st
         "inbound_links_changed",
         "outbound_links_changed",
         "embedded_resources_changed",
-        "rendered_state_changed",
-        "rendered_counts_changed",
     )
     changed = any(flags[name] for name in technical_flags) or bool(
         {"dependency", "unclassified"}.intersection(categories)
@@ -1150,11 +1139,6 @@ def _page_projection_json(row: ScanPageProjection | None) -> dict[str, Any] | No
         "outbound_target_count",
         "outbound_occurrence_count",
         "embedded_resource_count",
-        "rendered_capture_state",
-        "rendered_network_count",
-        "rendered_console_count",
-        "rendered_page_error_count",
-        "rendered_artifact_count",
         "fetched_at",
     )
     return {field: _json_value(getattr(row, field)) for field in fields}

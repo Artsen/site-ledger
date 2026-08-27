@@ -94,6 +94,6 @@ verified completed V2 state, API operation, identity creation, and worker claims
 
 Immediate rollback is intentionally narrow. Any post-migration domain write changes the stored
 fingerprint and causes automatic rollback refusal; recovery then requires an operator-managed plan.
-Page Change History remains derived from rebuilt `scan-projection-v1` and `scan-comparison-v2`
+Page Change History remains derived from rebuilt `scan-projection-v2` and `scan-comparison-v3`
 evidence. No comparison, parser, structured-content, browser, Performance, or Accessibility version
 changes in this migration.

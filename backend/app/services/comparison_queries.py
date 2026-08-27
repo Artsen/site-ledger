@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     ContentBlob,
-    RenderedObservation,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -111,7 +110,6 @@ def list_comparison_pages(
     target_status: int | None = None,
     redirect_changed: bool | None = None,
     links_changed: bool | None = None,
-    rendered_changed: bool | None = None,
     sort: str = "url",
     direction: str = "asc",
     limit: int = 50,
@@ -149,7 +147,6 @@ def list_comparison_pages(
     filters = {
         ScanComparisonPageResult.http_status_changed: http_changed,
         ScanComparisonPageResult.redirect_state_changed: redirect_changed,
-        ScanComparisonPageResult.rendered_state_changed: rendered_changed,
     }
     for column, value in filters.items():
         if value is not None:
@@ -579,10 +576,9 @@ def page_change_history(
     )
     scan_positions = {scan.id: position for position, scan in enumerate(scans)}
     rows = db.execute(
-        select(ResourceSnapshot, Scan, RenderedObservation.capture_state)
+        select(ResourceSnapshot, Scan)
         .options(joinedload(ResourceSnapshot.blob))
         .join(Scan, Scan.id == ResourceSnapshot.scan_id)
-        .outerjoin(RenderedObservation, RenderedObservation.snapshot_id == ResourceSnapshot.id)
         .where(
             Scan.website_property_id == site_id,
             ResourceSnapshot.resource_id == resource_id,
@@ -596,14 +592,12 @@ def page_change_history(
         .order_by(Scan.created_at, Scan.id, ResourceSnapshot.id)
     ).all()
     items: list[PageChangeHistoryItem] = []
-    previous: tuple[ResourceSnapshot, Scan, str | None] | None = None
+    previous: tuple[ResourceSnapshot, Scan] | None = None
     source_cache: dict[int, SourceAnalysis | None] = {}
-    for snapshot, scan, rendered_state in rows:
+    for snapshot, scan in rows:
         flags = _history_flags(
             previous[0] if previous else None,
             snapshot,
-            previous[2] if previous else None,
-            rendered_state,
             store,
             source_cache,
         )
@@ -624,7 +618,6 @@ def page_change_history(
                 title=snapshot.page_title,
                 canonical_url=snapshot.canonical_url,
                 robots_directives=snapshot.meta_robots,
-                rendered_state=rendered_state,
                 change_label=_history_label(flags, previous is None),
                 changed_flags=flags,
                 previous_snapshot_id=previous[0].id if previous else None,
@@ -633,7 +626,7 @@ def page_change_history(
                 intervening_unsuccessful_observation_count=intervening,
             )
         )
-        previous = (snapshot, scan, rendered_state)
+        previous = (snapshot, scan)
     return PageChangeHistoryList(
         items=items[offset : offset + limit], total=len(items), limit=limit, offset=offset
     )
@@ -760,8 +753,6 @@ def _edge_occurrences(
 def _history_flags(
     before: ResourceSnapshot | None,
     after: ResourceSnapshot,
-    before_rendered: str | None,
-    after_rendered: str | None,
     store: LocalContentStore | None,
     source_cache: dict[int, SourceAnalysis | None],
 ) -> list[str]:
@@ -771,7 +762,6 @@ def _history_flags(
         "head_metadata": (before.head_sha256, after.head_sha256),
         "http_status": (before.http_status, after.http_status),
         "redirect": (before.final_url, after.final_url),
-        "rendered_summary": (before_rendered, after_rendered),
     }
     flags = [name for name, values in fields.items() if values[0] != values[1]]
     if before.raw_html_sha256 != after.raw_html_sha256:
@@ -820,6 +810,5 @@ def _history_label(flags: list[str], first: bool) -> str:
         "head_metadata": "Head metadata changed",
         "http_status": "HTTP status changed",
         "redirect": "Redirect changed",
-        "rendered_summary": "Rendered summary changed",
     }
     return labels[flags[0]]

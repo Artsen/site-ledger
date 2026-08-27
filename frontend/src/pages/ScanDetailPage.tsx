@@ -25,7 +25,7 @@ import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, isTe
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
 import { useTableSort } from "../utils/useTableSort";
-import { projectionStatusRefetchInterval, scanResultQueryOptions } from "../utils/scanQueryOptions";
+import { projectionStatusRefetchInterval, scanPageQueryOptions } from "../utils/scanQueryOptions";
 
 export function ScanDetailPage() {
   const { scanId = "" } = useParams();
@@ -84,11 +84,19 @@ export function ScanDetailPage() {
 
   const pageQuery = useMemo(() => buildPageQuery(searchParams), [searchParams]);
   const projectionKey = projection.data?.current_build?.id ?? projection.data?.projection_status ?? "unknown";
+  const renderLifecycleKey = scan.data?.render_run_id == null
+    ? "no-render-run"
+    : `${scan.data.render_run_id}:${scan.data.render_run_status ?? "unknown"}`;
   const pages = useQuery({
-    queryKey: ["pages", scanId, projectionKey, pageQuery],
+    queryKey: ["pages", scanId, projectionKey, renderLifecycleKey, pageQuery],
     queryFn: () => listPages(scanId, pageQuery),
     enabled: tab === "overview" || tab === "pages",
-    ...scanResultQueryOptions(scan.data?.status, projection.data),
+    ...scanPageQueryOptions(
+      scan.data?.status,
+      projection.data,
+      scan.data?.render_run_id,
+      scan.data?.render_run_status
+    ),
     placeholderData: (previous) => previous
   });
   const errors = useQuery({

@@ -37,8 +37,9 @@ Python app package.
 - **Render Run:** One durable, bounded browser-evidence collection over a frozen set of Pages.
 - **Rendered observation:** Immutable browser-derived evidence for one Render Run target, with
   optional historical Scan/snapshot provenance and distinct from retained static HTML.
-- **Scan projection:** A deterministic, versioned, rebuildable index derived from one terminal
-  Scan's immutable evidence. It is never the original evidence.
+- **Scan projection:** A deterministic, versioned, rebuildable index derived only from one terminal
+  Scan's immutable static evidence. It is never the original evidence and never embeds Render
+  evidence.
 - **Comparison:** A deterministic relationship and versioned build comparing two terminal Scans
   from one Site while preserving coverage semantics and immutable evidence provenance.
 - **Structured content:** A ContentBlob-scoped, versioned deterministic derivative representing
@@ -197,14 +198,20 @@ Preserve these unless a dedicated compatibility migration is explicitly designed
 never make existing local data appear missing or silently discard saved preferences.
 
 Current deterministic compatibility identifiers include `html-parser-v4-rel-token-semantics`,
-`structured-content-v1` with `default-v1`, `document-content-v2`, `scan-comparison-v2`, and
-`scan-projection-v1`. Treat identity changes as explicit versioned compatibility changes, not
+`structured-content-v1` with `default-v1`, `document-content-v2`, `scan-comparison-v3`, and
+`scan-projection-v2`. Treat identity changes as explicit versioned compatibility changes, not
 incidental refactors.
 
 Scan projection algorithm provenance describes projection computation. Do not encode upstream
 evidence-producer versions when those versions are already preserved on their own artifacts. Keep
 historical projection identities readable through explicit compatibility rules rather than
 rewriting or rebuilding retained projections merely to rename provenance.
+
+Current Scan projections derive only from static Scan evidence. RenderRun completion, rerender, or
+evidence deletion must not change projection rows or checksums. Scan Page reads may compose current
+retained Render evidence at query time. Current Scan comparisons and Scan-based Page Change History
+must not interpret independent Render lifecycle differences as Scan changes. Historical projection
+and comparison builds remain stored under their original versions and are never relabelled.
 
 ## Crawl Behavior
 
@@ -319,7 +326,7 @@ RequestId and TimeStamp values preserved by structured content therefore remain 
 narrow `document-content-v2` operational-template semantics.
 
 Structured section database IDs are artifact-local, not stable cross-Scan identities. Do not add
-section-level comparison by silently changing `scan-comparison-v2`; any future section comparison
+section-level comparison by silently changing `scan-comparison-v3`; any future section comparison
 must define and version its deterministic identity and matching semantics explicitly.
 
 Comparison never rewrites evidence. Exact evidence remains exact, normalization remains narrow and
@@ -365,7 +372,7 @@ derivatives. Performance observations are immutable historical records. Provider
 must not rewrite `WebResource`, and unavailable CrUX data is not automatically a failure. Never
 persist or expose provider keys in evidence, logs, checksums, or APIs. New provider adapters require
 fixed trusted endpoints, bounded networking, and sanitized failures. Performance does not modify
-`scan-comparison-v2`; Findings, regressions, and scheduling remain downstream work.
+`scan-comparison-v3`; Findings, regressions, and scheduling remain downstream work.
 
 Provider HTTP success is not equivalent to usable normalized evidence. PageSpeed adapter v2 requires
 at least one recognized Performance metric for `ready`; a parseable response with none is
@@ -381,7 +388,7 @@ authoritative; violation and incomplete rows are versioned normalized detector e
 Ledger Findings. Preserve Needs Review separately from violations and Desktop separately from
 Mobile. Detector updates create later evidence and never rewrite history. Accessibility must reuse
 the hardened browser networking policy, never load detector code from a runtime CDN, belongs to
-persistent Page history rather than Scan Observation, and must not alter `scan-comparison-v2`.
+persistent Page history rather than Scan Observation, and must not alter `scan-comparison-v3`.
 
 Raw Performance and Accessibility evidence is authoritative but is not the default result view.
 Human-readable details must be deterministic, read-time traceable derivatives and must retain exact
@@ -469,8 +476,8 @@ Do not disable checks or weaken tests to force passing results.
 - Keep `WebResource` as normalized URL identity; representation kind belongs to Scan evidence.
 - Do not treat successful non-HTML responses as crawl failures or store their response bodies.
 - Keep Graph topology Page-link based and rendered capture evidence separate from static parsing.
-- Keep deterministic Scan comparisons versioned above immutable Scan projections; never label crawl
-  absence as website removal.
+- Keep deterministic Scan comparisons versioned above immutable static Scan projections; never
+  include independent Render evidence or label crawl absence as website removal.
 - Update README and focused documentation when behavior or architecture changes.
 - Any PR that materially changes the implemented product boundary, architecture ownership, or
   compatibility/version identifiers documented here must update `AGENTS.md` in the same PR.

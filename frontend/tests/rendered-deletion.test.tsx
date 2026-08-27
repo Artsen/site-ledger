@@ -143,6 +143,25 @@ describe("rendered evidence deletion", () => {
     expect(onDeleted).toHaveBeenCalled();
   });
 
+  it("invalidates Scan Page results after rendered evidence deletion", async () => {
+    vi.mocked(client.getRenderTargetDeletionPreview).mockResolvedValue(impact);
+    vi.mocked(client.deleteRenderTargetEvidence).mockResolvedValue(result as never);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    queryClient.setQueryData(["pages", "12", 9, "?limit=50"], { items: [] });
+    queryClient.setQueryData(["site-pages", "3", "?limit=50"], { items: [] });
+    const scanPages = queryClient.getQueryCache().find({ queryKey: ["pages", "12", 9, "?limit=50"] });
+    const sitePages = queryClient.getQueryCache().find({ queryKey: ["site-pages", "3", "?limit=50"] });
+
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><RenderTargetBulkDeleteAction siteId="3" runId="8" targetIds={[1]} onDeleted={vi.fn()} /></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Delete evidence (1)" }));
+    const submit = await screen.findByRole("button", { name: "Delete permanently" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(scanPages?.state.isInvalidated).toBe(true));
+    expect(sitePages?.state.isInvalidated).toBe(false);
+  });
+
   it("keeps HTTP-error observations inspectable without claiming Page artifacts", async () => {
     vi.mocked(client.listRenderRunTargets).mockResolvedValue({
       total: 5,

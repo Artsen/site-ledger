@@ -6,7 +6,7 @@ links, executing JavaScript, or changing comparison semantics.
 
 The current identity is `structured-content-v1 | default-v1 | ContentBlob`. It is intentionally
 independent from `html-parser-v4-rel-token-semantics`, `document-content-v2`,
-`scan-comparison-v2`, and `scan-projection-v1`.
+`scan-comparison-v3`, and `scan-projection-v2`.
 
 ## Ownership And Identity
 
@@ -191,8 +191,8 @@ RAG, AI summary, or generated interpretation.
 
 ## Operational Boundaries
 
-Structured content does not feed `scan-comparison-v2`, `document-content-v2`, or
-`scan-projection-v1`. It is an additional deterministic derivative of exact HTML. Existing source
+Structured content does not feed `scan-comparison-v3`, `document-content-v2`, or
+`scan-projection-v2`. It is an additional deterministic derivative of exact HTML. Existing source
 comparison normalization, exact evidence, projections, and checksums are unchanged.
 
 ## Performance Benchmark

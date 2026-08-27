@@ -745,7 +745,7 @@ test("terminal Scan projections switch from fallback and preserve ready results 
       body: JSON.stringify({
         scan_id: 1,
         scan_status: "completed",
-        expected_version: "scan-projection-v1",
+        expected_version: "scan-projection-v2",
         projection_source: currentBuild ? "materialized" : "dynamic",
         projection_status: state,
         current_build: currentBuild ? { id: currentBuild, status: "ready" } : null,
@@ -944,7 +944,7 @@ test("deterministic Scan comparison selects direction, filters, and sorts neutra
   await expect(page.getByLabel("Target Scan")).toHaveValue("2");
   await page.getByRole("button", { name: "Compare" }).click();
   await expect(page.getByText("Comparable", { exact: true })).toBeVisible();
-  await expect(page.getByText("scan-comparison-v2")).toBeVisible();
+  await expect(page.getByText("scan-comparison-v3")).toBeVisible();
 
   await page.getByRole("tab", { name: /Pages/ }).click();
   await expect(page.getByLabel("Show all Pages")).not.toBeChecked();
@@ -973,13 +973,13 @@ async function mockComparisonApi(page: Page) {
   const build = {
     id: 9,
     scan_comparison_id: 7,
-    comparison_version: "scan-comparison-v2",
-    algorithm_identity: "scan-comparison-v2|source-signals-v1|document-content-v2|incapsula-cb-v1|page-v2|resource-v1|link-v1|scan-projection-v1",
+    comparison_version: "scan-comparison-v3",
+    algorithm_identity: "scan-comparison-v3|source-signals-v1|document-content-v2|incapsula-cb-v1|page-v2|resource-v1|link-v1|scan-projection-v2",
     status: "ready",
     baseline_projection_build_id: 4,
     target_projection_build_id: 5,
-    baseline_projection_version: "scan-projection-v1",
-    target_projection_version: "scan-projection-v1",
+    baseline_projection_version: "scan-projection-v2",
+    target_projection_version: "scan-projection-v2",
     baseline_projection_algorithm_identity: "projection",
     target_projection_algorithm_identity: "projection",
     baseline_projection_checksum: "baseline",
@@ -1085,7 +1085,7 @@ async function mockComparisonApi(page: Page) {
         limit: 50,
         offset: 0,
         comparison_build_id: 9,
-        comparison_version: "scan-comparison-v2",
+        comparison_version: "scan-comparison-v3",
       }),
     });
   });
@@ -1140,7 +1140,7 @@ async function mockApi(page: Page) {
       await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ id: 10, scan_id: 1, status: "queued" }) });
       return;
     }
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ scan_id: 1, scan_status: "completed", expected_version: "scan-projection-v1", projection_source: "materialized", projection_status: "ready", current_build: { id: 9, status: "ready" }, active_build: null, latest_build: { id: 9, status: "ready" }, can_build: false, can_rebuild: true }) });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ scan_id: 1, scan_status: "completed", expected_version: "scan-projection-v2", projection_source: "materialized", projection_status: "ready", current_build: { id: 9, status: "ready" }, active_build: null, latest_build: { id: 9, status: "ready" }, can_build: false, can_rebuild: true }) });
   });
 
   await page.route("**/api/scans/1/resources/summary", async (route) => {

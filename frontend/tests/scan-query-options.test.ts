@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { projectionStatusRefetchInterval, scanResultQueryOptions, TERMINAL_SCAN_GC_TIME_MS } from "../src/utils/scanQueryOptions";
+import { projectionStatusRefetchInterval, scanPageQueryOptions, scanResultQueryOptions, TERMINAL_SCAN_GC_TIME_MS } from "../src/utils/scanQueryOptions";
 import type { ScanProjectionBuild, ScanProjectionStatus } from "../src/types/scans";
 
 const ready: ScanProjectionStatus = {
   scan_id: 1,
   scan_status: "completed",
-  expected_version: "scan-projection-v1",
+  expected_version: "scan-projection-v2",
   projection_source: "materialized",
   projection_status: "ready",
   current_build: { id: 9 } as ScanProjectionBuild,
@@ -34,6 +34,21 @@ describe("Scan result query options", () => {
     expect(options.refetchInterval).toBe(2000);
     expect(options.refetchOnWindowFocus).toBe(true);
     expect(options.refetchOnReconnect).toBe(true);
+  });
+
+  it("keeps prepared Page results live while a linked Render Run is active", () => {
+    const options = scanPageQueryOptions("completed", ready, 77, "running");
+
+    expect(options.staleTime).toBe(0);
+    expect(options.refetchInterval).toBe(1500);
+    expect(options.refetchOnWindowFocus).toBe(true);
+    expect(options.refetchOnReconnect).toBe(true);
+  });
+
+  it("returns Page results to stable caching after the linked Render Run terminates", () => {
+    expect(scanPageQueryOptions("completed", ready, 77, "completed")).toEqual(
+      scanResultQueryOptions("completed", ready)
+    );
   });
 
   it("polls projection state during fallback and stops when ready or failed", () => {

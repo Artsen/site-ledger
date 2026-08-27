@@ -1384,7 +1384,7 @@ def list_pages(
         offset,
         rendered_state,
     )
-    return _projection_http_response(request, response, result)
+    return _projection_http_response(request, response, result, immutable=False)
 
 
 @router.get("/scans/{scan_id}/resources", response_model=ResourceInventoryList)
@@ -2020,6 +2020,8 @@ def _projection_http_response(
     request: Request,
     response: Response,
     result: ProjectionResponseT,
+    *,
+    immutable: bool = True,
 ) -> ProjectionResponseT | Response:
     metadata = result.projection
     if metadata is None:
@@ -2028,6 +2030,10 @@ def _projection_http_response(
     response.headers["X-Projection-Version"] = metadata.projection_version
     response.headers["X-Projection-Status"] = metadata.projection_status
     if metadata.projection_source != "materialized" or metadata.projection_build_id is None:
+        return result
+    response.headers["X-Projection-Build-Id"] = str(metadata.projection_build_id)
+    if not immutable:
+        response.headers["Cache-Control"] = "private, no-cache"
         return result
     identity = (
         f"{request.url.path}?{request.url.query}|{metadata.projection_version}|"
