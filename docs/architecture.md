@@ -176,6 +176,13 @@ services.job_handlers adapts claimed jobs to crawler and source-refresh services
 cooperative. Workers recover expired leases on startup and reconcile terminal domain records before
 marking unfinished work interrupted.
 
+Long synchronous projection, comparison, Category Rule, and structured-content handlers execute
+outside the asyncio worker loop with thread-owned SQLAlchemy Sessions. Job heartbeats and worker
+heartbeats therefore remain independently schedulable, while authenticated progress also renews
+the active lease atomically. Expired recovery uses a current-state conditional ownership transition;
+a stale candidate cannot interrupt a lease renewed before recovery acts, and a stale executor cannot
+complete or fail work after ownership is lost.
+
 Deletion services reject active jobs so background work cannot mutate rows while their owning Scan,
 Source, or Site is deleted.
 

@@ -28,7 +28,7 @@ from app.parsers.compression import (
 from app.parsers.robots import parse_sitemap_directives
 from app.parsers.sitemap import SitemapParseError, parse_sitemap_xml
 from app.services.background_jobs import enqueue_source_refresh_job
-from app.services.job_types import ACTIVE_JOB_STATUSES
+from app.services.job_types import ACTIVE_JOB_STATUSES, ExecutionOwnershipLost
 from app.services.source_management import _source_policy_index, upsert_source_entry
 from app.services.url_identity import active_url_normalization_version
 from app.storage.ai_document_store import LocalAiDocumentStore
@@ -175,6 +175,9 @@ async def execute_source_refresh(
         refresh.error_type = "cancelled"
         refresh.error_message = "Refresh cancelled by user."
         refresh.finished_at = datetime.now(UTC)
+    except ExecutionOwnershipLost:
+        db.rollback()
+        raise
     except Exception as exc:
         refresh.status = "failed"
         refresh.error_type = _error_type(exc)
@@ -432,6 +435,8 @@ async def _refresh_sitemap(
                 should_cancel,
                 progress_callback,
             )
+        except ExecutionOwnershipLost:
+            raise
         except Exception as exc:
             child_refresh.status = "failed"
             child_refresh.error_type = _error_type(exc)

@@ -159,14 +159,17 @@ async def execute_accessibility_run(
         return run
 
 
-def mark_accessibility_run_failed(db: Session, run_id: int, exc: Exception) -> None:
+def mark_accessibility_run_failed(
+    db: Session, run_id: int, exc: Exception, *, commit: bool = True
+) -> None:
     run = db.get(AccessibilityRun, run_id)
     if run is None:
         return
     run.status = "failed"
     run.finished_at = datetime.now(UTC)
     run.error_summary = f"{type(exc).__name__}: {str(exc)[:800]}"
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def _tasks(db: Session, run: AccessibilityRun) -> list[AccessibilityTask]:

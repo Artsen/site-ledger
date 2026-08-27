@@ -363,14 +363,16 @@ def update_progress(
     *,
     job_id: int,
     lease_token: str,
+    lease_seconds: float,
     phase: str,
     current_operation: str | None = None,
     current: int | None = None,
     total: int | None = None,
     unit: str | None = None,
     counters: dict[str, int] | None = None,
+    now: datetime | None = None,
 ) -> None:
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     payload = {
         "version": 1,
         "phase": phase,
@@ -395,6 +397,7 @@ def update_progress(
             progress_total=total,
             progress_unit=unit,
             heartbeat_at=now,
+            lease_expires_at=now + timedelta(seconds=lease_seconds),
         )
     )
     result = cast(CursorResult[Any], db.execute(statement))
@@ -403,6 +406,33 @@ def update_progress(
         raise StaleLeaseError("Job lease is no longer active.")
     _touch_assigned_worker(db, job_id, now)
     db.commit()
+
+
+def guard_terminalization(
+    db: Session,
+    *,
+    job_id: int,
+    lease_token: str,
+    lease_seconds: float,
+    now: datetime | None = None,
+) -> None:
+    """Hold current ownership through a shared domain/job terminal transaction."""
+    now = now or datetime.now(UTC)
+    result = cast(
+        CursorResult[Any],
+        db.execute(
+            update(BackgroundJob)
+            .where(
+                BackgroundJob.id == job_id,
+                BackgroundJob.status == JOB_STATUS_RUNNING,
+                BackgroundJob.lease_token == lease_token,
+            )
+            .values(heartbeat_at=now, lease_expires_at=now + timedelta(seconds=lease_seconds))
+        ),
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise StaleLeaseError("Job lease is no longer active.")
 
 
 def _touch_assigned_worker(db: Session, job_id: int, now: datetime) -> None:
@@ -618,17 +648,25 @@ def recover_expired_jobs(
 ) -> int:
     now = datetime.now(UTC)
     cutoff = lease_expired_before or now
-    jobs = list(
+    recovery_token = f"recovery:{secrets.token_urlsafe(24)}"
+    claimed_ids = list(
         db.scalars(
-            select(BackgroundJob).where(
+            update(BackgroundJob)
+            .where(
                 BackgroundJob.status == JOB_STATUS_RUNNING,
                 BackgroundJob.lease_expires_at.is_not(None),
                 BackgroundJob.lease_expires_at < cutoff,
             )
+            .values(lease_token=recovery_token)
+            .returning(BackgroundJob.id)
         )
     )
+    db.expire_all()
     recovered = 0
-    for job in jobs:
+    for job_id in claimed_ids:
+        job = db.get(BackgroundJob, job_id)
+        if job is None:
+            continue
         if reconcile_job_with_domain(db, job):
             recovered += 1
             continue

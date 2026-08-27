@@ -504,6 +504,13 @@ def reconcile_site(
         db.commit()
         if progress:
             progress(min(offset + len(pages), total_pages), total_pages)
+    if should_cancel and should_cancel():
+        run = db.get(PageCategoryRuleRun, run_id)
+        if run:
+            run.status = "cancelled"
+            run.finished_at = datetime.now(UTC)
+            db.commit()
+        return run  # type: ignore[return-value]
     now = datetime.now(UTC)
     for rule in rules:
         rule.current_match_count = rule_matches[rule.id]

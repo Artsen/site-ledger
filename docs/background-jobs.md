@@ -54,6 +54,29 @@ Workers claim queued jobs deterministically by priority, availability time, crea
 Claiming sets a lease token and lease expiry. Heartbeats and progress updates are accepted only from
 the holder of the current lease.
 
+Job lease health is independent of synchronous domain throughput. Substantial CPU, SQL, and local
+filesystem work runs through a bounded `asyncio.to_thread` boundary so job and worker heartbeats
+remain schedulable. Scan projection, Scan comparison, Category Rule reconciliation, and structured
+content preparation create, use, and close their SQLAlchemy Sessions inside that execution thread;
+live Sessions and attached ORM state are never passed across the boundary. Path-only content-store
+configuration is reconstructed in the thread when required.
+
+Authenticated job heartbeats and bounded progress updates both atomically renew `heartbeat_at` and
+`lease_expires_at` under the running-status and lease-token ownership check. A transient SQLite lock
+may delay one heartbeat or progress write and produces a bounded warning; it is not itself a domain
+failure. Worker heartbeats also perform their synchronous database work off the event loop.
+
+Expired-job recovery atomically claims only rows that are still running and expired when recovery
+acts. A legitimate renewal that wins that compare-and-set remains authoritative even if another
+worker observed an older expired value. Once recovery wins, the prior token cannot heartbeat,
+report progress, complete, or fail the job. Confirmed stale ownership is surfaced to the executor
+as a distinct execution-ownership loss, not user cancellation. Blocking domain work then stops at
+its next progress, cancellation-check, or batch boundary without completing, cancelling, failing,
+or activating stale domain state. Exception terminalization conditionally guards the active lease
+and stages domain and BackgroundJob terminal state in one transaction, so recovery cannot win
+between ownership validation and domain mutation. Heartbeats remain mutable operational state and
+do not create permanent `JobEvent` rows.
+
 Cancellation is cooperative. A queued job can move directly to `cancelled`. A running job stores
 `cancellation_requested_at`; handlers check that flag between fetches or source parsing steps, save
 partial results, and finish as `cancelled`.
@@ -100,6 +123,12 @@ cancelled, or interrupted rebuilds preserve the prior current result. See
 If a worker exits or the process is killed, expired running jobs are reconciled on worker startup.
 When the domain record already reached a terminal state, the job follows that terminal state.
 Otherwise the job and domain record move to `interrupted`.
+
+Increasing the configured lease duration is not a substitute for keeping the scheduler responsive.
+The configured graceful-shutdown duration is not currently an enforced deadline: WorkerService
+waits for active work during shutdown, and cancelling an await of `asyncio.to_thread` cannot stop
+the underlying Python thread. A bounded graceful-shutdown contract requires a dedicated follow-up
+design rather than claiming that threads can be forcibly terminated.
 
 ## Boundaries
 

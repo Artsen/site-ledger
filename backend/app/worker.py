@@ -46,16 +46,16 @@ class WorkerService:
 
     async def run(self, *, once: bool = False, recover_only: bool = False) -> None:
         await self._register()
-        self._recover()
+        await asyncio.to_thread(self._recover)
         if recover_only:
-            self._stop_worker()
+            await asyncio.to_thread(self._stop_worker)
             return
         heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         try:
             while not self._stop.is_set():
                 self._running = {task for task in self._running if not task.done()}
                 while len(self._running) < self.concurrency:
-                    claimed = self._claim()
+                    claimed = await asyncio.to_thread(self._claim)
                     if claimed is None:
                         break
                     task = asyncio.create_task(
@@ -72,19 +72,23 @@ class WorkerService:
                         await asyncio.gather(*self._running)
                     return
                 await asyncio.sleep(self.poll_interval_seconds)
-                self._recover_if_idle()
+                await asyncio.to_thread(self._recover_if_idle)
         finally:
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
             if self._running:
                 await asyncio.gather(*self._running, return_exceptions=True)
-            self._stop_worker()
+            await asyncio.to_thread(self._stop_worker)
 
     def request_stop(self) -> None:
         self._stop.set()
 
     async def _register(self) -> None:
         browser_capability = await asyncio.to_thread(worker_browser_capability)
+        await asyncio.to_thread(self._register_worker, browser_capability)
+        logger.info("worker registered", extra={"worker_id": self.worker_id})
+
+    def _register_worker(self, browser_capability: dict[str, object]) -> None:
         with self.session_factory() as db:
             background_jobs.register_worker(
                 db,
@@ -92,7 +96,6 @@ class WorkerService:
                 concurrency=self.concurrency,
                 metadata={"kind": "local", "browser": browser_capability},
             )
-        logger.info("worker registered", extra={"worker_id": self.worker_id})
 
     def _recover(self) -> None:
         try:
@@ -133,13 +136,16 @@ class WorkerService:
     async def _heartbeat_loop(self) -> None:
         while True:
             try:
-                with self.session_factory() as db:
-                    background_jobs.heartbeat_worker(db, self.worker_id)
+                await asyncio.to_thread(self._heartbeat_worker)
             except OperationalError as exc:
                 if not is_transient_database_lock(exc):
                     raise
                 logger.warning("worker heartbeat delayed by database lock")
             await asyncio.sleep(self.heartbeat_seconds)
+
+    def _heartbeat_worker(self) -> None:
+        with self.session_factory() as db:
+            background_jobs.heartbeat_worker(db, self.worker_id)
 
     def _stop_worker(self) -> None:
         with self.session_factory() as db:

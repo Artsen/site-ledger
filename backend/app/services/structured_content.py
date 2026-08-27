@@ -20,6 +20,7 @@ from app.models import (
     ResourceSnapshot,
     Scan,
 )
+from app.services.job_types import ExecutionOwnershipLost
 from app.storage.content_store import LocalContentStore
 
 
@@ -152,6 +153,9 @@ def build_missing_structured_content(
             counters["prepared"] += 1
             counters[artifact.extraction_state] += 1
             db.commit()
+        except ExecutionOwnershipLost:
+            db.rollback()
+            raise
         except Exception:
             db.rollback()
             counters["failed"] += 1

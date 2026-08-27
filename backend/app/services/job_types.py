@@ -1,5 +1,10 @@
 from typing import Literal
 
+
+class ExecutionOwnershipLost(RuntimeError):
+    """Raised when an executor no longer owns its BackgroundJob lease."""
+
+
 JobType = Literal[
     "scan",
     "source_refresh",

@@ -8,6 +8,7 @@ from app.models import BackgroundJob, Scan, ScanProjectionBuild, SourceRefresh, 
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate
 from app.schemas.sources import UrlSourceCreate
+from app.services import background_jobs
 from app.services.background_jobs import (
     StaleLeaseError,
     claim_next_job,
@@ -75,6 +76,116 @@ def test_stale_lease_cannot_heartbeat(db_session: Session) -> None:
         )
 
 
+def test_progress_atomically_renews_lease_and_rejects_stale_ownership(
+    db_session: Session,
+) -> None:
+    scan = _scan(db_session, "https://example.com/progress")
+    enqueue_scan_job(db_session, scan)
+    db_session.commit()
+    claimed_at = datetime.now(UTC) + timedelta(seconds=1)
+    claimed = claim_next_job(
+        db_session,
+        worker_id="worker-a",
+        lease_seconds=10,
+        now=claimed_at,
+    )
+    assert claimed is not None
+    progress_at = claimed_at + timedelta(seconds=7)
+
+    update_progress(
+        db_session,
+        job_id=claimed.job.id,
+        lease_token=claimed.lease_token,
+        lease_seconds=10,
+        phase="running",
+        current=1,
+        total=2,
+        unit="pages",
+        now=progress_at,
+    )
+
+    db_session.refresh(claimed.job)
+    assert claimed.job.heartbeat_at == progress_at
+    assert claimed.job.lease_expires_at == progress_at + timedelta(seconds=10)
+    with pytest.raises(StaleLeaseError):
+        update_progress(
+            db_session,
+            job_id=claimed.job.id,
+            lease_token="wrong-token",
+            lease_seconds=10,
+            phase="running",
+        )
+
+    background_jobs.complete_job(
+        db_session,
+        job_id=claimed.job.id,
+        lease_token=claimed.lease_token,
+        status="completed",
+    )
+    with pytest.raises(StaleLeaseError):
+        update_progress(
+            db_session,
+            job_id=claimed.job.id,
+            lease_token=claimed.lease_token,
+            lease_seconds=10,
+            phase="running",
+        )
+
+
+def test_recovery_skips_candidate_renewed_after_another_session_observed_expiry(
+    db_session: Session,
+) -> None:
+    scan = _scan(db_session, "https://example.com/recovery-race")
+    enqueue_scan_job(db_session, scan)
+    db_session.commit()
+    claimed_at = datetime.now(UTC) + timedelta(seconds=1)
+    claimed = claim_next_job(
+        db_session,
+        worker_id="worker-a",
+        lease_seconds=1,
+        now=claimed_at,
+    )
+    assert claimed is not None
+    scan.status = "running"
+    db_session.commit()
+    SessionLocal = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+    recovery_cutoff = claimed_at + timedelta(seconds=2)
+
+    with SessionLocal() as recovery_db:
+        observed = recovery_db.scalar(
+            select(BackgroundJob).where(
+                BackgroundJob.id == claimed.job.id,
+                BackgroundJob.lease_expires_at < recovery_cutoff,
+            )
+        )
+        assert observed is not None
+
+    with SessionLocal() as owner_db:
+        heartbeat_job(
+            owner_db,
+            job_id=claimed.job.id,
+            lease_token=claimed.lease_token,
+            lease_seconds=30,
+            now=recovery_cutoff,
+        )
+
+    with SessionLocal() as recovery_db:
+        assert recover_expired_jobs(recovery_db, lease_expired_before=recovery_cutoff) == 0
+
+    db_session.expire_all()
+    renewed_job = db_session.get(BackgroundJob, claimed.job.id)
+    assert renewed_job is not None
+    assert renewed_job.status == "running"
+    assert renewed_job.lease_token == claimed.lease_token
+    assert renewed_job.lease_expires_at == recovery_cutoff + timedelta(seconds=30)
+    assert db_session.get(Scan, scan.id).status == "running"
+    assert (
+        not db_session.query(background_jobs.JobEvent)
+        .filter_by(job_id=claimed.job.id, event_type="lease_expired")
+        .count()
+    )
+
+
 def test_worker_health_and_expired_scan_recovery(db_session: Session) -> None:
     scan = _scan(db_session, "https://example.com/")
     enqueue_scan_job(db_session, scan)
@@ -94,6 +205,7 @@ def test_worker_health_and_expired_scan_recovery(db_session: Session) -> None:
         db_session,
         job_id=claimed.job.id,
         lease_token=claimed.lease_token,
+        lease_seconds=1,
         phase="running",
         current=1,
         total=2,
@@ -113,6 +225,50 @@ def test_worker_health_and_expired_scan_recovery(db_session: Session) -> None:
     db_session.refresh(scan)
     assert job.status == "interrupted"
     assert scan.status == "interrupted"
+    with pytest.raises(StaleLeaseError):
+        background_jobs.complete_job(
+            db_session,
+            job_id=job.id,
+            lease_token=claimed.lease_token,
+            status="completed",
+        )
+    with pytest.raises(StaleLeaseError):
+        background_jobs.fail_job(
+            db_session,
+            job_id=job.id,
+            lease_token=claimed.lease_token,
+            error_type="stale",
+            error_message="stale owner",
+        )
+
+
+def test_expired_job_reconciles_from_terminal_domain_without_lease_failure(
+    db_session: Session,
+) -> None:
+    scan = _scan(db_session, "https://example.com/reconciled")
+    enqueue_scan_job(db_session, scan)
+    db_session.commit()
+    claimed = claim_next_job(db_session, worker_id="worker-a", lease_seconds=1)
+    assert claimed is not None
+    scan.status = "completed"
+    claimed.job.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+
+    assert recover_expired_jobs(db_session) == 1
+
+    db_session.refresh(claimed.job)
+    assert claimed.job.status == "completed"
+    assert (
+        db_session.query(background_jobs.JobEvent)
+        .filter_by(job_id=claimed.job.id, event_type="reconciled")
+        .count()
+        == 1
+    )
+    assert (
+        not db_session.query(background_jobs.JobEvent)
+        .filter_by(job_id=claimed.job.id, event_type="lease_expired")
+        .count()
+    )
 
 
 def test_queued_cancellation_is_durable(db_session: Session) -> None:

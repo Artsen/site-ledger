@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -43,6 +45,7 @@ from app.services.job_types import (
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_SOURCE_REFRESH,
     JOB_TYPE_STRUCTURED_CONTENT_BUILD,
+    ExecutionOwnershipLost,
 )
 from app.services.performance_collection import execute_performance_run, mark_performance_run_failed
 from app.services.render_runs import execute_render_run, mark_render_run_failed
@@ -95,24 +98,43 @@ class JobExecutionContext:
         self.job_id = job_id
         self.lease_token = lease_token
         self.lease_seconds = lease_seconds
+        self._lease_lost = threading.Event()
+
+    @property
+    def lease_lost(self) -> bool:
+        return self._lease_lost.is_set()
+
+    def mark_lease_lost(self) -> None:
+        self._lease_lost.set()
+
+    def raise_if_lease_lost(self) -> None:
+        if self.lease_lost:
+            raise ExecutionOwnershipLost("Job lease ownership was lost.")
 
     def check_cancelled(self) -> bool:
+        self.raise_if_lease_lost()
         with self.session_factory() as db:
             job = db.get(BackgroundJob, self.job_id)
-            return bool(job and job.cancellation_requested_at is not None)
+            cancelled = bool(job and job.cancellation_requested_at is not None)
+        self.raise_if_lease_lost()
+        return cancelled
 
     def raise_if_cancelled(self) -> None:
         if self.check_cancelled():
             raise JobCancelled("Cancellation requested.")
 
     def heartbeat(self) -> None:
-        with self.session_factory() as db:
-            background_jobs.heartbeat_job(
-                db,
-                job_id=self.job_id,
-                lease_token=self.lease_token,
-                lease_seconds=self.lease_seconds,
-            )
+        try:
+            with self.session_factory() as db:
+                background_jobs.heartbeat_job(
+                    db,
+                    job_id=self.job_id,
+                    lease_token=self.lease_token,
+                    lease_seconds=self.lease_seconds,
+                )
+        except background_jobs.StaleLeaseError:
+            self.mark_lease_lost()
+            raise
 
     def progress(
         self,
@@ -124,12 +146,14 @@ class JobExecutionContext:
         unit: str | None = None,
         counters: dict[str, int] | None = None,
     ) -> None:
+        self.raise_if_lease_lost()
         try:
             with self.session_factory() as db:
                 background_jobs.update_progress(
                     db,
                     job_id=self.job_id,
                     lease_token=self.lease_token,
+                    lease_seconds=self.lease_seconds,
                     phase=phase,
                     current_operation=current_operation,
                     current=current,
@@ -137,6 +161,11 @@ class JobExecutionContext:
                     unit=unit,
                     counters=counters,
                 )
+        except background_jobs.StaleLeaseError as exc:
+            if not self.lease_lost:
+                self.mark_lease_lost()
+                logger.warning("job lease ownership lost", extra={"job_id": self.job_id})
+            raise ExecutionOwnershipLost("Job lease ownership was lost.") from exc
         except OperationalError as exc:
             if not is_transient_database_lock(exc):
                 raise
@@ -245,6 +274,9 @@ class ScanProjectionJobHandler:
         build_id = int(job.payload_json.get("projection_build_id", 0))
         if not build_id:
             raise ValueError("Projection job is missing projection_build_id.")
+        return await asyncio.to_thread(self._execute_blocking, build_id, context)
+
+    def _execute_blocking(self, build_id: int, context: JobExecutionContext) -> HandlerResult:
         try:
             with self.session_factory() as db:
                 build = execute_projection_build(
@@ -282,18 +314,21 @@ class ScanProjectionJobHandler:
 class ScanComparisonJobHandler:
     def __init__(self, session_factory: Callable[[], Session], store: LocalContentStore):
         self.session_factory = session_factory
-        self.store = store
+        self.store_root = store.root
 
     async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
         build_id = int(job.payload_json.get("comparison_build_id", 0))
         if not build_id:
             raise ValueError("Comparison job is missing comparison_build_id.")
+        return await asyncio.to_thread(self._execute_blocking, build_id, context)
+
+    def _execute_blocking(self, build_id: int, context: JobExecutionContext) -> HandlerResult:
         try:
             with self.session_factory() as db:
                 build = execute_comparison_build(
                     db,
                     build_id,
-                    store=self.store,
+                    store=LocalContentStore(self.store_root),
                     should_cancel=context.check_cancelled,
                     progress=lambda phase, current, total: context.progress(
                         phase=phase,
@@ -323,6 +358,11 @@ class CategoryRuleEvaluationJobHandler:
         run_id = int(job.payload_json.get("run_id", 0))
         if not run_id:
             raise ValueError("Category Rule job is missing run_id.")
+        return await asyncio.to_thread(self._execute_blocking, job.id, run_id, context)
+
+    def _execute_blocking(
+        self, job_id: int, run_id: int, context: JobExecutionContext
+    ) -> HandlerResult:
         try:
             with self.session_factory() as db:
                 run = reconcile_site(
@@ -347,6 +387,8 @@ class CategoryRuleEvaluationJobHandler:
                     raise JobCancelled("Category Rule evaluation cancelled by user.")
         except JobCancelled:
             raise
+        except ExecutionOwnershipLost:
+            raise
         except Exception as exc:
             with self.session_factory() as db:
                 failed_run = db.get(PageCategoryRuleRun, run_id)
@@ -358,7 +400,7 @@ class CategoryRuleEvaluationJobHandler:
                     db.commit()
             raise
         with self.session_factory() as db:
-            current = db.get(BackgroundJob, job.id)
+            current = db.get(BackgroundJob, job_id)
             if current and current.payload_json.get("rerun_requested"):
                 if current.website_property_id is None:
                     raise ValueError("Category Rule job is missing site_id.")
@@ -375,7 +417,7 @@ class CategoryRuleEvaluationJobHandler:
 class StructuredContentBuildJobHandler:
     def __init__(self, session_factory: Callable[[], Session], store: LocalContentStore) -> None:
         self.session_factory = session_factory
-        self.store = store
+        self.store_root = store.root
 
     async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
         site_id = int(job.payload_json.get("site_id", 0))
@@ -383,13 +425,28 @@ class StructuredContentBuildJobHandler:
             raise ValueError("Structured content job is missing site_id.")
         scan_id_value = job.payload_json.get("scan_id")
         limit_value = job.payload_json.get("limit")
+        return await asyncio.to_thread(
+            self._execute_blocking,
+            site_id,
+            int(scan_id_value) if scan_id_value is not None else None,
+            int(limit_value) if limit_value is not None else None,
+            context,
+        )
+
+    def _execute_blocking(
+        self,
+        site_id: int,
+        scan_id: int | None,
+        limit: int | None,
+        context: JobExecutionContext,
+    ) -> HandlerResult:
         with self.session_factory() as db:
             result = build_missing_structured_content(
                 db,
-                self.store,
+                LocalContentStore(self.store_root),
                 site_id=site_id,
-                scan_id=int(scan_id_value) if scan_id_value is not None else None,
-                limit=int(limit_value) if limit_value is not None else None,
+                scan_id=scan_id,
+                limit=limit,
                 should_cancel=context.check_cancelled,
                 progress=lambda current, total, counters: context.progress(
                     phase="preparing",
@@ -558,78 +615,209 @@ async def run_claimed_job(
         lease_token=claimed_job.lease_token,
         lease_seconds=lease_seconds,
     )
-    context.event("started", "Job execution started.")
-    heartbeat_task = asyncio.create_task(_job_heartbeat_loop(context))
+    await asyncio.to_thread(context.event, "started", "Job execution started.")
     try:
         if claimed_job.job.cancellation_requested_at is not None:
             raise JobCancelled("Cancellation requested before job started.")
-        result = await registry.get(claimed_job.job.job_type).execute(claimed_job.job, context)
-        with session_factory() as db:
-            if result.status == JOB_STATUS_FAILED:
-                result_json = result.result_json or {}
-                background_jobs.fail_job(
-                    db,
-                    job_id=claimed_job.job.id,
-                    lease_token=claimed_job.lease_token,
-                    error_type=str(result_json.get("stop_reason") or "job_failed"),
-                    error_message=str(result_json.get("fatal_error_message") or "Job failed."),
-                )
-            else:
-                background_jobs.complete_job(
-                    db,
-                    job_id=claimed_job.job.id,
-                    lease_token=claimed_job.lease_token,
-                    status=result.status,
-                    result_json=result.result_json,
-                )
+        result = await _execute_with_lease_monitor(
+            registry.get(claimed_job.job.job_type), claimed_job.job, context
+        )
+        if result is None:
+            return
+        await asyncio.to_thread(
+            _persist_handler_result,
+            session_factory,
+            claimed_job,
+            result,
+        )
     except JobCancelled as exc:
-        _mark_domain_cancelled(session_factory, claimed_job.job)
-        with session_factory() as db:
-            background_jobs.complete_job(
-                db,
-                job_id=claimed_job.job.id,
-                lease_token=claimed_job.lease_token,
-                status=JOB_STATUS_CANCELLED,
-                result_json={"message": str(exc)},
+        if context.lease_lost:
+            return
+        try:
+            await asyncio.to_thread(
+                _terminalize_cancelled_job,
+                session_factory,
+                claimed_job,
+                lease_seconds,
+                str(exc),
             )
+        except background_jobs.StaleLeaseError:
+            _log_lease_loss(context)
     except asyncio.CancelledError:
-        _mark_domain_interrupted(session_factory, claimed_job.job, "worker_shutdown")
-        with session_factory() as db:
-            background_jobs.fail_job(
-                db,
-                job_id=claimed_job.job.id,
-                lease_token=claimed_job.lease_token,
-                error_type="worker_shutdown",
-                error_message="Worker stopped during execution.",
-                interrupted=True,
-            )
+        if not context.lease_lost:
+            try:
+                await asyncio.to_thread(
+                    _terminalize_interrupted_job,
+                    session_factory,
+                    claimed_job,
+                    lease_seconds,
+                )
+            except background_jobs.StaleLeaseError:
+                _log_lease_loss(context)
         raise
+    except background_jobs.StaleLeaseError:
+        _log_lease_loss(context)
+    except ExecutionOwnershipLost:
+        context.mark_lease_lost()
+        _log_lease_loss(context)
     except Exception as exc:
-        _mark_domain_failed(session_factory, claimed_job.job, exc)
-        with session_factory() as db:
-            background_jobs.fail_job(
-                db,
-                job_id=claimed_job.job.id,
-                lease_token=claimed_job.lease_token,
-                error_type=type(exc).__name__,
-                error_message=str(exc),
+        try:
+            await asyncio.to_thread(
+                _terminalize_failed_job,
+                session_factory,
+                claimed_job,
+                lease_seconds,
+                exc,
             )
-    finally:
-        heartbeat_task.cancel()
-        await asyncio.gather(heartbeat_task, return_exceptions=True)
+        except background_jobs.StaleLeaseError:
+            _log_lease_loss(context)
+
+
+async def _execute_with_lease_monitor(
+    handler: JobHandler, job: BackgroundJob, context: JobExecutionContext
+) -> HandlerResult | None:
+    handler_task = asyncio.create_task(handler.execute(job, context))
+    heartbeat_task = asyncio.create_task(_job_heartbeat_loop(context))
+    done, _pending = await asyncio.wait(
+        {handler_task, heartbeat_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if heartbeat_task in done:
+        heartbeat_error = heartbeat_task.exception()
+        if isinstance(heartbeat_error, background_jobs.StaleLeaseError):
+            context.mark_lease_lost()
+            _log_lease_loss(context)
+            try:
+                await handler_task
+            except Exception:
+                logger.warning(
+                    "job handler stopped after lease ownership loss",
+                    extra={"job_id": context.job_id},
+                )
+            return None
+        if heartbeat_error is not None:
+            handler_task.cancel()
+            await asyncio.gather(handler_task, return_exceptions=True)
+            raise heartbeat_error
+    heartbeat_task.cancel()
+    heartbeat_outcomes = await asyncio.gather(heartbeat_task, return_exceptions=True)
+    if any(isinstance(value, background_jobs.StaleLeaseError) for value in heartbeat_outcomes):
+        context.mark_lease_lost()
+    if context.lease_lost:
+        _log_lease_loss(context)
+        await asyncio.gather(handler_task, return_exceptions=True)
+        return None
+    return await handler_task
 
 
 async def _job_heartbeat_loop(context: JobExecutionContext) -> None:
     while True:
-        await asyncio.sleep(max(1.0, context.lease_seconds / 3))
+        await asyncio.sleep(max(0.05, context.lease_seconds / 3))
         try:
-            context.heartbeat()
+            await asyncio.to_thread(context.heartbeat)
         except OperationalError as exc:
             if not is_transient_database_lock(exc):
                 raise
             logger.warning(
                 "job heartbeat delayed by database lock", extra={"job_id": context.job_id}
             )
+
+
+def _persist_handler_result(
+    session_factory: Callable[[], Session],
+    claimed_job: background_jobs.ClaimedJob,
+    result: HandlerResult,
+) -> None:
+    with session_factory() as db:
+        if result.status == JOB_STATUS_FAILED:
+            result_json = result.result_json or {}
+            background_jobs.fail_job(
+                db,
+                job_id=claimed_job.job.id,
+                lease_token=claimed_job.lease_token,
+                error_type=str(result_json.get("stop_reason") or "job_failed"),
+                error_message=str(result_json.get("fatal_error_message") or "Job failed."),
+            )
+        else:
+            background_jobs.complete_job(
+                db,
+                job_id=claimed_job.job.id,
+                lease_token=claimed_job.lease_token,
+                status=result.status,
+                result_json=result.result_json,
+            )
+
+
+def _terminalize_cancelled_job(
+    session_factory: Callable[[], Session],
+    claimed_job: background_jobs.ClaimedJob,
+    lease_seconds: float,
+    message: str,
+) -> None:
+    with session_factory() as db:
+        background_jobs.guard_terminalization(
+            db,
+            job_id=claimed_job.job.id,
+            lease_token=claimed_job.lease_token,
+            lease_seconds=lease_seconds,
+        )
+        _mark_domain_cancelled(db, claimed_job.job, commit=False)
+        background_jobs.complete_job(
+            db,
+            job_id=claimed_job.job.id,
+            lease_token=claimed_job.lease_token,
+            status=JOB_STATUS_CANCELLED,
+            result_json={"message": message},
+        )
+
+
+def _terminalize_interrupted_job(
+    session_factory: Callable[[], Session],
+    claimed_job: background_jobs.ClaimedJob,
+    lease_seconds: float,
+) -> None:
+    with session_factory() as db:
+        background_jobs.guard_terminalization(
+            db,
+            job_id=claimed_job.job.id,
+            lease_token=claimed_job.lease_token,
+            lease_seconds=lease_seconds,
+        )
+        _mark_domain_interrupted(db, claimed_job.job, "worker_shutdown", commit=False)
+        background_jobs.fail_job(
+            db,
+            job_id=claimed_job.job.id,
+            lease_token=claimed_job.lease_token,
+            error_type="worker_shutdown",
+            error_message="Worker stopped during execution.",
+            interrupted=True,
+        )
+
+
+def _terminalize_failed_job(
+    session_factory: Callable[[], Session],
+    claimed_job: background_jobs.ClaimedJob,
+    lease_seconds: float,
+    exc: Exception,
+) -> None:
+    with session_factory() as db:
+        background_jobs.guard_terminalization(
+            db,
+            job_id=claimed_job.job.id,
+            lease_token=claimed_job.lease_token,
+            lease_seconds=lease_seconds,
+        )
+        _mark_domain_failed(db, claimed_job.job, exc, commit=False)
+        background_jobs.fail_job(
+            db,
+            job_id=claimed_job.job.id,
+            lease_token=claimed_job.lease_token,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
+
+
+def _log_lease_loss(context: JobExecutionContext) -> None:
+    logger.warning("job lease ownership lost", extra={"job_id": context.job_id})
 
 
 def _scan_result(scan: Scan) -> dict[str, Any]:
@@ -655,8 +843,11 @@ def _refresh_result(refresh: SourceRefresh) -> dict[str, Any]:
     }
 
 
-def _mark_domain_cancelled(session_factory: Callable[[], Session], job: BackgroundJob) -> None:
-    with session_factory() as db:
+def _mark_domain_cancelled(
+    db_or_factory: Session | Callable[[], Session], job: BackgroundJob, *, commit: bool = True
+) -> None:
+    context = nullcontext(db_or_factory) if isinstance(db_or_factory, Session) else db_or_factory()
+    with context as db:
         now = datetime.now(UTC)
         if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
             mark_projection_build_terminal(
@@ -665,6 +856,7 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 "cancelled",
                 "cancelled",
                 "Projection build cancelled by user.",
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
@@ -673,6 +865,7 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 "cancelled",
                 "cancelled",
                 "Comparison build cancelled by user.",
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
             performance_run = db.get(PerformanceRun, job.performance_run_id)
@@ -695,7 +888,7 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 scan.status = "cancelled"
                 scan.stop_reason = "cancelled_by_user"
                 scan.finished_at = now
-                _enqueue_projection_for_terminal_scan(db, scan)
+                _enqueue_projection_for_terminal_scan(db, scan, commit=commit)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:
@@ -706,13 +899,19 @@ def _mark_domain_cancelled(session_factory: Callable[[], Session], job: Backgrou
                 if refresh.url_source:
                     refresh.url_source.last_refresh_status = "cancelled"
                     refresh.url_source.last_refresh_finished_at = now
-        db.commit()
+        if commit:
+            db.commit()
 
 
 def _mark_domain_interrupted(
-    session_factory: Callable[[], Session], job: BackgroundJob, reason: str
+    db_or_factory: Session | Callable[[], Session],
+    job: BackgroundJob,
+    reason: str,
+    *,
+    commit: bool = True,
 ) -> None:
-    with session_factory() as db:
+    context = nullcontext(db_or_factory) if isinstance(db_or_factory, Session) else db_or_factory()
+    with context as db:
         now = datetime.now(UTC)
         if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
             mark_projection_build_terminal(
@@ -721,6 +920,7 @@ def _mark_domain_interrupted(
                 "failed",
                 reason,
                 "Worker interrupted during projection build.",
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
@@ -729,6 +929,7 @@ def _mark_domain_interrupted(
                 "failed",
                 reason,
                 "Worker interrupted during comparison build.",
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
             performance_run = db.get(PerformanceRun, job.performance_run_id)
@@ -752,7 +953,7 @@ def _mark_domain_interrupted(
                 render_run.error_summary = "Worker interrupted during rendered capture."
                 from app.services.rendered_capture import mark_render_run_capturing_interrupted
 
-                mark_render_run_capturing_interrupted(db, render_run.id, reason)
+                mark_render_run_capturing_interrupted(db, render_run.id, reason, commit=commit)
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
@@ -761,8 +962,8 @@ def _mark_domain_interrupted(
                 scan.finished_at = now
                 from app.services.rendered_capture import mark_capturing_interrupted
 
-                mark_capturing_interrupted(db, scan.id, reason)
-                _enqueue_projection_for_terminal_scan(db, scan)
+                mark_capturing_interrupted(db, scan.id, reason, commit=commit)
+                _enqueue_projection_for_terminal_scan(db, scan, commit=commit)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:
@@ -773,13 +974,19 @@ def _mark_domain_interrupted(
                 if refresh.url_source:
                     refresh.url_source.last_refresh_status = "interrupted"
                     refresh.url_source.last_refresh_finished_at = now
-        db.commit()
+        if commit:
+            db.commit()
 
 
 def _mark_domain_failed(
-    session_factory: Callable[[], Session], job: BackgroundJob, exc: Exception
+    db_or_factory: Session | Callable[[], Session],
+    job: BackgroundJob,
+    exc: Exception,
+    *,
+    commit: bool = True,
 ) -> None:
-    with session_factory() as db:
+    context = nullcontext(db_or_factory) if isinstance(db_or_factory, Session) else db_or_factory()
+    with context as db:
         now = datetime.now(UTC)
         if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
             mark_projection_build_terminal(
@@ -788,6 +995,7 @@ def _mark_domain_failed(
                 "failed",
                 type(exc).__name__,
                 str(exc),
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
@@ -796,20 +1004,21 @@ def _mark_domain_failed(
                 "failed",
                 type(exc).__name__,
                 str(exc),
+                commit=commit,
             )
         elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
-            mark_performance_run_failed(db, job.performance_run_id, exc)
+            mark_performance_run_failed(db, job.performance_run_id, exc, commit=commit)
         elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN and job.accessibility_run_id:
-            mark_accessibility_run_failed(db, job.accessibility_run_id, exc)
+            mark_accessibility_run_failed(db, job.accessibility_run_id, exc, commit=commit)
         elif job.job_type == JOB_TYPE_RENDER_RUN and job.render_run_id:
-            mark_render_run_failed(db, job.render_run_id, exc)
+            mark_render_run_failed(db, job.render_run_id, exc, commit=commit)
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan:
                 scan.status = "failed"
                 scan.fatal_error_message = str(exc)
                 scan.finished_at = now
-                _enqueue_projection_for_terminal_scan(db, scan)
+                _enqueue_projection_for_terminal_scan(db, scan, commit=commit)
         if job.source_refresh_id:
             refresh = db.get(SourceRefresh, job.source_refresh_id)
             if refresh:
@@ -822,10 +1031,11 @@ def _mark_domain_failed(
                     refresh.url_source.last_error_type = refresh.error_type
                     refresh.url_source.last_error_message = refresh.error_message
                     refresh.url_source.last_refresh_finished_at = now
-        db.commit()
+        if commit:
+            db.commit()
 
 
-def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan) -> None:
+def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan, *, commit: bool = True) -> None:
     if scan.status not in {
         "completed",
         "completed_with_errors",
@@ -848,4 +1058,5 @@ def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan) -> None:
         from app.services.category_rules import queue_evaluation
 
         queue_evaluation(db, scan.website_property_id, "scan_completed")
-    db.commit()
+    if commit:
+        db.commit()
