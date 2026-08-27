@@ -453,6 +453,13 @@ Do not disable checks or weaken tests to force passing results.
 - Read this file and inspect the repository before editing.
 - Prefer existing patterns and typed boundaries.
 - Make the smallest complete change that satisfies the request.
+- Never run substantial synchronous job-domain computation directly on the asyncio worker event
+  loop, and never pass a live SQLAlchemy Session across an `asyncio.to_thread` boundary.
+- Successful authenticated job progress must renew the current lease atomically. Expired-job
+  recovery must revalidate current running/expiry state before taking terminal recovery ownership.
+- A stale lease token may never heartbeat, report progress, complete, or fail a job. Job and worker
+  heartbeats are operational liveness state, not permanent event spam.
+- Do not compensate for event-loop starvation by merely increasing job lease timeout defaults.
 - Avoid unrelated refactors and dependency upgrades.
 - Do not create fake data, placeholder APIs, or controls that do nothing.
 - Preserve database and local-data compatibility.
