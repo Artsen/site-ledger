@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { buildScanProjection, cancelScan, createRenderRun, createScanNote, deleteScan, getScan, getScanDeletePreview, getScanProjectionStatus, getWorkerHealth, listErrors, listJobs, listPages, listScanNotes, listScanRenderedObservations, listScanSeeds, rebuildScanProjection } from "../api/client";
 import { NotesPanel } from "../components/NotesPanel";
 import { RenderedObservationTable } from "../components/RenderedObservationTable";
-import { LegacyRenderBulkDeleteAction, RenderScanDeleteAction } from "../components/rendered/RenderedEvidenceDeletionActions";
+import { LegacyRenderBulkDeleteAction, RenderedDeletionNotice, RenderScanDeleteAction } from "../components/rendered/RenderedEvidenceDeletionActions";
 import { ResourceInventoryView } from "../components/ResourceInventoryView";
 import { Button } from "../components/ui/Button";
 import { CopyButton } from "../components/ui/CopyButton";
@@ -20,7 +20,7 @@ import { Tabs } from "../components/ui/Tabs";
 import { inputClass } from "../components/ui/styles";
 import { ScanGraphView } from "../features/graph/ScanGraphView";
 import type { Job, WorkerHealth } from "../types/jobs";
-import type { Page, RenderedObservationIndexItem, Scan, ScanSeed, Snapshot } from "../types/scans";
+import type { Page, RenderDeleteResult, RenderedObservationIndexItem, Scan, ScanSeed, Snapshot } from "../types/scans";
 import { compactUrl, formatBytes, formatDate, formatDuration, formatStatus, isTerminalStatus, plural } from "../utils/format";
 import { useDocumentTitle } from "../utils/useDocumentTitle";
 import { useUrlPagination } from "../utils/useUrlPagination";
@@ -35,6 +35,7 @@ export function ScanDetailPage() {
   const tab = searchParams.get("tab") ?? "overview";
   const [searchDraft, setSearchDraft] = useState(searchParams.get("search") ?? "");
   const [selectedRendered, setSelectedRendered] = useState<number[]>([]);
+  const [renderDeletionResult, setRenderDeletionResult] = useState<RenderDeleteResult | null>(null);
   const [loadedRendered, setLoadedRendered] = useState<RenderedObservationIndexItem[]>([]);
   const scan = useQuery({
     queryKey: ["scan", scanId],
@@ -245,7 +246,7 @@ export function ScanDetailPage() {
           />
         ) : null}
         {tab === "resources" ? <ResourceInventoryView scope="scan" id={scanId} scanStatus={scan.data.status} projectionStatus={projection.data} /> : null}
-        {tab === "rendered" ? <div className="space-y-4">{selectedRendered.length ? <div className="flex flex-wrap gap-2"><Button type="button" loading={rerenderLegacy.isPending} disabled={!scan.data.website_property_id} onClick={() => rerenderLegacy.mutate()}>Rerender selected ({selectedRendered.length})</Button><LegacyRenderBulkDeleteAction scanId={scanId} observationIds={selectedRendered} onDeleted={() => setSelectedRendered([])} /></div> : null}{rerenderLegacy.error ? <ErrorBanner error={rerenderLegacy.error} title="Could not rerender selected Pages" /> : null}<RenderedObservationTable scanId={scanId} renderMode={scan.data.scope_config.render_mode} poll={Boolean(scan.data.render_run_id && !isTerminalStatus(scan.data.render_run_status ?? ""))} selectedObservationIds={selectedRendered} onSelectedObservationIdsChange={setSelectedRendered} onLoadedItemsChange={setLoadedRendered} /><section className="border-t border-stone-200 pt-4"><RenderScanDeleteAction scanId={scanId} onDeleted={() => setSelectedRendered([])} /></section></div> : null}
+        {tab === "rendered" ? <div className="space-y-4"><RenderedDeletionNotice result={renderDeletionResult} />{selectedRendered.length ? <div className="flex flex-wrap gap-2"><Button type="button" loading={rerenderLegacy.isPending} disabled={!scan.data.website_property_id} onClick={() => rerenderLegacy.mutate()}>Rerender selected ({selectedRendered.length})</Button><LegacyRenderBulkDeleteAction scanId={scanId} observationIds={selectedRendered} onDeleted={(result) => { setRenderDeletionResult(result); setSelectedRendered([]); }} /></div> : null}{rerenderLegacy.error ? <ErrorBanner error={rerenderLegacy.error} title="Could not rerender selected Pages" /> : null}<RenderedObservationTable scanId={scanId} renderMode={scan.data.scope_config.render_mode} poll={Boolean(scan.data.render_run_id && !isTerminalStatus(scan.data.render_run_status ?? ""))} selectedObservationIds={selectedRendered} onSelectedObservationIdsChange={setSelectedRendered} onLoadedItemsChange={setLoadedRendered} /><section className="border-t border-stone-200 pt-4"><RenderScanDeleteAction scanId={scanId} onDeleted={(result) => { setRenderDeletionResult(result); setSelectedRendered([]); }} /></section></div> : null}
         {tab === "inputs" ? <InputsView seeds={seeds.data?.items ?? []} loading={seeds.isLoading} error={seeds.error} /> : null}
         {tab === "errors" ? <ErrorsView scanId={scanId} errors={errors.data ?? []} loading={errors.isLoading} error={errors.error} /> : null}
         {tab === "graph" ? <ScanGraphView scan={scan.data} projectionStatus={projection.data} /> : null}

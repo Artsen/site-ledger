@@ -132,7 +132,7 @@ def list_render_run_targets(
                 duration_ms=observation.duration_ms if observation else None,
                 warning_count=observation.warning_count if observation else None,
                 page_error_count=observation.page_error_count if observation else None,
-                has_browser_evidence=bool(viewport or full_page or dom),
+                has_page_artifacts=bool(viewport or full_page or dom),
                 finished_at=observation.finished_at if observation else None,
                 presentation_state=_target_presentation_state(target, observation),
             )

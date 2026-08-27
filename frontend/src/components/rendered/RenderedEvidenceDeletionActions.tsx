@@ -47,6 +47,15 @@ async function invalidateRendered(queryClient: ReturnType<typeof useQueryClient>
 
 type Complete = (result: RenderDeleteResult) => void | Promise<void>;
 
+export function RenderedDeletionNotice({ result }: { result: RenderDeleteResult | null }) {
+  if (!result) return null;
+  const removed = [
+    result.observations_deleted ? `${result.observations_deleted.toLocaleString()} observation${result.observations_deleted === 1 ? "" : "s"} removed.` : null,
+    result.runs_deleted ? `${result.runs_deleted.toLocaleString()} Run${result.runs_deleted === 1 ? "" : "s"} removed.` : null,
+  ].filter(Boolean).join(" ") || "Deletion completed.";
+  return <div role="status" className={`rounded-md border p-3 text-sm ${result.warnings.length ? "border-amber-300 bg-amber-50 text-amber-950" : "border-emerald-300 bg-emerald-50 text-emerald-950"}`}><strong>Rendered evidence deleted.</strong> {removed}{result.warnings.length ? <div className="mt-2"><strong>Cleanup warning:</strong><ul className="mt-1 list-disc pl-5">{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div> : null}</div>;
+}
+
 export function RenderObservationDeleteAction({ siteId, observationId, onDeleted }: { siteId: string; observationId: string; onDeleted: Complete }) {
   const queryClient = useQueryClient();
   return <DestructiveEvidenceAction label="Delete observation" title="Delete rendered observation" description="This removes retained browser evidence and exclusively referenced artifacts. The Page, Scan, and static evidence remain." queryKey={["rendered-observation-delete-preview", siteId, observationId]} loadPreview={() => getRenderedObservationDeletionPreview(siteId, observationId)} deleteEvidence={() => deleteRenderedObservation(siteId, observationId)} onDeleted={async (result) => { await invalidateRendered(queryClient); await onDeleted(result); }} renderPreview={(preview) => <Impact value={preview} />} />;

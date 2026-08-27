@@ -207,7 +207,7 @@ class RenderRunTargetRead(BaseModel):
     duration_ms: int | None
     warning_count: int | None
     page_error_count: int | None
-    has_browser_evidence: bool
+    has_page_artifacts: bool
     finished_at: datetime | None
     presentation_state: str
 

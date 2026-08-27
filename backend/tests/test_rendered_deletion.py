@@ -17,9 +17,12 @@ from app.models import (
     WebsiteProperty,
 )
 from app.services.rendered_deletion import (
+    ACTIVE_RENDER_DELETE_REASON,
     delete_render_run,
     delete_rendered_observations,
+    delete_run_target_evidence,
     preview_render_run_deletion,
+    preview_run_target_deletion,
     purge_scan_rendered_evidence,
     purge_site_rendered_evidence,
 )
@@ -296,6 +299,60 @@ def test_active_render_run_blocks_observation_and_run_deletion(db_session, tmp_p
             f"DELETE RENDER RUN {run.id}",
             store,
         )
+
+
+def test_active_run_blocks_no_evidence_target_deletion_until_terminal(db_session, tmp_path) -> None:
+    site, first_resource = _resource(db_session, "active-unattempted")
+    second_resource = WebResource(
+        resource_type="page",
+        normalized_url="https://example.com/active-deleted",
+        scheme="https",
+        host="example.com",
+        path="/active-deleted",
+        query="",
+    )
+    db_session.add(second_resource)
+    db_session.flush()
+    db_session.add(SitePage(website_property_id=site.id, resource_id=second_resource.id))
+    run, unattempted = _target(db_session, site, first_resource)
+    run.status = "running"
+    run.target_count = 2
+    _run, deleted = _target(db_session, site, second_resource, position=2, run=run)
+    deleted.evidence_deleted_at = datetime.now(UTC)
+    job = BackgroundJob(
+        job_type="render_run",
+        status="running",
+        render_run_id=run.id,
+        dedupe_key=f"render_run:{run.id}",
+        payload_json={},
+    )
+    db_session.add(job)
+    db_session.commit()
+    store = LocalArtifactStore(tmp_path / "artifacts")
+
+    for target_ids in ([unattempted.id], [deleted.id], [unattempted.id, deleted.id]):
+        preview = preview_run_target_deletion(db_session, site.id, run.id, target_ids)
+        assert preview is not None
+        assert not preview.can_delete
+        assert preview.reason == ACTIVE_RENDER_DELETE_REASON
+
+    for target_id in (unattempted.id, deleted.id):
+        with pytest.raises(RuntimeError, match="Finish or cancel"):
+            delete_run_target_evidence(db_session, site.id, run.id, [target_id], store)
+    assert db_session.get(RenderRunTarget, unattempted.id).evidence_deleted_at is None
+    assert db_session.get(RenderRunTarget, deleted.id).evidence_deleted_at is not None
+
+    run.status = "completed"
+    job.status = "completed"
+    db_session.commit()
+    preview = preview_run_target_deletion(db_session, site.id, run.id, [unattempted.id, deleted.id])
+    assert preview is not None and preview.can_delete
+    result = delete_run_target_evidence(
+        db_session, site.id, run.id, [unattempted.id, deleted.id], store
+    )
+    assert result is not None
+    assert result.observations_deleted == 0
+    assert result.targets_already_without_evidence == 2
 
 
 def test_run_deletion_removes_job_history_and_detaches_rerender_child(db_session, tmp_path) -> None:

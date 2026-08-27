@@ -493,7 +493,7 @@ export type RenderRunTarget = {
   duration_ms: number | null;
   warning_count: number | null;
   page_error_count: number | null;
-  has_browser_evidence: boolean;
+  has_page_artifacts: boolean;
   finished_at: string | null;
   presentation_state: "successful" | "no_content" | "redirect" | "http_error" | "rate_limited" | "not_attempted_host_throttled" | "technical_failure" | "evidence_deleted" | "not_attempted";
 };

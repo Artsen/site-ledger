@@ -136,7 +136,11 @@ def preview_run_target_deletion(
             )
         )
     )
-    return preview_rendered_observations(db, observation_ids, targets_requested=len(owned))
+    preview = preview_rendered_observations(db, observation_ids, targets_requested=len(owned))
+    reason = _active_run_reason(db, {run.id})
+    if reason is None:
+        return preview
+    return preview.model_copy(update={"can_delete": False, "reason": reason})
 
 
 def delete_run_target_evidence(

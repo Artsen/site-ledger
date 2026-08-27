@@ -49,14 +49,14 @@ export function RenderRunTargetTable({ siteId, runId, selected, onSelectedChange
     {controls}
     {targets.isLoading ? <LoadingBlock label="Loading Render Run targets..." /> : null}
     {!targets.isLoading && !targets.data?.items.length ? <EmptyState title="No targets match" message="Clear filters or broaden the target search." /> : null}
-    {targets.data?.items.length ? <div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="w-10 px-3 py-2"><input type="checkbox" aria-label="Select all Render Run targets on this page" checked={allSelected} onChange={(event) => onSelectedChange(event.target.checked ? [...new Set([...selected, ...pageIds])] : selected.filter((id) => !pageIds.includes(id)))} /></th><th className="px-3 py-2">Page</th><th className="px-3 py-2">Target state / Outcome</th><th className="px-3 py-2">Navigation</th><th className="px-3 py-2">Duration</th><th className="px-3 py-2">Warnings</th><th className="px-3 py-2">Browser evidence</th><th className="px-3 py-2">Captured / deleted</th></tr></thead><tbody>{targets.data.items.map((item) => <tr key={item.target_id} className="border-t border-stone-100 align-top hover:bg-stone-50">
+    {targets.data?.items.length ? <div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="w-10 px-3 py-2"><input type="checkbox" aria-label="Select all Render Run targets on this page" checked={allSelected} onChange={(event) => onSelectedChange(event.target.checked ? [...new Set([...selected, ...pageIds])] : selected.filter((id) => !pageIds.includes(id)))} /></th><th className="px-3 py-2">Page</th><th className="px-3 py-2">Target state / Outcome</th><th className="px-3 py-2">Navigation</th><th className="px-3 py-2">Duration</th><th className="px-3 py-2">Warnings</th><th className="px-3 py-2">Evidence / Page artifacts</th><th className="px-3 py-2">Captured / deleted</th></tr></thead><tbody>{targets.data.items.map((item) => <tr key={item.target_id} className="border-t border-stone-100 align-top hover:bg-stone-50">
       <td className="px-3 py-2"><input type="checkbox" aria-label={`Select ${item.requested_url}`} checked={selected.includes(item.target_id)} onChange={(event) => onSelectedChange(event.target.checked ? [...selected, item.target_id] : selected.filter((id) => id !== item.target_id))} /></td>
       <td className="max-w-xl px-3 py-2">{item.observation_id ? <Link className="block truncate underline" to={`/sites/${siteId}/rendered/observations/${item.observation_id}`}>{item.requested_url}</Link> : <span className="block truncate">{item.requested_url}</span>}<span className="text-xs text-stone-500">Target {item.position}</span></td>
       <td className="px-3 py-2"><StatusBadge status={item.presentation_state} label={stateLabel(item.presentation_state)} /></td>
       <td className="px-3 py-2">{item.navigation_http_status == null ? "Not available" : `HTTP ${item.navigation_http_status}`}</td>
       <td className="px-3 py-2">{item.duration_ms == null ? "Not available" : `${item.duration_ms} ms`}</td>
       <td className="px-3 py-2">{item.warning_count ?? 0}<span className="block text-xs text-stone-500">{item.page_error_count ?? 0} Page errors</span></td>
-      <td className="px-3 py-2">{item.has_browser_evidence ? <Link className="underline" to={`/sites/${siteId}/rendered/observations/${item.observation_id}`}>Inspect evidence</Link> : "No retained evidence"}</td>
+      <td className="px-3 py-2">{item.observation_id ? <><Link className="underline" to={`/sites/${siteId}/rendered/observations/${item.observation_id}`}>Inspect evidence</Link><span className="mt-1 block text-xs text-stone-500">{item.has_page_artifacts ? "Page artifacts retained" : "No Page artifacts"}</span></> : item.evidence_deleted_at ? "Observation deleted" : "No observation"}</td>
       <td className="whitespace-nowrap px-3 py-2">{item.evidence_deleted_at ? `Deleted ${formatDate(item.evidence_deleted_at)}` : item.finished_at ? formatDate(item.finished_at) : "Not attempted"}</td>
     </tr>)}</tbody></table></div> : null}
     {controls}
@@ -67,6 +67,9 @@ function stateLabel(value: RenderRunTarget["presentation_state"]) {
   if (value === "not_attempted_host_throttled") return "Not attempted - host throttled";
   if (value === "evidence_deleted") return "Evidence deleted";
   if (value === "not_attempted") return "Not attempted";
+  if (value === "rate_limited") return "Rate limited";
+  if (value === "http_error") return "HTTP error";
+  if (value === "redirect") return "HTTP redirect";
   return formatStatus(value);
 }
 

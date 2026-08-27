@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.api.render_routes import router
 from app.database import get_db
 from app.models import (
+    BackgroundJob,
     RenderedObservation,
     RenderRun,
     RenderRunTarget,
@@ -250,3 +251,70 @@ def test_target_api_preserves_deleted_target_and_enforces_site_ownership(
         "evidence_deleted",
         "not_attempted",
     ]
+
+
+def test_active_run_rejects_deleting_targets_without_observations(db_session, tmp_path) -> None:
+    site, resources = _site_with_pages(db_session, count=2)
+    run = RenderRun(
+        website_property_id=site.id,
+        status="running",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=2,
+    )
+    db_session.add(run)
+    db_session.flush()
+    targets = [
+        RenderRunTarget(
+            render_run_id=run.id,
+            web_resource_id=resource.id,
+            requested_url=resource.normalized_url,
+            position=index,
+            evidence_deleted_at=datetime.now(UTC) if index == 2 else None,
+        )
+        for index, resource in enumerate(resources, 1)
+    ]
+    db_session.add_all(targets)
+    db_session.flush()
+    db_session.add(
+        BackgroundJob(
+            job_type="render_run",
+            status="running",
+            render_run_id=run.id,
+            dedupe_key=f"render_run:{run.id}",
+            payload_json={},
+        )
+    )
+    db_session.commit()
+    client, _factory = _client(db_session, LocalArtifactStore(tmp_path / "rendered-artifacts"))
+
+    with client:
+        previews = [
+            client.post(
+                f"/api/sites/{site.id}/render-runs/{run.id}/evidence-deletion-preview",
+                json={"target_ids": selection},
+            )
+            for selection in (
+                [targets[0].id],
+                [targets[1].id],
+                [targets[0].id, targets[1].id],
+            )
+        ]
+        deletes = [
+            client.post(
+                f"/api/sites/{site.id}/render-runs/{run.id}/delete-evidence",
+                json={"target_ids": [target.id]},
+            )
+            for target in targets
+        ]
+
+    assert all(response.status_code == 200 for response in previews)
+    assert all(response.json()["can_delete"] is False for response in previews)
+    assert all(
+        response.json()["reason"] == "Finish or cancel this Render Run before deleting evidence."
+        for response in previews
+    )
+    assert [response.status_code for response in deletes] == [409, 409]
+    db_session.expire_all()
+    assert db_session.get(RenderRunTarget, targets[0].id).evidence_deleted_at is None
+    assert db_session.get(RenderRunTarget, targets[1].id).evidence_deleted_at is not None
