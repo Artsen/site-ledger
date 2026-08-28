@@ -105,6 +105,7 @@ async def execute_accessibility_run(
     *,
     should_cancel: Callable[[], bool],
     progress: Callable[[int, int, dict[str, int]], None],
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> AccessibilityRun:
     settings = get_settings()
     with session_factory() as db:
@@ -116,12 +117,13 @@ async def execute_accessibility_run(
         site = db.get(WebsiteProperty, run.website_property_id)
         if site is None:
             raise ValueError("Accessibility run Site not found.")
-        run.status = "running"
-        run.started_at = run.started_at or datetime.now(UTC)
         tasks = _tasks(db, run)
         scope = ScopeConfig.from_dict(site.scope_config)
         normalization_version = active_url_normalization_version(db)
         starting_url = site.normalized_base_url
+        _fence(db, fence_domain_mutation)
+        run.status = "running"
+        run.started_at = run.started_at or datetime.now(UTC)
         db.commit()
     async with BrowserRenderer(
         scope,
@@ -130,7 +132,7 @@ async def execute_accessibility_run(
     ) as renderer:
         for task in tasks:
             if should_cancel():
-                return _mark_cancelled(session_factory, run_id)
+                return _mark_cancelled(session_factory, run_id, fence_domain_mutation)
             with session_factory() as db:
                 exists = db.scalar(
                     select(AccessibilityObservation.id).where(
@@ -146,12 +148,13 @@ async def execute_accessibility_run(
                     task.profile,
                     max_payload_bytes=settings.accessibility_max_payload_bytes,
                 )
-                _persist_result(session_factory, run_id, task, result)
-            counters = _refresh_counts(session_factory, run_id)
+                _persist_result(session_factory, run_id, task, result, fence_domain_mutation)
+            counters = _refresh_counts(session_factory, run_id, fence_domain_mutation)
             progress(counters["completed"], len(tasks), counters)
     with session_factory() as db:
         run = db.get(AccessibilityRun, run_id)
         assert run is not None
+        _fence(db, fence_domain_mutation)
         run.status = "completed_with_errors" if run.failed_count else "completed"
         run.finished_at = datetime.now(UTC)
         db.commit()
@@ -193,8 +196,10 @@ def _persist_result(
     run_id: int,
     task: AccessibilityTask,
     result: AccessibilityAuditResult,
+    fence_domain_mutation: Callable[[Session], None] | None,
 ) -> None:
     with session_factory() as db:
+        _fence(db, fence_domain_mutation)
         run = db.get(AccessibilityRun, run_id)
         assert run is not None
         blob = None
@@ -269,7 +274,11 @@ def _persist_result(
         db.commit()
 
 
-def _refresh_counts(session_factory: Callable[[], Session], run_id: int) -> dict[str, int]:
+def _refresh_counts(
+    session_factory: Callable[[], Session],
+    run_id: int,
+    fence_domain_mutation: Callable[[Session], None] | None,
+) -> dict[str, int]:
     with session_factory() as db:
         rows = db.execute(
             select(AccessibilityObservation.outcome, func.count())
@@ -279,6 +288,7 @@ def _refresh_counts(session_factory: Callable[[], Session], run_id: int) -> dict
         counts = {outcome: count for outcome, count in rows}
         run = db.get(AccessibilityRun, run_id)
         assert run is not None
+        _fence(db, fence_domain_mutation)
         run.ready_count = counts.get("ready", 0)
         run.failed_count = counts.get("failed", 0)
         run.completed_count = run.ready_count + run.failed_count
@@ -290,12 +300,22 @@ def _refresh_counts(session_factory: Callable[[], Session], run_id: int) -> dict
         }
 
 
-def _mark_cancelled(session_factory: Callable[[], Session], run_id: int) -> AccessibilityRun:
+def _mark_cancelled(
+    session_factory: Callable[[], Session],
+    run_id: int,
+    fence_domain_mutation: Callable[[Session], None] | None,
+) -> AccessibilityRun:
     with session_factory() as db:
         run = db.get(AccessibilityRun, run_id)
         assert run is not None
+        _fence(db, fence_domain_mutation)
         run.status = "cancelled"
         run.finished_at = datetime.now(UTC)
         db.commit()
         db.refresh(run)
         return run
+
+
+def _fence(db: Session, fence_domain_mutation: Callable[[Session], None] | None) -> None:
+    if fence_domain_mutation is not None:
+        fence_domain_mutation(db)

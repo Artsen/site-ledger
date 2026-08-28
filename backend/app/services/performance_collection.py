@@ -141,6 +141,7 @@ def execute_performance_run(
     *,
     should_cancel: Callable[[], bool],
     progress: Callable[[int, int, dict[str, int]], None],
+    fence_domain_mutation: Callable[[Session], None] | None = None,
     client_factory: Callable[[], PerformanceProviderClient] | None = None,
 ) -> PerformanceRun:
     settings = get_settings()
@@ -150,6 +151,7 @@ def execute_performance_run(
             raise ValueError("Performance run not found.")
         if run.status in {"completed", "completed_with_errors", "cancelled"}:
             return run
+        _fence(db, fence_domain_mutation)
         run.status = "running"
         run.started_at = run.started_at or datetime.now(UTC)
         tasks = _tasks(db, run)
@@ -171,13 +173,7 @@ def execute_performance_run(
     try:
         for task in tasks:
             if should_cancel():
-                with session_factory() as db:
-                    current = db.get(PerformanceRun, run_id)
-                    assert current is not None
-                    current.status = "cancelled"
-                    current.finished_at = datetime.now(UTC)
-                    db.commit()
-                    return current
+                return _mark_cancelled(session_factory, run_id, fence_domain_mutation)
             with session_factory() as db:
                 exists = db.scalar(
                     select(PerformanceObservation.id).where(
@@ -197,13 +193,21 @@ def execute_performance_run(
                         else client.crux(task.target, task.target_kind, task.dimension)
                     )
                 except PerformanceCollectionCancelled:
-                    return _mark_cancelled(session_factory, run_id)
-                _persist_result(session_factory, run_id, task, result, requested_at)
-            counters = _refresh_run_counts(session_factory, run_id)
+                    return _mark_cancelled(session_factory, run_id, fence_domain_mutation)
+                _persist_result(
+                    session_factory,
+                    run_id,
+                    task,
+                    result,
+                    requested_at,
+                    fence_domain_mutation,
+                )
+            counters = _refresh_run_counts(session_factory, run_id, fence_domain_mutation)
             progress(counters["completed"], len(tasks), counters)
         with session_factory() as db:
             run = db.get(PerformanceRun, run_id)
             assert run is not None
+            _fence(db, fence_domain_mutation)
             run.status = "completed_with_errors" if run.failed_count else "completed"
             run.finished_at = datetime.now(UTC)
             db.commit()
@@ -226,10 +230,15 @@ def mark_performance_run_failed(
         db.commit()
 
 
-def _mark_cancelled(session_factory: Callable[[], Session], run_id: int) -> PerformanceRun:
+def _mark_cancelled(
+    session_factory: Callable[[], Session],
+    run_id: int,
+    fence_domain_mutation: Callable[[Session], None] | None,
+) -> PerformanceRun:
     with session_factory() as db:
         run = db.get(PerformanceRun, run_id)
         assert run is not None
+        _fence(db, fence_domain_mutation)
         run.status = "cancelled"
         run.finished_at = datetime.now(UTC)
         db.commit()
@@ -271,8 +280,10 @@ def _persist_result(
     task: PerformanceTask,
     result: ProviderResult,
     requested_at: datetime,
+    fence_domain_mutation: Callable[[Session], None] | None,
 ) -> None:
     with session_factory() as db:
+        _fence(db, fence_domain_mutation)
         run = db.get(PerformanceRun, run_id)
         assert run is not None
         blob = None
@@ -322,7 +333,11 @@ def _persist_result(
         db.commit()
 
 
-def _refresh_run_counts(session_factory: Callable[[], Session], run_id: int) -> dict[str, int]:
+def _refresh_run_counts(
+    session_factory: Callable[[], Session],
+    run_id: int,
+    fence_domain_mutation: Callable[[Session], None] | None,
+) -> dict[str, int]:
     with session_factory() as db:
         rows = db.execute(
             select(PerformanceObservation.outcome, func.count())
@@ -332,6 +347,7 @@ def _refresh_run_counts(session_factory: Callable[[], Session], run_id: int) -> 
         counts: dict[str, int] = {outcome: count for outcome, count in rows}
         run = db.get(PerformanceRun, run_id)
         assert run is not None
+        _fence(db, fence_domain_mutation)
         run.ready_count = counts.get("ready", 0)
         run.unavailable_count = counts.get("unavailable", 0)
         run.failed_count = counts.get("failed", 0)
@@ -343,6 +359,11 @@ def _refresh_run_counts(session_factory: Callable[[], Session], run_id: int) -> 
             "unavailable": run.unavailable_count,
             "failed": run.failed_count,
         }
+
+
+def _fence(db: Session, fence_domain_mutation: Callable[[Session], None] | None) -> None:
+    if fence_domain_mutation is not None:
+        fence_domain_mutation(db)
 
 
 def _origin(url: str) -> str:
