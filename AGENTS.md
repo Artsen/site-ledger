@@ -44,6 +44,8 @@ Python app package.
   from one Site while preserving coverage semantics and immutable evidence provenance.
 - **Structured content:** A ContentBlob-scoped, versioned deterministic derivative representing
   source-derived heading and section structure with direct text.
+- **Findings:** Persistent deterministic logical conditions with immutable assessments, typed
+  evidence pointers, evidence-time lifecycle, and separate acknowledgement workflow.
 - **Site Intelligence:** A read-only, non-persisted composition of current Site workspace state,
   deterministic derivatives, evidence coverage, independent domain clocks, and active work.
 
@@ -82,8 +84,10 @@ Implemented capabilities include:
 - Scan, source, Site, and Activity lifecycle management.
 - A Site Intelligence Overview with explicit active-Page denominators and independent static,
   Render, Performance, Accessibility, Structured Content, Source, and Comparison provenance.
+- First-class deterministic HTTP-error Findings with stable logical identity, immutable
+  assessments, evidence chronology, and acknowledgement workflow.
 
-Findings and investigation records, GA4/Search Console, section-level comparison,
+Additional Finding detector packs and investigation records, GA4/Search Console, section-level comparison,
 structured-content full-text search, Resource/PDF body extraction,
 rendered-DOM structured extraction, environment or cross-Site comparison, scheduling and
 notifications, embeddings, RAG, and semantic/LLM interpretation are future areas. Describe them as

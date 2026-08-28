@@ -47,6 +47,8 @@ const SiteResourcesPage = lazyWorkspacePage("SiteResourcesPage");
 const SiteScansPage = lazyWorkspacePage("SiteScansPage");
 const SiteSettingsPage = lazyWorkspacePage("SiteSettingsPage");
 const SiteSourcesPage = lazyWorkspacePage("SiteSourcesPage");
+const SiteFindingsPage = lazyWorkspacePage("SiteFindingsPage");
+const SiteFindingDetailPage = lazyWorkspacePage("SiteFindingDetailPage");
 
 const PageComparisonDetailPage = lazyNamed(() => import("./pages/ComparisonDetailPages"), "PageComparisonDetailPage");
 const ResourceComparisonDetailPage = lazyNamed(() => import("./pages/ComparisonDetailPages"), "ResourceComparisonDetailPage");
@@ -76,6 +78,8 @@ const router = createBrowserRouter([
           { path: "ai-documents/evidence/:snapshotId", element: <AiDocumentEvidencePage /> },
           { path: "ai-documents/:sourceId", element: <AiDocumentSourcePage /> },
           { path: "comparisons", element: <SiteComparisonsPage /> },
+          { path: "findings", element: <SiteFindingsPage /> },
+          { path: "findings/:findingId", element: <SiteFindingDetailPage /> },
           { path: "performance", element: <SitePerformancePage /> },
           { path: "performance/runs/:runId", element: <PerformanceRunPage /> },
           { path: "performance/evidence/:observationId", element: <PerformanceEvidencePage /> },

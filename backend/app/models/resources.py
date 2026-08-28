@@ -1066,7 +1066,8 @@ class BackgroundJob(Base):
             "AND performance_run_id IS NULL AND accessibility_run_id IS NULL "
             "AND render_run_id IS NULL "
             "AND website_property_id IS NOT NULL "
-            "AND job_type IN ('category_rule_evaluation', 'structured_content_build'))",
+            "AND job_type IN ('category_rule_evaluation', 'structured_content_build', "
+            "'finding_evaluation'))",
             name="ck_background_job_one_subject",
         ),
         Index(

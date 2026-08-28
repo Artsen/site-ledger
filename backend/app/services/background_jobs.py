@@ -25,6 +25,7 @@ from app.services.job_types import (
     JOB_STATUS_RUNNING,
     JOB_TYPE_ACCESSIBILITY_RUN,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
+    JOB_TYPE_FINDING_EVALUATION,
     JOB_TYPE_PERFORMANCE_RUN,
     JOB_TYPE_RENDER_RUN,
     JOB_TYPE_SCAN,
@@ -227,6 +228,19 @@ def enqueue_render_run_job(db: Session, run: RenderRun, *, priority: int = 125) 
         website_property_id=run.website_property_id,
         priority=priority,
         payload={"render_run_id": run.id, "site_id": run.website_property_id},
+    )
+
+
+def enqueue_finding_evaluation_job(
+    db: Session, evaluation_id: int, website_property_id: int, *, priority: int = 115
+) -> BackgroundJob:
+    return _enqueue_job(
+        db,
+        job_type=JOB_TYPE_FINDING_EVALUATION,
+        dedupe_key=f"finding-evaluation:{evaluation_id}",
+        website_property_id=website_property_id,
+        priority=priority,
+        payload={"finding_evaluation_id": evaluation_id, "site_id": website_property_id},
     )
 
 
@@ -510,6 +524,15 @@ def request_cancellation(
         job.status = JOB_STATUS_CANCELLED
         job.cancelled_at = now
         job.finished_at = now
+        if job.job_type == JOB_TYPE_FINDING_EVALUATION:
+            from app.services.finding_evaluations import mark_evaluation_terminal
+
+            mark_evaluation_terminal(
+                db,
+                int(job.payload_json.get("finding_evaluation_id", 0)),
+                "cancelled",
+                "Finding evaluation cancelled before execution.",
+            )
         emit_event(db, job.id, "cancelled", "info", "Queued job cancelled.")
     db.commit()
     db.refresh(job)

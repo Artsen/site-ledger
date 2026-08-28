@@ -31,6 +31,7 @@ from app.services.accessibility_collection import (
     mark_accessibility_run_failed,
 )
 from app.services.category_rules import create_followup_evaluation, reconcile_site
+from app.services.finding_evaluations import execute_evaluation, mark_evaluation_terminal
 from app.services.job_types import (
     JOB_STATUS_CANCELLED,
     JOB_STATUS_COMPLETED,
@@ -38,6 +39,7 @@ from app.services.job_types import (
     JOB_STATUS_FAILED,
     JOB_TYPE_ACCESSIBILITY_RUN,
     JOB_TYPE_CATEGORY_RULE_EVALUATION,
+    JOB_TYPE_FINDING_EVALUATION,
     JOB_TYPE_PERFORMANCE_RUN,
     JOB_TYPE_RENDER_RUN,
     JOB_TYPE_SCAN,
@@ -81,7 +83,9 @@ class HandlerResult:
 
 
 class JobHandler(Protocol):
-    async def execute(self, job: BackgroundJob, context: JobExecutionContext) -> HandlerResult:
+    async def execute(
+        self, job: BackgroundJob, context: JobExecutionContext
+    ) -> HandlerResult | None:
         pass
 
 
@@ -571,6 +575,51 @@ class RenderRunJobHandler:
         )
 
 
+class FindingEvaluationJobHandler:
+    def __init__(self, session_factory: Callable[[], Session]):
+        self.session_factory = session_factory
+
+    async def execute(
+        self, job: BackgroundJob, context: JobExecutionContext
+    ) -> HandlerResult | None:
+        evaluation_id = int(job.payload_json.get("finding_evaluation_id", 0))
+        if not evaluation_id:
+            raise ValueError("Finding job is missing finding_evaluation_id.")
+        context.raise_if_cancelled()
+        return await asyncio.to_thread(self._execute_blocking, job, evaluation_id, context)
+
+    def _execute_blocking(
+        self, job: BackgroundJob, evaluation_id: int, context: JobExecutionContext
+    ) -> None:
+        with self.session_factory() as db:
+            background_jobs.guard_terminalization(
+                db,
+                job_id=job.id,
+                lease_token=context.lease_token,
+                lease_seconds=context.lease_seconds,
+            )
+            result = execute_evaluation(
+                db, evaluation_id, check_ownership=context.raise_if_lease_lost
+            )
+            background_jobs.complete_job(
+                db,
+                job_id=job.id,
+                lease_token=context.lease_token,
+                status=JOB_STATUS_COMPLETED,
+                result_json={
+                    "finding_evaluation_id": result.evaluation_id,
+                    "detected": result.detected,
+                    "clear": result.clear,
+                    "unknown": result.unknown,
+                    "created_findings": result.created_findings,
+                    "resolved_findings": result.resolved_findings,
+                    "reopened_findings": result.reopened_findings,
+                    "assessments": result.assessments,
+                    "checksum_sha256": result.checksum_sha256,
+                },
+            )
+
+
 class JobHandlerRegistry:
     def __init__(self, handlers: dict[str, JobHandler]):
         self.handlers = handlers
@@ -598,6 +647,7 @@ def build_handler_registry(
             JOB_TYPE_PERFORMANCE_RUN: PerformanceRunJobHandler(session_factory),
             JOB_TYPE_ACCESSIBILITY_RUN: AccessibilityRunJobHandler(session_factory),
             JOB_TYPE_RENDER_RUN: RenderRunJobHandler(session_factory),
+            JOB_TYPE_FINDING_EVALUATION: FindingEvaluationJobHandler(session_factory),
         }
     )
 
@@ -858,6 +908,13 @@ def _mark_domain_cancelled(
                 "Projection build cancelled by user.",
                 commit=commit,
             )
+        elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
+            mark_evaluation_terminal(
+                db,
+                int(job.payload_json.get("finding_evaluation_id", 0)),
+                "cancelled",
+                "Finding evaluation cancelled by user.",
+            )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
                 db,
@@ -921,6 +978,13 @@ def _mark_domain_interrupted(
                 reason,
                 "Worker interrupted during projection build.",
                 commit=commit,
+            )
+        elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
+            mark_evaluation_terminal(
+                db,
+                int(job.payload_json.get("finding_evaluation_id", 0)),
+                "failed",
+                "Worker interrupted during Finding evaluation.",
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
@@ -996,6 +1060,13 @@ def _mark_domain_failed(
                 type(exc).__name__,
                 str(exc),
                 commit=commit,
+            )
+        elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
+            mark_evaluation_terminal(
+                db,
+                int(job.payload_json.get("finding_evaluation_id", 0)),
+                "failed",
+                exc,
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(

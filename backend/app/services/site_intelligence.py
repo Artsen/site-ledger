@@ -15,6 +15,8 @@ from app.models import (
     AccessibilityObservation,
     AccessibilityRun,
     BackgroundJob,
+    Finding,
+    FindingEvaluation,
     HtmlStructuredContentArtifact,
     PerformanceObservation,
     PerformanceRun,
@@ -37,6 +39,7 @@ from app.schemas.site_intelligence import (
     ComparisonIntelligenceRead,
     CoverageRead,
     EvidenceClock,
+    FindingsIntelligenceRead,
     PagePopulationRead,
     PerformanceContextRead,
     PerformanceIntelligenceRead,
@@ -84,6 +87,7 @@ def get_site_intelligence(db: Session, site_id: int) -> SiteIntelligenceRead | N
         performance=_performance_state(db, site_id, active_total),
         accessibility=_accessibility_state(db, site_id, active_total),
         sources=_sources_state(db, site_id),
+        findings=_findings_state(db, site_id),
         activity=_activity_state(db, site_id),
     )
 
@@ -105,6 +109,58 @@ def _page_population(db: Session, site_id: int) -> PagePopulationRead:
         suppressed_page_total=suppressed,
         workspace_page_total=active + suppressed,
         workflow_counts=dict(workflow),
+    )
+
+
+def _findings_state(db: Session, site_id: int) -> FindingsIntelligenceRead:
+    detected, unknown, acknowledged = db.execute(
+        select(
+            func.count(case((Finding.condition_state == "detected", 1))),
+            func.count(case((Finding.condition_state == "unknown", 1))),
+            func.count(
+                case(
+                    (
+                        and_(
+                            Finding.condition_state == "detected",
+                            Finding.acknowledged_at.is_not(None),
+                        ),
+                        1,
+                    )
+                )
+            ),
+        )
+        .join(
+            SitePage,
+            and_(
+                SitePage.website_property_id == Finding.website_property_id,
+                SitePage.resource_id == Finding.web_resource_id,
+            ),
+        )
+        .where(
+            Finding.website_property_id == site_id,
+            SitePage.workspace_state == "active",
+        )
+    ).one()
+    latest = db.scalar(
+        select(FindingEvaluation)
+        .where(
+            FindingEvaluation.website_property_id == site_id,
+            FindingEvaluation.status == "completed",
+        )
+        .order_by(
+            FindingEvaluation.evidence_horizon_at.desc(),
+            FindingEvaluation.id.desc(),
+        )
+        .limit(1)
+    )
+    return FindingsIntelligenceRead(
+        detected=detected or 0,
+        unknown=unknown or 0,
+        acknowledged_detected=acknowledged or 0,
+        unresolved_total=(detected or 0) + (unknown or 0),
+        latest_evaluation_id=latest.id if latest else None,
+        latest_evidence_horizon_at=latest.evidence_horizon_at if latest else None,
+        latest_evaluation_completed_at=latest.finished_at if latest else None,
     )
 
 

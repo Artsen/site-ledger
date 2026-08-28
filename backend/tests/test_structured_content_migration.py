@@ -208,6 +208,7 @@ def test_structured_content_v2_migration_preserves_v1_and_round_trips(
             assert prepared.node_count == len(prepared.nodes) > 0
             assert prepared.canonical_document_sha256
         engine.dispose()
+        command.upgrade(config, "head")
         command.check(config)
     finally:
         get_settings.cache_clear()

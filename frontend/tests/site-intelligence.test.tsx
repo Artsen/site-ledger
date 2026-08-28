@@ -30,6 +30,7 @@ function intelligence(): SiteIntelligence {
     performance: { contexts: [{ provider: "pagespeed", dimension: "mobile", target_kind: "url", provider_adapter_version: "pagespeed-provider-v1", normalization_version: "performance-normalization-v1", ready: 4, unavailable: 1, failed: 0, coverage: coverage(5, 10), clock: clock("2026-08-26T03:00:00Z") }, { provider: "crux", dimension: "PHONE", target_kind: "url", provider_adapter_version: "crux-provider-v1", normalization_version: "performance-normalization-v1", ready: 2, unavailable: 3, failed: 0, coverage: coverage(5, 10), clock: clock("2026-08-26T03:00:00Z") }], latest_run_id: 8, latest_run_status: "completed", clock: clock("2026-08-26T03:00:00Z") },
     accessibility: { coverage: coverage(4, 10), ready_pages: 3, failed_pages: 1, pages_with_violations: 2, violation_rules: 3, affected_nodes: 6, needs_review_rules: 1, clock: clock("2026-08-27T04:00:00Z") },
     sources: { active_source_count: 2, inactive_source_count: 1, current_inventory_count: 11, suppressed_inventory_count: 2, latest_refresh_status: "completed", latest_refresh_finished_at: "2026-08-27T05:00:00Z" },
+    findings: { detected: 2, unknown: 1, acknowledged_detected: 1, unresolved_total: 3, latest_evaluation_id: 6, latest_evidence_horizon_at: "2026-08-27T05:00:00Z", latest_evaluation_completed_at: "2026-08-27T05:01:00Z" },
     activity: { active_job_count: 0, queued_count: 0, running_count: 0, jobs: [] },
   };
 }

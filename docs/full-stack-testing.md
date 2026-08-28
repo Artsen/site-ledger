@@ -50,7 +50,9 @@ Expected Page results are intentionally narrow:
 
 The browser creates the Site through the real API, starts both Scans through the real UI, waits for
 the real worker and automatic projection/comparison jobs, and inspects comparison and Observation
-content screens. Direct database verification checks classification totals, blob and structured
+content screens. It also queues one Finding evaluation through the real API, waits through the
+worker, verifies its pinned Scan and evaluator identity, and reconciles the active Finding summary
+with the fixture's clean HTTP evidence. Direct database verification checks classification totals, blob and structured
 artifact reuse, deterministic hashes, projection identities, completed jobs, foreign keys, and
 duplicate artifact identities.
 

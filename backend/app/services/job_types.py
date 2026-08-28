@@ -15,6 +15,7 @@ JobType = Literal[
     "performance_run",
     "accessibility_run",
     "render_run",
+    "finding_evaluation",
 ]
 JobStatus = Literal[
     "queued",
@@ -35,6 +36,7 @@ JOB_TYPE_STRUCTURED_CONTENT_BUILD: JobType = "structured_content_build"
 JOB_TYPE_PERFORMANCE_RUN: JobType = "performance_run"
 JOB_TYPE_ACCESSIBILITY_RUN: JobType = "accessibility_run"
 JOB_TYPE_RENDER_RUN: JobType = "render_run"
+JOB_TYPE_FINDING_EVALUATION: JobType = "finding_evaluation"
 
 JOB_TYPE_LABELS: dict[JobType, str] = {
     JOB_TYPE_SCAN: "Scan",
@@ -46,6 +48,7 @@ JOB_TYPE_LABELS: dict[JobType, str] = {
     JOB_TYPE_PERFORMANCE_RUN: "Performance collection",
     JOB_TYPE_ACCESSIBILITY_RUN: "Accessibility audit",
     JOB_TYPE_RENDER_RUN: "Rendered capture",
+    JOB_TYPE_FINDING_EVALUATION: "Finding evaluation",
 }
 
 JOB_STATUS_QUEUED: JobStatus = "queued"

@@ -35,8 +35,8 @@ python -m app.worker --recover-only
 `BackgroundJob` stores the durable unit of work. A job has one constrained subject: `scan_id` for
 crawl/projection jobs, `source_refresh_id` for source refresh jobs, `scan_comparison_id` for
 comparison builds, `performance_run_id` for external Performance collection, `render_run_id` for
-browser collection, or `website_property_id` for supported Site-scoped Category Rule and structured
-content operations.
+browser collection, or `website_property_id` for supported Site-scoped Category Rule, structured
+content, and Finding evaluation operations.
 
 `JobEvent` stores coarse lifecycle events for debugging and user-visible history. It intentionally
 does not store every discovered URL or crawler detail; page snapshots, occurrences, scan seeds, and
@@ -94,6 +94,11 @@ and Scan projection jobs are independent and report progress in bounded Page bat
 ContentBlobs missing the current structured identity, commits bounded per-blob results, reports
 progress, cooperates with cancellation, and continues after individual blob failures. See
 [Structured Page Content](structured-page-content.md).
+
+`finding_evaluation` is a Site-scoped deterministic evaluation over one pinned terminal Scan and a
+frozen active-Page universe. The handler owns its Session in the blocking thread and atomically
+commits lifecycle transitions, immutable assessments, evaluation completion, and BackgroundJob
+completion under the active lease. See [Findings](findings.md).
 
 `performance_run` executes a bounded canonical request set serially through fixed PageSpeed and CrUX
 adapters. It commits each immutable observation independently, reports ready/unavailable/failed
