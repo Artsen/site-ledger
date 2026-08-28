@@ -182,6 +182,58 @@ def test_rich_structure_and_exact_markdown_fixture() -> None:
     assert any(node.semantic["colspan"] == 2 for node in cells)
 
 
+def test_heading_section_is_synthetic_but_heading_tag_is_source_truth() -> None:
+    document = extract_canonical_document(b"<h1>Title</h1>")
+    section = next(node for node in document.nodes if node.kind == "section")
+    heading = next(node for node in document.nodes if node.kind == "heading")
+
+    assert section.source_tag is None
+    assert section.semantic == {"section_kind": "heading", "level": 1}
+    assert heading.source_tag == "h1"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            b"<table><tr><th>Name</th><th>Value</th></tr><tr><td>A</td><td>1</td></tr></table>",
+            "| Name | Value |\n| --- | --- |\n| A | 1 |\n",
+        ),
+        (
+            b"<table><tr><td>A</td><td>B</td></tr><tr><td>1</td><td>2</td></tr></table>",
+            "|  |  |\n| --- | --- |\n| A | B |\n| 1 | 2 |\n",
+        ),
+        (
+            b"<table><tr><th>Label</th><td>Value</td></tr><tr><td>A</td><td>1</td></tr></table>",
+            "|  |  |\n| --- | --- |\n| Label | Value |\n| A | 1 |\n",
+        ),
+    ],
+)
+def test_markdown_tables_do_not_invent_source_header_cells(source: bytes, expected: str) -> None:
+    first = extract_canonical_document(source)
+    second = extract_canonical_document(source)
+
+    assert first.markdown == expected
+    assert first.markdown == second.markdown
+    assert first.markdown_sha256 == second.markdown_sha256
+    assert first.canonical_document_sha256 == second.canonical_document_sha256
+
+
+def test_markdown_destinations_escape_syntax_without_changing_canonical_values() -> None:
+    href = r"../guides/a b(1)\windows?q=two words#part(2)"
+    src = r"/images/a b(1)\cover.png?size=large#hero"
+    document = extract_canonical_document(
+        f'<p><a href="{href}">Guide</a><img src="{src}" alt="Cover"></p>'.encode()
+    )
+    link = next(run for node in document.nodes for run in node.inline if run["kind"] == "link")
+    image = next(run for node in document.nodes for run in node.inline if run["kind"] == "image")
+
+    assert link["href"] == href
+    assert image["src"] == src
+    assert "[Guide](<../guides/a b(1)\\\\windows?q=two words#part(2)>)" in document.markdown
+    assert "![Cover](</images/a b(1)\\\\cover.png?size=large#hero>)" in document.markdown
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [

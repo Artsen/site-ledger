@@ -386,7 +386,6 @@ def _add_heading(
     parent = builder.section_stack[-1][1] if builder.section_stack else builder.root
     section = CanonicalNode(
         kind="section",
-        source_tag="section",
         region_key=region,
         region_dom_path=region_path,
         semantic={"section_kind": "heading", "level": level},
@@ -986,10 +985,13 @@ def _render_table(table: Any, children: Any, inline: Any) -> str:
         return ""
     width = max(len(row) for row in values)
     values = [row + [""] * (width - len(row)) for row in values]
-    lines = ["| " + " | ".join(row) + " |" for row in values]
     separator = "| " + " | ".join("---" for _ in range(width)) + " |"
-    insert_at = 1 if headers[0] else 1
-    lines.insert(insert_at, separator)
+    source_rows = ["| " + " | ".join(row) + " |" for row in values]
+    if headers[0]:
+        lines = [source_rows[0], separator, *source_rows[1:]]
+    else:
+        neutral_header = "| " + " | ".join("" for _ in range(width)) + " |"
+        lines = [neutral_header, separator, *source_rows]
     return "\n".join(lines)
 
 
@@ -1111,7 +1113,10 @@ def _escape(value: str) -> str:
 
 
 def _escape_destination(value: str) -> str:
-    return value.replace("\\", "\\\\").replace(")", "\\)")
+    if any(character.isspace() or character in "()\\<>" for character in value):
+        escaped = value.replace("\\", "\\\\").replace("<", "\\<").replace(">", "\\>")
+        return f"<{escaped}>"
+    return value
 
 
 def _max_backticks(value: str) -> int:

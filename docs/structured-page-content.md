@@ -76,6 +76,8 @@ artifact and nodes. Rebuilding replaces only the current V2 identity. Historical
 `structured-content-v1 | default-v1` artifacts and `HtmlStructuredContentSection` rows remain
 stored, unchanged, and diagnosable. Blobs with only V1 report current V2 as `not_prepared` until the
 existing Prepare workflow creates V2 beside V1; there is no bulk migration backfill.
+Downgrading below the V2 schema removes only `structured-content-v2 | canonical-document-v1`
+derivatives because schema V1 cannot represent them; retained ContentBlobs and V1 derivatives remain.
 
 Deleting one observation does not delete a derivative shared by other observations. Legitimate
 ContentBlob deletion cascades to its derivative rows through the existing content lifecycle.
@@ -88,6 +90,12 @@ blockquotes, inline and fenced code, readable tables including span labels, defi
 breaks, thematic breaks, and readable generic-block fallback. Fence length is selected from code
 content so embedded backticks cannot terminate a block. Arbitrary retained HTML is never passed
 through as executable markup.
+
+Pipe tables use the first source row as the Markdown header only when every cell in that row is a
+source `th`. Tables with a `td`-only or mixed first row receive a neutral blank Markdown header so
+every source row remains data. Destinations remain unresolved; values containing spaces,
+parentheses, backslashes, or angle brackets use deterministic angle-bracket Markdown destination
+syntax without changing canonical inline evidence.
 
 ## API And UI
 

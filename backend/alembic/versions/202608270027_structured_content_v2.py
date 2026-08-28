@@ -90,6 +90,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        sa.text(
+            "DELETE FROM html_structured_content_nodes WHERE artifact_id IN ("
+            "SELECT id FROM html_structured_content_artifacts "
+            "WHERE extractor_version = 'structured-content-v2' "
+            "AND extractor_config_version = 'canonical-document-v1')"
+        )
+    )
+    op.execute(
+        sa.text(
+            "DELETE FROM html_structured_content_artifacts "
+            "WHERE extractor_version = 'structured-content-v2' "
+            "AND extractor_config_version = 'canonical-document-v1'"
+        )
+    )
     op.drop_table("html_structured_content_nodes")
     with op.batch_alter_table("html_structured_content_artifacts") as batch:
         batch.drop_index("ix_html_structured_content_artifacts_markdown_sha256")
