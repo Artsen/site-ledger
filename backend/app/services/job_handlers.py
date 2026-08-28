@@ -565,6 +565,7 @@ class RenderRunJobHandler:
             self.session_factory,
             run_id,
             should_cancel=context.check_cancelled,
+            fence_domain_mutation=context.fence_domain_mutation,
             progress=lambda current, total, counters: context.progress(
                 phase="capturing",
                 current_operation="Capturing rendered Page evidence",

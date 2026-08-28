@@ -202,6 +202,7 @@ async def execute_render_run(
     *,
     should_cancel: Callable[[], bool],
     progress: Callable[[int, int, dict[str, int]], None],
+    fence_domain_mutation: Callable[[Session], None] | None = None,
     renderer_factory: Callable[[ScopeConfig, str, str], BrowserRenderer] = BrowserRenderer,
 ) -> RenderRun:
     with session_factory() as db:
@@ -219,6 +220,7 @@ async def execute_render_run(
             )
         )
         configuration = dict(run.configuration_json)
+        _fence(db, fence_domain_mutation)
         run.status = "running"
         run.started_at = run.started_at or datetime.now(UTC)
         db.commit()
@@ -233,7 +235,7 @@ async def execute_render_run(
     async with renderer:
         for target_id, requested_url in target_rows:
             if should_cancel():
-                return _mark_cancelled(session_factory, run_id)
+                return _mark_cancelled(session_factory, run_id, fence_domain_mutation)
             with session_factory() as db:
                 existing = db.scalar(
                     select(RenderedObservation.id).where(
@@ -244,6 +246,7 @@ async def execute_render_run(
                     continue
                 current_target = db.get(RenderRunTarget, target_id)
                 assert current_target is not None
+                _fence(db, fence_domain_mutation)
                 observation = create_observation(
                     db, current_target.source_snapshot, config, target=current_target
                 )
@@ -251,12 +254,13 @@ async def execute_render_run(
             if breaker.is_open(requested_url):
                 result: CaptureResult | None = host_rate_limit_skip_result()
             else:
-                _increment_attempted(session_factory, run_id)
+                _increment_attempted(session_factory, run_id, fence_domain_mutation)
                 result = await _bounded_capture(renderer, requested_url, config, should_cancel)
             if result is None:
-                _mark_observation_cancelled(session_factory, observation_id)
-                return _mark_cancelled(session_factory, run_id)
+                _mark_observation_cancelled(session_factory, observation_id, fence_domain_mutation)
+                return _mark_cancelled(session_factory, run_id, fence_domain_mutation)
             with session_factory() as db:
+                _fence(db, fence_domain_mutation)
                 saved = persist_capture(db, observation_id, result, renderer, store)
                 breaker.record(
                     requested_url,
@@ -264,7 +268,7 @@ async def execute_render_run(
                     error_type=saved.error_type,
                     retry_after=main_navigation_retry_after(result.network),
                 )
-            counters = refresh_render_run_counts(session_factory, run_id)
+            counters = refresh_render_run_counts(session_factory, run_id, fence_domain_mutation)
             progress(
                 sum((counters["successful"], counters["failed"], counters["skipped"])),
                 len(target_rows),
@@ -273,6 +277,7 @@ async def execute_render_run(
     with session_factory() as db:
         run = db.get(RenderRun, run_id)
         assert run is not None
+        _fence(db, fence_domain_mutation)
         run.status = (
             "completed_with_errors" if run.failed_count or run.skipped_count else "completed"
         )
@@ -308,16 +313,23 @@ async def _bounded_capture(
     return await task
 
 
-def _increment_attempted(session_factory: Callable[[], Session], run_id: int) -> None:
+def _increment_attempted(
+    session_factory: Callable[[], Session],
+    run_id: int,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
+) -> None:
     with session_factory() as db:
         run = db.get(RenderRun, run_id)
         assert run is not None
+        _fence(db, fence_domain_mutation)
         run.attempted_count += 1
         db.commit()
 
 
 def refresh_render_run_counts(
-    session_factory: Callable[[], Session], run_id: int
+    session_factory: Callable[[], Session],
+    run_id: int,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> dict[str, int]:
     with session_factory() as db:
         observations = list(
@@ -327,6 +339,7 @@ def refresh_render_run_counts(
         )
         run = db.get(RenderRun, run_id)
         assert run is not None
+        _fence(db, fence_domain_mutation)
         run.completed_count = sum(
             is_successful_page_capture(item.capture_state, item.navigation_http_status)
             for item in observations
@@ -357,11 +370,14 @@ def refresh_render_run_counts(
 
 
 def _mark_observation_cancelled(
-    session_factory: Callable[[], Session], observation_id: int
+    session_factory: Callable[[], Session],
+    observation_id: int,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> None:
     with session_factory() as db:
         observation = db.get(RenderedObservation, observation_id)
         if observation:
+            _fence(db, fence_domain_mutation)
             observation.capture_state = "cancelled"
             observation.error_type = "cancelled"
             observation.error_message = "Capture cancelled by user."
@@ -369,15 +385,25 @@ def _mark_observation_cancelled(
             db.commit()
 
 
-def _mark_cancelled(session_factory: Callable[[], Session], run_id: int) -> RenderRun:
+def _mark_cancelled(
+    session_factory: Callable[[], Session],
+    run_id: int,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
+) -> RenderRun:
     with session_factory() as db:
         run = db.get(RenderRun, run_id)
         assert run is not None
+        _fence(db, fence_domain_mutation)
         run.status = "cancelled"
         run.finished_at = datetime.now(UTC)
         db.commit()
         db.refresh(run)
         return run
+
+
+def _fence(db: Session, fence_domain_mutation: Callable[[Session], None] | None) -> None:
+    if fence_domain_mutation is not None:
+        fence_domain_mutation(db)
 
 
 def mark_render_run_failed(

@@ -10,6 +10,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.accessibility.audit import AccessibilityAuditResult
 from app.accessibility.engine import AXE_CORE_VERSION
+from app.browser.capture import CapturedArtifact, CaptureResult
+from app.crawler.scope import ScopeConfig
 from app.database import Base
 from app.models import (
     AccessibilityNodeEvidence,
@@ -17,11 +19,19 @@ from app.models import (
     AccessibilityPayloadBlob,
     AccessibilityRuleEvidence,
     AccessibilityRun,
+    ArtifactBlob,
     BackgroundJob,
     JobEvent,
     PerformanceObservation,
     PerformancePayloadBlob,
     PerformanceRun,
+    RenderedArtifact,
+    RenderedConsoleMessage,
+    RenderedNetworkEntry,
+    RenderedObservation,
+    RenderedPageError,
+    RenderRun,
+    RenderRunTarget,
     SitePage,
     WebResource,
 )
@@ -29,16 +39,27 @@ from app.schemas.accessibility import AccessibilityRunCreate
 from app.schemas.performance import PerformanceRunCreate
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate
-from app.services import accessibility_collection, background_jobs, performance_collection
+from app.services import (
+    accessibility_collection,
+    background_jobs,
+    job_handlers,
+    performance_collection,
+    render_runs,
+)
 from app.services.accessibility_collection import create_accessibility_run
 from app.services.job_handlers import (
     AccessibilityRunJobHandler,
     JobExecutionContext,
     JobHandlerRegistry,
     PerformanceRunJobHandler,
+    RenderRunJobHandler,
     run_claimed_job,
 )
-from app.services.job_types import JOB_TYPE_ACCESSIBILITY_RUN, JOB_TYPE_PERFORMANCE_RUN
+from app.services.job_types import (
+    JOB_TYPE_ACCESSIBILITY_RUN,
+    JOB_TYPE_PERFORMANCE_RUN,
+    JOB_TYPE_RENDER_RUN,
+)
 from app.services.performance_collection import create_performance_run
 from app.services.performance_providers import ProviderResult
 from app.services.site_management import create_site
@@ -369,6 +390,253 @@ async def test_performance_cancellation_cannot_overwrite_recovery_after_ownershi
         assert _event_count(db, job_id, "cancelled") == 0
 
 
+@pytest.mark.asyncio
+async def test_render_recovery_rejects_stale_capture_evidence_and_artifacts(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_factory = _session_factory(tmp_path)
+    artifact_root = tmp_path / "render-stale-artifacts"
+    run_id, job_id, claimed = _create_render_job(
+        session_factory, "render-stale.example", 1, worker_id="render-stale"
+    )
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+
+    class BlockingRenderer(_RenderRenderer):
+        async def capture(self, url: str) -> CaptureResult:
+            capture_started.set()
+            assert await asyncio.to_thread(release_capture.wait, 5)
+            return _rich_capture(url, b"stale-render-artifact")
+
+    _install_render_executor(monkeypatch, BlockingRenderer)
+    monkeypatch.setattr(
+        render_runs,
+        "get_settings",
+        lambda: SimpleNamespace(rendered_artifact_storage_root=artifact_root),
+    )
+    monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
+    task = asyncio.create_task(
+        run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry(
+                {JOB_TYPE_RENDER_RUN: RenderRunJobHandler(session_factory)}
+            ),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    )
+    assert await asyncio.to_thread(capture_started.wait, 5)
+    assert _force_recovery(session_factory, job_id) == 1
+    release_capture.set()
+    await task
+
+    with session_factory() as db:
+        job = db.get(BackgroundJob, job_id)
+        run = db.get(RenderRun, run_id)
+        observation = db.scalar(
+            select(RenderedObservation).where(RenderedObservation.render_run_id == run_id)
+        )
+        assert job is not None and job.status == "interrupted"
+        assert run is not None and run.status == "interrupted"
+        assert observation is not None and observation.capture_state == "interrupted"
+        assert observation.error_type == "interrupted"
+        assert db.scalar(select(func.count()).select_from(RenderedNetworkEntry)) == 0
+        assert db.scalar(select(func.count()).select_from(RenderedConsoleMessage)) == 0
+        assert db.scalar(select(func.count()).select_from(RenderedPageError)) == 0
+        assert db.scalar(select(func.count()).select_from(RenderedArtifact)) == 0
+        assert db.scalar(select(func.count()).select_from(ArtifactBlob)) == 0
+        assert _event_count(db, job_id, "completed") == 0
+    assert _payload_files(artifact_root) == 0
+
+
+@pytest.mark.asyncio
+async def test_render_recovery_keeps_pre_loss_evidence_and_rejects_second_capture(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_factory = _session_factory(tmp_path)
+    artifact_root = tmp_path / "render-two-target-artifacts"
+    run_id, job_id, claimed = _create_render_job(
+        session_factory, "render-two-target.example", 2, worker_id="render-two-target"
+    )
+    second_started = threading.Event()
+    release_second = threading.Event()
+
+    class TwoTargetRenderer(_RenderRenderer):
+        calls = 0
+
+        async def capture(self, url: str) -> CaptureResult:
+            self.calls += 1
+            if self.calls == 2:
+                second_started.set()
+                assert await asyncio.to_thread(release_second.wait, 5)
+            return _rich_capture(url, f"artifact-{self.calls}".encode())
+
+    _install_render_executor(monkeypatch, TwoTargetRenderer)
+    monkeypatch.setattr(
+        render_runs,
+        "get_settings",
+        lambda: SimpleNamespace(rendered_artifact_storage_root=artifact_root),
+    )
+    monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
+    task = asyncio.create_task(
+        run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry(
+                {JOB_TYPE_RENDER_RUN: RenderRunJobHandler(session_factory)}
+            ),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    )
+    assert await asyncio.to_thread(second_started.wait, 5)
+    assert _force_recovery(session_factory, job_id) == 1
+    release_second.set()
+    await task
+
+    with session_factory() as db:
+        observations = list(
+            db.scalars(
+                select(RenderedObservation)
+                .where(RenderedObservation.render_run_id == run_id)
+                .order_by(RenderedObservation.id)
+            )
+        )
+        assert db.get(BackgroundJob, job_id).status == "interrupted"
+        assert db.get(RenderRun, run_id).status == "interrupted"
+        assert [item.capture_state for item in observations] == ["completed", "interrupted"]
+        assert db.scalar(select(func.count()).select_from(RenderedNetworkEntry)) == 1
+        assert db.scalar(select(func.count()).select_from(RenderedConsoleMessage)) == 1
+        assert db.scalar(select(func.count()).select_from(RenderedPageError)) == 1
+        assert db.scalar(select(func.count()).select_from(RenderedArtifact)) == 1
+        assert db.scalar(select(func.count()).select_from(ArtifactBlob)) == 1
+        assert _event_count(db, job_id, "completed") == 0
+    assert _payload_files(artifact_root) == 1
+
+
+@pytest.mark.asyncio
+async def test_render_recovery_before_finalization_keeps_interrupted_run(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_factory = _session_factory(tmp_path)
+    artifact_root = tmp_path / "render-finalization-artifacts"
+    run_id, job_id, claimed = _create_render_job(
+        session_factory, "render-finalization.example", 1, worker_id="render-finalization"
+    )
+    progress_reached = threading.Event()
+    release_progress = threading.Event()
+
+    class ReadyRenderer(_RenderRenderer):
+        async def capture(self, url: str) -> CaptureResult:
+            return _rich_capture(url, b"authorized-render-artifact")
+
+    def paused_progress(self: JobExecutionContext, **_kwargs: object) -> None:
+        progress_reached.set()
+        assert release_progress.wait(timeout=5)
+
+    _install_render_executor(monkeypatch, ReadyRenderer)
+    monkeypatch.setattr(JobExecutionContext, "progress", paused_progress)
+    monkeypatch.setattr(
+        render_runs,
+        "get_settings",
+        lambda: SimpleNamespace(rendered_artifact_storage_root=artifact_root),
+    )
+    monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
+    task = asyncio.create_task(
+        run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry(
+                {JOB_TYPE_RENDER_RUN: RenderRunJobHandler(session_factory)}
+            ),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    )
+    assert await asyncio.to_thread(progress_reached.wait, 5)
+    assert _force_recovery(session_factory, job_id) == 1
+    release_progress.set()
+    await task
+
+    with session_factory() as db:
+        job = db.get(BackgroundJob, job_id)
+        run = db.get(RenderRun, run_id)
+        observation = db.scalar(
+            select(RenderedObservation).where(RenderedObservation.render_run_id == run_id)
+        )
+        assert job is not None and job.status == "interrupted"
+        assert run is not None and run.status == "interrupted"
+        assert observation is not None and observation.capture_state == "completed"
+        assert db.scalar(select(func.count()).select_from(RenderedArtifact)) == 1
+        assert _event_count(db, job_id, "completed") == 0
+    assert _payload_files(artifact_root) == 1
+
+
+@pytest.mark.asyncio
+async def test_render_cancellation_cannot_overwrite_recovery_after_ownership_loss(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_factory = _session_factory(tmp_path)
+    artifact_root = tmp_path / "render-cancellation-artifacts"
+    run_id, job_id, claimed = _create_render_job(
+        session_factory, "render-cancellation.example", 1, worker_id="render-cancellation"
+    )
+    capture_started = threading.Event()
+
+    class CancelledRenderer(_RenderRenderer):
+        async def capture(self, _url: str) -> CaptureResult:
+            capture_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("cancelled capture unexpectedly resumed")
+
+    original_mark_observation_cancelled = render_runs._mark_observation_cancelled
+
+    def recovery_before_observation_cancel(
+        session_factory_arg, observation_id_arg, fence_domain_mutation
+    ):
+        assert _force_recovery(session_factory, job_id) == 1
+        return original_mark_observation_cancelled(
+            session_factory_arg, observation_id_arg, fence_domain_mutation
+        )
+
+    _install_render_executor(monkeypatch, CancelledRenderer)
+    monkeypatch.setattr(
+        render_runs, "_mark_observation_cancelled", recovery_before_observation_cancel
+    )
+    monkeypatch.setattr(
+        render_runs,
+        "get_settings",
+        lambda: SimpleNamespace(rendered_artifact_storage_root=artifact_root),
+    )
+    monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
+    task = asyncio.create_task(
+        run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry(
+                {JOB_TYPE_RENDER_RUN: RenderRunJobHandler(session_factory)}
+            ),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    )
+    assert await asyncio.to_thread(capture_started.wait, 5)
+    with session_factory() as db:
+        job = db.get(BackgroundJob, job_id)
+        assert job is not None
+        background_jobs.request_cancellation(db, job)
+    await task
+
+    with session_factory() as db:
+        job = db.get(BackgroundJob, job_id)
+        run = db.get(RenderRun, run_id)
+        observation = db.scalar(
+            select(RenderedObservation).where(RenderedObservation.render_run_id == run_id)
+        )
+        assert job is not None and job.status == "interrupted"
+        assert run is not None and run.status == "interrupted"
+        assert observation is not None and observation.capture_state == "interrupted"
+        assert _event_count(db, job_id, "cancelled") == 0
+    assert _payload_files(artifact_root) == 0
+
+
 class _FakeBrowserRenderer:
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         pass
@@ -378,6 +646,105 @@ class _FakeBrowserRenderer:
 
     async def __aexit__(self, *_args: object) -> None:
         return None
+
+
+class _RenderRenderer(_FakeBrowserRenderer):
+    browser_version = "fixture-chromium"
+    playwright_version = "fixture-playwright"
+
+
+def _install_render_executor(monkeypatch: pytest.MonkeyPatch, renderer_factory: type) -> None:
+    execute = render_runs.execute_render_run
+
+    async def execute_with_renderer(*args, **kwargs):
+        return await execute(*args, **kwargs, renderer_factory=renderer_factory)
+
+    monkeypatch.setattr(job_handlers, "execute_render_run", execute_with_renderer)
+
+
+def _create_render_job(session_factory, host: str, count: int, *, worker_id: str):
+    with session_factory() as db:
+        site_id, resource_ids = _site_pages(db, host, count)
+        run = RenderRun(
+            website_property_id=site_id,
+            status="queued",
+            trigger="site_workspace",
+            configuration_json=ScopeConfig(
+                allowed_host_patterns=[host],
+                max_pages=count,
+                render_mode="all_eligible",
+                render_max_pages=count,
+            ).to_dict(),
+            target_count=count,
+        )
+        db.add(run)
+        db.flush()
+        resources = list(
+            db.scalars(
+                select(WebResource).where(WebResource.id.in_(resource_ids)).order_by(WebResource.id)
+            )
+        )
+        db.add_all(
+            RenderRunTarget(
+                render_run_id=run.id,
+                web_resource_id=resource.id,
+                requested_url=resource.normalized_url,
+                position=position,
+            )
+            for position, resource in enumerate(resources, 1)
+        )
+        job = background_jobs.enqueue_render_run_job(db, run)
+        db.commit()
+        claimed = background_jobs.claim_next_job(db, worker_id=worker_id, lease_seconds=30)
+        assert claimed is not None
+        return run.id, job.id, claimed
+
+
+def _rich_capture(url: str, artifact_content: bytes) -> CaptureResult:
+    return CaptureResult(
+        state="completed",
+        final_url=url,
+        status=200,
+        title="Rendered fixture",
+        network=[
+            {
+                "sequence": 1,
+                "request_key": "a" * 64,
+                "redacted_url": url,
+                "url_sha256": "b" * 64,
+                "method": "GET",
+                "resource_type": "document",
+                "is_main_navigation": True,
+                "is_navigation_request": True,
+                "request_headers_json": {},
+                "response_headers_json": {},
+                "blocked_by_policy": False,
+            }
+        ],
+        console=[
+            {
+                "sequence": 1,
+                "message_type": "warning",
+                "text": "fixture console evidence",
+            }
+        ],
+        page_errors=[
+            {
+                "sequence": 1,
+                "error_name": "FixtureError",
+                "message": "fixture Page error evidence",
+            }
+        ],
+        artifacts=[
+            CapturedArtifact(
+                artifact_type="viewport_screenshot",
+                content=artifact_content,
+                media_type="image/png",
+                width=10,
+                height=10,
+            )
+        ],
+    )
 
 
 def _session_factory(tmp_path):
