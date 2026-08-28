@@ -16,6 +16,7 @@ import {
   NotebookPen,
   Play,
   ScanSearch,
+  SearchCheck,
   MonitorUp,
   Settings,
   Tags,
@@ -30,6 +31,7 @@ export type SiteArea =
   | "inventory"
   | "ai-documents"
   | "comparisons"
+  | "findings"
   | "performance"
   | "accessibility"
   | "rendered"
@@ -73,6 +75,7 @@ export const siteNavigation: SiteNavigationGroup[] = [
   {
     label: "Analyze",
     items: [
+      { area: "findings", label: "Findings", icon: SearchCheck, segment: "findings" },
       { area: "comparisons", label: "Comparisons", icon: GitCompareArrows, segment: "comparisons" },
       { area: "performance", label: "Performance", icon: Gauge, segment: "performance" },
       { area: "accessibility", label: "Accessibility", icon: Accessibility, segment: "accessibility" },

@@ -13,6 +13,7 @@ from app.api.accessibility_routes import router as accessibility_router
 from app.api.ai_document_routes import router as ai_document_router
 from app.api.category_rule_routes import router as category_rule_router
 from app.api.comparison_routes import router as comparison_router
+from app.api.findings_routes import router as findings_router
 from app.api.performance_routes import router as performance_router
 from app.api.render_routes import router as render_router
 from app.api.routes import router
@@ -105,6 +106,7 @@ def create_app(*, session_factory: Callable[[], Session] = SessionLocal) -> Fast
     app.include_router(performance_router)
     app.include_router(render_router)
     app.include_router(site_intelligence_router)
+    app.include_router(findings_router)
     return app
 
 

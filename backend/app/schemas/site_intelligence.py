@@ -138,6 +138,16 @@ class SourcesIntelligenceRead(BaseModel):
     latest_refresh_finished_at: datetime | None = None
 
 
+class FindingsIntelligenceRead(BaseModel):
+    detected: int
+    unknown: int
+    acknowledged_detected: int
+    unresolved_total: int
+    latest_evaluation_id: int | None = None
+    latest_evidence_horizon_at: datetime | None = None
+    latest_evaluation_completed_at: datetime | None = None
+
+
 class ActiveJobRead(BaseModel):
     id: int
     job_type: str
@@ -167,4 +177,5 @@ class SiteIntelligenceRead(BaseModel):
     performance: PerformanceIntelligenceRead
     accessibility: AccessibilityIntelligenceRead
     sources: SourcesIntelligenceRead
+    findings: FindingsIntelligenceRead
     activity: ActivityIntelligenceRead

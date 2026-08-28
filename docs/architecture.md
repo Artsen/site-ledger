@@ -45,6 +45,8 @@ current implementations.
   AI Document Source evidence without creating Scan observations.
 - ScanSeed and ScanSeedOrigin preserve explicit scan-input provenance.
 - BackgroundJob, JobEvent, and WorkerInstance store durable Activity state.
+- FindingEvaluation, Finding, FindingAssessment, and FindingEvidenceReference store deterministic
+  condition evaluation, stable logical identity, immutable outcomes, and typed evidence pointers.
 - ScanProjectionBuild and ScanProjectionState select a complete compatible set of Page, Resource,
   Link, and summary projections for fast terminal-Scan reads.
 
@@ -286,8 +288,9 @@ Coverage always exposes integer numerator and denominator values, with a null ra
 denominator is zero. Missing evidence never implies a healthy state. The read endpoint does not
 prepare Structured Content, rebuild projections or comparisons, enqueue work, or mutate state.
 
-The architectural sequence is: retained evidence, deterministic derivatives, Site Intelligence
-composition, future Findings, and only then future AI interpretation. No health score or Finding
+The architectural sequence is: retained evidence, deterministic derivatives, deterministic
+Finding evaluation, persistent Findings, Site Intelligence and workflow, and only then future AI
+interpretation. No health score or Finding
 inference belongs in the composition layer.
 
 ## External Performance Evidence

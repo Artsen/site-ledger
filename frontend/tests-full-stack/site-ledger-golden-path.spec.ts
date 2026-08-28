@@ -255,6 +255,19 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(inventoryAfterRefresh.total).toBe(1);
   expect(inventoryAfterRefresh.items[0].sources[0].entry_id).toBe(inventoryEntryId);
 
+  const queuedFindingEvaluation = await postJson(request, `${apiUrl}/api/sites/${site.id}/findings/evaluations`);
+  const findingEvaluation = await waitForFindingEvaluation(request, site.id, queuedFindingEvaluation.id);
+  expect(findingEvaluation.source_scan_id).toBe(scan3Id);
+  expect(findingEvaluation.evaluator_version).toBe("finding-evaluator-v1");
+  expect(findingEvaluation.detector_bundle_identity).toBe("finding-detectors-v1");
+  const findings = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings?limit=50`);
+  expect(findings.total).toBe(0);
+  const intelligenceWithFindings = await getJson(request, `${apiUrl}/api/sites/${site.id}/intelligence`);
+  const findingIntelligence = intelligenceWithFindings.findings as Json;
+  expect(findingIntelligence.latest_evaluation_id).toBe(findingEvaluation.id);
+  expect(findingIntelligence.detected).toBe(0);
+  expect((intelligenceWithFindings.activity as Record<string, number>).active_job_count).toBe(0);
+
   await page.goto(`/sites/${site.id}/comparisons?comparison_id=${comparisonId}`);
   await expect(page.getByRole("heading", { name: `Scan ${scan1Id} to Scan ${scan2Id}` })).toBeVisible();
   await expect(page.getByText("scan-comparison-v3", { exact: true })).toBeVisible();
@@ -283,6 +296,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     lifecycle_inventory_entry_id: inventoryEntryId,
     lifecycle_source_id: source.id,
     comparison_id: comparisonId,
+    finding_evaluation_id: findingEvaluation.id,
     deleted_scan_render_run_id: scan1RenderRun.id,
     standalone_render_run_id: completedStandaloneRenderRun.id,
     rerender_render_run_id: completedRerenderRun.id,
@@ -357,6 +371,16 @@ async function waitForAutomaticComparison(request: APIRequestContext, siteId: nu
     if (value.comparison.active_build?.status === "failed") throw new Error(`Comparison failed: ${JSON.stringify(value)}`);
     return null;
   }, "automatic adjacent comparison");
+}
+
+async function waitForFindingEvaluation(request: APIRequestContext, siteId: number, evaluationId: number): Promise<Json> {
+  return poll(async () => {
+    const value = await getJson(request, `${apiUrl}/api/sites/${siteId}/findings/evaluations/${evaluationId}`);
+    if (["failed", "cancelled"].includes(value.status)) {
+      throw new Error(`Finding evaluation failed: ${JSON.stringify(value)}`);
+    }
+    return value.status === "completed" ? value : null;
+  }, `Finding evaluation ${evaluationId}`);
 }
 
 async function collectEvidence(request: APIRequestContext, siteId: number, scanId: number): Promise<Record<string, Evidence>> {

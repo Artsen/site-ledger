@@ -36,6 +36,7 @@ The current application implements:
 - Immutable PageSpeed lab and CrUX field observations collected independently of Scans.
 - Immutable automated Accessibility observations with pinned detector and browser provenance.
 - Scan, source, Site, and Activity lifecycle management.
+- Persistent deterministic Findings with evidence-linked lifecycle and acknowledgement workflow.
 
 ## Product Vocabulary
 
@@ -79,6 +80,12 @@ layout and camera state are not persisted.
 ### Activity
 
 Durable background execution, lifecycle events, leases, cancellation, and worker status.
+
+### Finding
+
+A persistent logical condition inferred deterministically from exact retained evidence. A Finding
+has immutable assessments and independent mutable acknowledgement workflow; unknown evidence never
+means resolved. See [Findings](findings.md).
 
 ### Scan Projection
 
@@ -125,7 +132,7 @@ captured evidence run on the operator's machine. This keeps sensitive crawl evid
 control and makes development straightforward. The SQLAlchemy and content-store boundaries are
 intended to allow PostgreSQL and object storage later without changing the product model.
 
-## Four Conceptual Layers
+## Conceptual Layers
 
 Site Intelligence sits between deterministic derivatives and future interpretation. It composes
 the current operational view without becoming new evidence or persisted state. Active Site Pages
@@ -148,24 +155,25 @@ This layer is only partially represented through Page history, content hashes, r
 and exact reuse provenance. Site Ledger provides deterministic same-Site Scan comparison and Page
 Change History without interpreting those facts as Findings.
 
-### Interpretation
+### Deterministic Findings And Interpretation
 
 Rules, statistics, models, or AI that explain evidence.
 
-Findings, semantic analysis, and AI explanations are future direction. Automated Accessibility and
-Performance collection are implemented evidence domains, not interpretive Findings or compliance
-or regression conclusions.
+The first deterministic Finding evaluator and HTTP-error detector are implemented with persistent
+logical lifecycle and immutable evidence-linked assessments. Additional detector packs, semantic
+analysis, and AI explanations remain future direction. Automated Accessibility and Performance
+collection are evidence domains, not automatically Finding or compliance conclusions.
 
 ### Workflow
 
-Site Ledger now provides lightweight Page organization, freeform owner labels, workflow status, and
-plain-text notes. Authenticated ownership, assignments to users, findings, investigations,
-permissions, and resolution workflow remain future direction.
+Site Ledger provides lightweight Page organization, freeform owner labels, workflow status,
+plain-text notes, and Finding acknowledgement. Authenticated ownership, assignments to users,
+investigations, permissions, and richer resolution workflow remain future direction.
 
 ## Roadmap
 
 Planned areas include Resource-body analysis, environment comparisons,
-findings, performance regression interpretation, analytics
+additional Finding detector packs, performance regression interpretation, analytics
 integrations, semantic analysis, and investigation workflow.
 
 New work should preserve the separation between evidence, deterministic comparison, interpretation,
@@ -176,8 +184,9 @@ and workflow. Interpretation must remain traceable to the observations that supp
 - Browser rendering is bounded optional Page evidence, not browser-only crawling or Resource discovery.
 - Cross-Site and environment comparison are not implemented. Same-Site Scan comparison is
   documented in [Deterministic Scan comparisons](scan-comparisons.md).
-- Resource-body storage and analysis, Findings, analytics, semantic embeddings, and AI summaries
-  are not implemented. Automated Accessibility and Performance evidence collection is current.
+- Resource-body storage and analysis, broad Finding detector packs, analytics, semantic embeddings,
+  and AI summaries are not implemented. HTTP-error Findings and Automated Accessibility and
+  Performance evidence collection are current.
 - Authenticated and private-network crawling are not supported.
 - Robots.txt enforcement and within-crawl concurrency remain deferred.
 - Graph views are bounded and scan-specific, not persistent site-wide knowledge graphs.

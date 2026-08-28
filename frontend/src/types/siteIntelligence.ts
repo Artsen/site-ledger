@@ -122,6 +122,15 @@ export type SiteIntelligence = {
     latest_refresh_status: string | null;
     latest_refresh_finished_at: string | null;
   };
+  findings: {
+    detected: number;
+    unknown: number;
+    acknowledged_detected: number;
+    unresolved_total: number;
+    latest_evaluation_id: number | null;
+    latest_evidence_horizon_at: string | null;
+    latest_evaluation_completed_at: string | null;
+  };
   activity: {
     active_job_count: number;
     queued_count: number;

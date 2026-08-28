@@ -21,6 +21,12 @@ from app.models.comparisons import (
     ScanComparisonResourceResult,
     ScanComparisonSummary,
 )
+from app.models.findings import (
+    Finding,
+    FindingAssessment,
+    FindingEvaluation,
+    FindingEvidenceReference,
+)
 from app.models.performance import (
     PerformanceObservation,
     PerformancePayloadBlob,
@@ -91,6 +97,10 @@ __all__ = [
     "AiDocumentValidation",
     "BackgroundJob",
     "ContentBlob",
+    "Finding",
+    "FindingAssessment",
+    "FindingEvaluation",
+    "FindingEvidenceReference",
     "HtmlParseAnchor",
     "HtmlParseArtifact",
     "HtmlParseResourceReference",

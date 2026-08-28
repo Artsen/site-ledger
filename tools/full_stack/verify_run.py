@@ -18,6 +18,8 @@ from app.models import (
     ArtifactBlob,
     BackgroundJob,
     ContentBlob,
+    Finding,
+    FindingEvaluation,
     HtmlStructuredContentArtifact,
     HtmlStructuredContentNode,
     RenderedArtifact,
@@ -258,6 +260,16 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             )
         )
         assert active_jobs == 0
+        finding_evaluation = db.get(FindingEvaluation, int(result["finding_evaluation_id"]))
+        assert finding_evaluation is not None
+        assert finding_evaluation.status == "completed"
+        assert finding_evaluation.source_scan_id == lifecycle_scan_id
+        assert finding_evaluation.evaluator_version == "finding-evaluator-v1"
+        assert finding_evaluation.detector_bundle_identity == "finding-detectors-v1"
+        assert (
+            db.scalar(select(func.count(Finding.id)).where(Finding.website_property_id == site.id))
+            == 0
+        )
         all_jobs = list(db.scalars(select(BackgroundJob)))
         assert all_jobs
         assert all(job.status == "completed" for job in all_jobs)

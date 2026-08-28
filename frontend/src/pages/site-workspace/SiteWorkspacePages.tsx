@@ -20,6 +20,7 @@ import { formatDate } from "../../utils/format";
 import { useUrlPagination } from "../../utils/useUrlPagination";
 import type { SiteWorkspaceContext } from "./SiteWorkspaceLayout";
 import { SiteIntelligenceOverview } from "./SiteIntelligenceOverview";
+import { SiteFindingDetailPage as FindingDetail, SiteFindingsWorkspace } from "./SiteFindingsWorkspace";
 
 function useSiteWorkspace() {
   return useOutletContext<SiteWorkspaceContext>().site;
@@ -31,6 +32,14 @@ export function SiteOverviewPage() {
 
 export function SitePagesPage() {
   return <SitePagesSection site={useSiteWorkspace()} />;
+}
+
+export function SiteFindingsPage() {
+  return <SiteFindingsWorkspace site={useSiteWorkspace()} />;
+}
+
+export function SiteFindingDetailPage() {
+  return <FindingDetail site={useSiteWorkspace()} />;
 }
 
 export function SiteResourcesPage() {
@@ -133,6 +142,7 @@ const legacyAreas: Record<string, SiteArea> = {
   overview: "overview", scans: "scans", pages: "pages", resources: "resources", sources: "sources",
   inventory: "inventory", comparisons: "comparisons", categories: "categories", notes: "notes", graph: "graph",
   performance: "performance",
+  findings: "findings",
 };
 
 export function LegacySiteRedirect() {
