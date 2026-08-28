@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from sqlalchemy import and_, case, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import Select
 
 from app.crawler.canonical_document import (
@@ -161,9 +161,11 @@ def _scan_state(db: Session, site_id: int, active_total: int) -> ScanIntelligenc
 
 
 def _comparison_state(db: Session, site_id: int) -> ComparisonIntelligenceRead:
+    target_scan = aliased(Scan)
     row = db.execute(
-        select(ScanComparison, ScanComparisonBuild, ScanComparisonSummary)
+        select(ScanComparison, ScanComparisonBuild, ScanComparisonSummary, target_scan)
         .join(ScanComparisonBuild, ScanComparison.current_build_id == ScanComparisonBuild.id)
+        .join(target_scan, target_scan.id == ScanComparison.target_scan_id)
         .outerjoin(
             ScanComparisonSummary,
             ScanComparisonSummary.comparison_build_id == ScanComparisonBuild.id,
@@ -174,12 +176,16 @@ def _comparison_state(db: Session, site_id: int) -> ComparisonIntelligenceRead:
             ScanComparisonBuild.comparison_version == SCAN_COMPARISON_VERSION,
             ScanComparisonBuild.algorithm_identity == SCAN_COMPARISON_ALGORITHM,
         )
-        .order_by(ScanComparisonBuild.finished_at.desc(), ScanComparisonBuild.id.desc())
+        .order_by(
+            target_scan.created_at.desc(),
+            target_scan.id.desc(),
+            ScanComparison.id.desc(),
+        )
         .limit(1)
     ).first()
     if row is None:
         return ComparisonIntelligenceRead(present=False, clock=EvidenceClock())
-    comparison, build, summary = row
+    comparison, build, summary, target = row
     return ComparisonIntelligenceRead(
         present=True,
         comparison_id=comparison.id,
@@ -192,7 +198,7 @@ def _comparison_state(db: Session, site_id: int) -> ComparisonIntelligenceRead:
         resource_counts=summary.resource_counts_json if summary else {},
         link_counts=summary.link_counts_json if summary else {},
         clock=EvidenceClock(
-            latest_observed_at=build.finished_at or build.created_at,
+            latest_observed_at=target.finished_at or target.created_at,
             latest_completed_at=build.finished_at,
             source_comparison_id=comparison.id,
             source_status=build.status,

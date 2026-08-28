@@ -625,6 +625,170 @@ def test_only_current_compatible_comparison_is_presented(db_session) -> None:
     assert present.comparison.page_counts == {"substantive_change": 2}
 
 
+def test_latest_comparison_follows_target_scan_not_later_rebuild(db_session) -> None:
+    site = _comparison_site(db_session, "Comparison chronology")
+    scans = [
+        Scan(
+            website_property_id=site.id,
+            starting_url=site.base_url,
+            status="completed",
+            scope_config={},
+            created_at=datetime(2026, 8, day, tzinfo=UTC),
+        )
+        for day in (20, 21, 24, 25)
+    ]
+    db_session.add_all(scans)
+    db_session.flush()
+    older = ScanComparison(
+        website_property_id=site.id,
+        baseline_scan_id=scans[0].id,
+        target_scan_id=scans[1].id,
+    )
+    newer = ScanComparison(
+        website_property_id=site.id,
+        baseline_scan_id=scans[2].id,
+        target_scan_id=scans[3].id,
+    )
+    db_session.add_all([older, newer])
+    db_session.flush()
+    older_rebuilt_later = _current_comparison_build(
+        older.id, finished_at=datetime(2026, 8, 28, tzinfo=UTC)
+    )
+    newer_built_earlier = _current_comparison_build(
+        newer.id, finished_at=datetime(2026, 8, 27, tzinfo=UTC)
+    )
+    db_session.add_all([older_rebuilt_later, newer_built_earlier])
+    db_session.flush()
+    older.current_build_id = older_rebuilt_later.id
+    newer.current_build_id = newer_built_earlier.id
+    db_session.commit()
+
+    result = get_site_intelligence(db_session, site.id)
+
+    assert result is not None
+    assert result.comparison.comparison_id == newer.id
+    assert result.comparison.build_id == newer_built_earlier.id
+    assert result.comparison.target_scan_id == scans[3].id
+
+
+def test_comparison_clock_separates_target_evidence_from_build_completion(db_session) -> None:
+    monday = datetime(2026, 8, 24, 9, tzinfo=UTC)
+    friday = datetime(2026, 8, 28, 17, tzinfo=UTC)
+    site = _comparison_site(db_session, "Comparison clock")
+    baseline = Scan(
+        website_property_id=site.id,
+        starting_url=site.base_url,
+        status="completed",
+        scope_config={},
+        created_at=datetime(2026, 8, 23, tzinfo=UTC),
+    )
+    target = Scan(
+        website_property_id=site.id,
+        starting_url=site.base_url,
+        status="completed",
+        scope_config={},
+        created_at=monday,
+        finished_at=monday,
+    )
+    db_session.add_all([baseline, target])
+    db_session.flush()
+    comparison = ScanComparison(
+        website_property_id=site.id,
+        baseline_scan_id=baseline.id,
+        target_scan_id=target.id,
+    )
+    db_session.add(comparison)
+    db_session.flush()
+    build = _current_comparison_build(comparison.id, finished_at=friday)
+    db_session.add(build)
+    db_session.flush()
+    comparison.current_build_id = build.id
+    db_session.commit()
+
+    result = get_site_intelligence(db_session, site.id)
+
+    assert result is not None
+    assert result.comparison.clock.latest_observed_at == monday
+    assert result.comparison.clock.latest_completed_at == friday
+    assert result.comparison.clock.source_comparison_id == comparison.id
+    assert friday != result.comparison.clock.latest_observed_at
+
+
+def test_newest_compatible_current_comparison_build_wins_over_newer_legacy(db_session) -> None:
+    site = _comparison_site(db_session, "Comparison compatibility")
+    scans = [
+        Scan(
+            website_property_id=site.id,
+            starting_url=site.base_url,
+            status="completed",
+            scope_config={},
+            created_at=datetime(2026, 8, day, tzinfo=UTC),
+        )
+        for day in (20, 21, 24, 25)
+    ]
+    db_session.add_all(scans)
+    db_session.flush()
+    compatible = ScanComparison(
+        website_property_id=site.id,
+        baseline_scan_id=scans[0].id,
+        target_scan_id=scans[1].id,
+    )
+    incompatible = ScanComparison(
+        website_property_id=site.id,
+        baseline_scan_id=scans[2].id,
+        target_scan_id=scans[3].id,
+    )
+    db_session.add_all([compatible, incompatible])
+    db_session.flush()
+    current = _current_comparison_build(
+        compatible.id, finished_at=datetime(2026, 8, 26, tzinfo=UTC)
+    )
+    legacy = ScanComparisonBuild(
+        scan_comparison_id=incompatible.id,
+        comparison_version="scan-comparison-v2",
+        algorithm_identity="legacy",
+        status="ready",
+        finished_at=datetime(2026, 8, 27, tzinfo=UTC),
+    )
+    db_session.add_all([current, legacy])
+    db_session.flush()
+    compatible.current_build_id = current.id
+    incompatible.current_build_id = legacy.id
+    db_session.commit()
+
+    result = get_site_intelligence(db_session, site.id)
+
+    assert result is not None
+    assert result.comparison.present is True
+    assert result.comparison.comparison_id == compatible.id
+    assert result.comparison.build_id == current.id
+
+
+def _comparison_site(db_session, name: str) -> WebsiteProperty:
+    site = WebsiteProperty(
+        name=name,
+        base_url="https://comparison-chronology.test/",
+        normalized_base_url="https://comparison-chronology.test/",
+        group_key="Other",
+        platform_key="Other",
+        ownership_key="Unknown",
+        scope_config={},
+    )
+    db_session.add(site)
+    db_session.flush()
+    return site
+
+
+def _current_comparison_build(comparison_id: int, *, finished_at: datetime) -> ScanComparisonBuild:
+    return ScanComparisonBuild(
+        scan_comparison_id=comparison_id,
+        comparison_version=SCAN_COMPARISON_VERSION,
+        algorithm_identity=SCAN_COMPARISON_ALGORITHM,
+        status="ready",
+        finished_at=finished_at,
+    )
+
+
 def test_latest_render_run_targets_are_distinct_from_retained_site_coverage(db_session) -> None:
     site = WebsiteProperty(
         name="Render coverage",
