@@ -27,6 +27,7 @@ from app.services.inventory_lifecycle import (
     inventory_suppression_map,
     matching_inventory_suppression,
 )
+from app.services.url_identity import active_url_normalization_version
 
 
 def list_sources(
@@ -169,13 +170,16 @@ def list_inventory(
             )
         )
     )
+    active_version = active_url_normalization_version(db)
     grouped: dict[tuple[str, str], list[UrlSourceEntry]] = defaultdict(list)
     for entry in entries:
-        key = inventory_group_identity(db, site, entry)
+        key = inventory_group_identity(db, site, entry, active_version=active_version)
         grouped[key].append(entry)
-    suppressions = inventory_suppression_map(db, site)
+    suppressions = inventory_suppression_map(db, site, active_version=active_version)
     suppression_by_key = {
-        key: matching_inventory_suppression(db, site, members[0], suppressions)
+        key: matching_inventory_suppression(
+            db, site, members[0], suppressions, active_version=active_version
+        )
         for key, members in grouped.items()
     }
     keys = sorted(

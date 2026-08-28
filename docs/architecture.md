@@ -273,6 +273,23 @@ static evidence, Performance evidence, or Accessibility evidence it describes.
 
 Stored HTML is rendered only as escaped text. The raw HTML endpoint returns text/plain.
 
+## Site Intelligence Composition
+
+Site Intelligence is a typed, read-only composition over authoritative workspace state, evidence,
+and deterministic derivatives. It is not evidence, a projection, or a persisted dashboard. The
+default operational Page denominator is the set of active SitePage workspaces; suppressed Pages
+and deleted workspaces retain historical evidence without inflating current coverage.
+
+Static Scans, Render, Performance, Accessibility, Structured Content, Sources, and Comparisons
+retain independent clocks and provenance. The latest Scan never acts as a global Site timestamp.
+Coverage always exposes integer numerator and denominator values, with a null ratio when the
+denominator is zero. Missing evidence never implies a healthy state. The read endpoint does not
+prepare Structured Content, rebuild projections or comparisons, enqueue work, or mutate state.
+
+The architectural sequence is: retained evidence, deterministic derivatives, Site Intelligence
+composition, future Findings, and only then future AI interpretation. No health score or Finding
+inference belongs in the composition layer.
+
 ## External Performance Evidence
 
 Performance collection is independent of Scan execution. A durable `PerformanceRun` invokes fixed

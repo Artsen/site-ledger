@@ -127,6 +127,12 @@ intended to allow PostgreSQL and object storage later without changing the produ
 
 ## Four Conceptual Layers
 
+Site Intelligence sits between deterministic derivatives and future interpretation. It composes
+the current operational view without becoming new evidence or persisted state. Active Site Pages
+define Page coverage denominators, each evidence domain keeps its own observation clock, and every
+coverage statement includes its numerator and denominator. Missing evidence is reported as
+missing, never as good. There is no global Site health score.
+
 ### Observation
 
 What was actually recorded: Pages, Resources, observations, links, Sources, Inventory, stored HTML

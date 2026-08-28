@@ -15,23 +15,18 @@ import { Button } from "../../components/ui/Button";
 import { ScanGraphView } from "../../features/graph/ScanGraphView";
 import { siteAreaHref, type SiteArea } from "../../navigation/workspaceNavigation";
 import { SiteFormPage } from "../SiteFormPage";
-import {
-  SiteCategoriesSection,
-  SiteInventorySection,
-  SiteOverviewSection,
-  SitePagesSection,
-  SiteSourcesSection,
-} from "../SiteWorkspaceSections";
+import { SiteCategoriesSection, SiteInventorySection, SitePagesSection, SiteSourcesSection } from "../SiteWorkspaceSections";
 import { formatDate } from "../../utils/format";
 import { useUrlPagination } from "../../utils/useUrlPagination";
 import type { SiteWorkspaceContext } from "./SiteWorkspaceLayout";
+import { SiteIntelligenceOverview } from "./SiteIntelligenceOverview";
 
 function useSiteWorkspace() {
   return useOutletContext<SiteWorkspaceContext>().site;
 }
 
 export function SiteOverviewPage() {
-  return <SiteOverviewSection site={useSiteWorkspace()} />;
+  return <SiteIntelligenceOverview site={useSiteWorkspace()} />;
 }
 
 export function SitePagesPage() {

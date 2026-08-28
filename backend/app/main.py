@@ -16,6 +16,7 @@ from app.api.comparison_routes import router as comparison_router
 from app.api.performance_routes import router as performance_router
 from app.api.render_routes import router as render_router
 from app.api.routes import router
+from app.api.site_intelligence_routes import router as site_intelligence_router
 from app.api.structured_content_routes import router as structured_content_router
 from app.config import get_settings
 from app.database import SessionLocal
@@ -103,6 +104,7 @@ def create_app(*, session_factory: Callable[[], Session] = SessionLocal) -> Fast
     app.include_router(structured_content_router)
     app.include_router(performance_router)
     app.include_router(render_router)
+    app.include_router(site_intelligence_router)
     return app
 
 

@@ -44,6 +44,8 @@ Python app package.
   from one Site while preserving coverage semantics and immutable evidence provenance.
 - **Structured content:** A ContentBlob-scoped, versioned deterministic derivative representing
   source-derived heading and section structure with direct text.
+- **Site Intelligence:** A read-only, non-persisted composition of current Site workspace state,
+  deterministic derivatives, evidence coverage, independent domain clocks, and active work.
 
 Use Page instead of WebResource in product copy. Use Observation where Snapshot would be
 unnecessarily technical. Internal classes, API fields, routes, and developer documentation may use
@@ -78,6 +80,8 @@ Implemented capabilities include:
   exact/normalized source, document-content, metadata, technical states, exact drill-down, and
   persistent Page Change History.
 - Scan, source, Site, and Activity lifecycle management.
+- A Site Intelligence Overview with explicit active-Page denominators and independent static,
+  Render, Performance, Accessibility, Structured Content, Source, and Comparison provenance.
 
 Findings and investigation records, GA4/Search Console, section-level comparison,
 structured-content full-text search, Resource/PDF body extraction,
@@ -132,6 +136,9 @@ behavior. Keep storage behind the existing content-store abstraction.
   ResourceReferenceOccurrence, and services.resource_queries own Resource Inventory classification,
   evidence, and reads.
 - services.page_queries owns persistent Page catalogs and observation history.
+- schemas.site_intelligence, services.site_intelligence, and api.site_intelligence_routes own the
+  read-only Site Intelligence composition model. It must use active SitePages as the operational
+  Page denominator, retain independent evidence clocks, and never prepare or persist derivatives.
 - services.site_pages, services.page_categories, and services.notes own Site-scoped Page workflow.
 - services.category_rules and services.category_rule_evaluator own automatic Category provenance,
   preview, reconciliation, and evaluation history.

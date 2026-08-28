@@ -162,6 +162,24 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(evidence1["/technical/"].structured.document_text_sha256).toBe(evidence2["/technical/"].structured.document_text_sha256);
   expect(evidence1["/technical/"].structured.outline_sha256).toBe(evidence2["/technical/"].structured.outline_sha256);
 
+  const intelligence = await getJson(request, `${apiUrl}/api/sites/${site.id}/intelligence`);
+  const pagePopulation = intelligence.page_population as Record<string, number>;
+  const scanIntelligence = intelligence.scan as Json;
+  const comparisonIntelligence = intelligence.comparison as Json;
+  const structuredIntelligence = intelligence.structured_content as Json;
+  const activityIntelligence = intelligence.activity as Record<string, number>;
+  expect(pagePopulation.active_page_total).toBe(5);
+  expect(scanIntelligence.id).toBe(scan2Id);
+  expect(comparisonIntelligence.comparison_id).toBe(comparisonId);
+  expect(comparisonIntelligence.comparison_version).toBe("scan-comparison-v3");
+  expect(structuredIntelligence.extractor_version).toBe("structured-content-v2");
+  expect(structuredIntelligence.extractor_config_version).toBe("canonical-document-v1");
+  expect(activityIntelligence.active_job_count).toBe(0);
+  await page.goto(`/sites/${site.id}`);
+  await expect(page.getByRole("heading", { name: "Site state" })).toBeVisible();
+  await expect(page.getByText("Structured Content V2", { exact: true })).toBeVisible();
+  await expect(page.getByText("No Site collection or build work is active.")).toBeVisible();
+
   const activePages = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages?workspace_state=active&limit=50`);
   expect(activePages.total).toBe(5);
   const pricingPage = activePages.items.find((item) => new URL(item.normalized_url).pathname === "/pricing/");

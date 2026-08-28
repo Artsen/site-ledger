@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import cast
 
 from sqlalchemy import select
@@ -16,6 +17,12 @@ from app.services.url_identity import active_url_normalization_version
 
 class ManagedSourceEntryError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class InventorySummary:
+    active_count: int
+    suppressed_count: int
 
 
 def create_inventory_suppression(
@@ -228,9 +235,12 @@ def remove_manual_source_entry(
 
 
 def inventory_suppression_map(
-    db: Session, site: WebsiteProperty
+    db: Session,
+    site: WebsiteProperty,
+    *,
+    active_version: str | None = None,
 ) -> dict[tuple[str, str], SiteInventorySuppression]:
-    active_version = active_url_normalization_version(db)
+    active_version = active_version or active_url_normalization_version(db)
     result: dict[tuple[str, str], SiteInventorySuppression] = {}
     for suppression in db.scalars(
         select(SiteInventorySuppression).where(
@@ -262,13 +272,17 @@ def matching_inventory_suppression(
     site: WebsiteProperty,
     entry: UrlSourceEntry,
     suppressions: dict[tuple[str, str], SiteInventorySuppression] | None = None,
+    *,
+    active_version: str | None = None,
 ) -> SiteInventorySuppression | None:
     suppression_map = (
-        suppressions if suppressions is not None else inventory_suppression_map(db, site)
+        suppressions
+        if suppressions is not None
+        else inventory_suppression_map(db, site, active_version=active_version)
     )
     if entry.normalized_url is None:
         return suppression_map.get(("raw_url", entry.raw_url))
-    active_version = active_url_normalization_version(db)
+    active_version = active_version or active_url_normalization_version(db)
     try:
         current_value = normalize_url_for_version(
             entry.raw_url,
@@ -296,11 +310,15 @@ def matching_inventory_suppression(
 
 
 def inventory_suppression_identity(
-    db: Session, site: WebsiteProperty, entry: UrlSourceEntry
+    db: Session,
+    site: WebsiteProperty,
+    entry: UrlSourceEntry,
+    *,
+    active_version: str | None = None,
 ) -> tuple[str, str, str | None]:
     if entry.normalized_url is None:
         return "raw_url", entry.raw_url, None
-    version = active_url_normalization_version(db)
+    version = active_version or active_url_normalization_version(db)
     normalized = normalize_url_for_version(
         entry.raw_url,
         normalization_version=version,
@@ -310,7 +328,53 @@ def inventory_suppression_identity(
 
 
 def inventory_group_identity(
-    db: Session, site: WebsiteProperty, entry: UrlSourceEntry
+    db: Session,
+    site: WebsiteProperty,
+    entry: UrlSourceEntry,
+    *,
+    active_version: str | None = None,
 ) -> tuple[str, str]:
-    kind, value, _version = inventory_suppression_identity(db, site, entry)
+    kind, value, _version = inventory_suppression_identity(
+        db, site, entry, active_version=active_version
+    )
     return kind, value
+
+
+def summarize_current_inventory(
+    db: Session, site: WebsiteProperty, *, batch_size: int = 500
+) -> InventorySummary:
+    """Summarize current Inventory with the workspace's version-aware identity contract."""
+    identities: dict[tuple[str, str], bool] = {}
+    active_version: str | None = None
+    suppressions: dict[tuple[str, str], SiteInventorySuppression] | None = None
+    entries = db.scalars(
+        select(UrlSourceEntry)
+        .join(UrlSource, UrlSource.id == UrlSourceEntry.url_source_id)
+        .where(
+            UrlSource.website_property_id == site.id,
+            UrlSourceEntry.is_current.is_(True),
+        )
+        .execution_options(yield_per=batch_size)
+    )
+    for entry in entries:
+        if active_version is None:
+            active_version = active_url_normalization_version(db)
+            suppressions = inventory_suppression_map(db, site, active_version=active_version)
+        assert suppressions is not None
+        identity = inventory_group_identity(db, site, entry, active_version=active_version)
+        is_suppressed = (
+            matching_inventory_suppression(
+                db,
+                site,
+                entry,
+                suppressions,
+                active_version=active_version,
+            )
+            is not None
+        )
+        identities[identity] = identities.get(identity, False) or is_suppressed
+    suppressed_count = sum(identities.values())
+    return InventorySummary(
+        active_count=len(identities) - suppressed_count,
+        suppressed_count=suppressed_count,
+    )
