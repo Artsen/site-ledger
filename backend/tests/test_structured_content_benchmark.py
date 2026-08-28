@@ -8,4 +8,8 @@ def test_structured_content_benchmark_fixture_preserves_reuse_and_determinism() 
     assert result["fixture"]["unique_blobs"] == 15
     assert result["fixture"]["reused_observations"] == 5
     assert result["fixture"]["artifacts"] == 15
+    assert result["fixture"]["structural_nodes"] > 15
+    assert result["fixture"]["structural_nodes_per_blob"] > 1
+    assert result["markdown_render_latency_ms"]["max"] >= 0
+    assert result["v2_rebuild_latency_ms"]["max"] >= 0
     assert result["deterministic_rebuild_equivalence"] is True

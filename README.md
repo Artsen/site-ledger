@@ -68,8 +68,8 @@ See [Resource Inventory](docs/resource-inventory.md) for classification, provena
 boundaries.
 See [Scan projections](docs/scan-projections.md) for terminal-result indexing, fallback, and rebuild
 behavior.
-See [Structured Page Content](docs/structured-page-content.md) for source-text extraction,
-historical preparation, and Content-tab semantics.
+See [Structured Page Content](docs/structured-page-content.md) for canonical source-document
+extraction, deterministic Markdown, historical preparation, and Content-tab semantics.
 See [Page Category Rules](docs/page-category-rules.md) and
 [Site display timezones](docs/site-timezones.md) for mutable Site organization and presentation.
 See [Performance observations](docs/performance-observations.md) for external provider evidence,

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { getHtml, getInboundLinks, getLinks, getRenderedObservation, getSnapshot, getSnapshotStructuredContent, getStaticFetchAttempts, prepareSnapshotStructuredContent } from "../api/client";
+import { getHtml, getInboundLinks, getLinks, getRenderedObservation, getSnapshot, getSnapshotStructuredContent, getSnapshotStructuredDocument, getSnapshotStructuredMarkdown, getStaticFetchAttempts, prepareSnapshotStructuredContent } from "../api/client";
 import { RenderedObservationView } from "../components/RenderedObservationView";
 import { StructuredContentView } from "../components/StructuredContentView";
 import { LinkRoleBadge } from "../components/PageOrganization";
@@ -84,7 +84,7 @@ export function PageDetailPage() {
         {tab === "head" ? <HeadView snapshot={snapshot.data} /> : null}
         {tab === "links" ? <LinksView links={links.data ?? []} loading={links.isLoading} error={links.error} /> : null}
         {tab === "inbound" ? <InboundLinksView inbound={inboundLinks.data} loading={inboundLinks.isLoading} error={inboundLinks.error} searchParams={searchParams} setSearchParams={setSearchParams} scanId={scanId} /> : null}
-        {tab === "content" ? <StructuredContentView queryKey={["snapshot-structured-content", snapshotId]} load={() => getSnapshotStructuredContent(snapshotId)} prepare={() => prepareSnapshotStructuredContent(snapshotId)} /> : null}
+        {tab === "content" ? <StructuredContentView queryKey={["snapshot-structured-content", snapshotId]} load={() => getSnapshotStructuredContent(snapshotId)} prepare={() => prepareSnapshotStructuredContent(snapshotId)} loadDocument={() => getSnapshotStructuredDocument(snapshotId)} loadMarkdown={() => getSnapshotStructuredMarkdown(snapshotId)} /> : null}
         {tab === "html" ? <HtmlView html={html.data ?? ""} loading={html.isLoading} error={html.error} /> : null}
         {tab === "rendered" && rendered.data ? <RenderedObservationView observation={rendered.data} /> : null}
       </div>

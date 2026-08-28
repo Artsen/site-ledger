@@ -36,8 +36,9 @@ current implementations.
   provenance only. ArtifactBlob, RenderedArtifact, and bounded event rows preserve exact evidence.
 - HtmlParseArtifact, HtmlParseAnchor, and HtmlParseResourceReference store reusable deterministic
   parse output.
-- HtmlStructuredContentArtifact and HtmlStructuredContentSection store versioned, ContentBlob-scoped
-  heading hierarchy and direct source text without link resolution.
+- HtmlStructuredContentArtifact and HtmlStructuredContentNode store the current versioned,
+  ContentBlob-scoped canonical document with bounded inline runs and unresolved relative URLs.
+  HtmlStructuredContentSection remains historical V1 derivative state.
 - Scan stores one bounded collection run and its copied effective scope.
 - UrlSource, SourceRefresh, and UrlSourceEntry store URL-source configuration and Inventory.
 - AiDocumentRefresh, AiDocumentSnapshot, AiDocumentReference, and AiDocumentBlob preserve immutable
@@ -62,8 +63,9 @@ Observation where the implementation names would be unnecessarily technical.
   redirects.
 - crawler.html_parser extracts head metadata, anchors, and embedded Resource references from
   best-effort HTML.
-- crawler.structured_content extracts bounded source-derived outlines and sections independently
-  from comparison document identity.
+- crawler.canonical_document extracts the bounded Structured Content V2 canonical IR and renders
+  deterministic Markdown independently from comparison document identity. DOM paths are
+  provenance and Markdown is not canonical truth.
 - crawler.static_crawler performs breadth-first traversal and persists partial results.
 - storage.content_store stores exact response bytes as gzip-compressed, content-addressed blobs.
 

@@ -676,7 +676,7 @@ test("structured content is inspectable on exact observations and persistent Pag
 
   await page.goto("/sites/3/pages/2?tab=content");
   await expect(page.getByText("Scan 1, observation 9")).toBeVisible();
-  await expect(page.getByText("structured-content-v1 / default-v1")).toBeVisible();
+  await expect(page.getByText("structured-content-v2 / canonical-document-v1")).toBeVisible();
 });
 
 test("numbered pagination stays URL-backed and isolated between Scan tabs", async ({ page }) => {
@@ -2110,7 +2110,7 @@ function structuredContentFixture() {
   return {
     status: "ready", reason: null,
     provenance: { snapshot_id: 9, scan_id: 1, site_id: 3, content_blob_id: 7, raw_html_sha256: "a".repeat(64), requested_url: "https://example.com/pricing", final_url: "https://example.com/pricing", fetched_at: "2026-08-06T01:00:00Z", retrieval_method: "full_fetch", reused_from_snapshot_id: null },
-    artifact: { id: 5, extractor_version: "structured-content-v1", extractor_config_version: "default-v1", extraction_state: "ready", document_profile: "headed", section_count: 2, heading_count: 2, heading_counts: { h1: 1, h2: 1, h3: 0, h4: 0, h5: 0, h6: 0 }, document_word_count: 8, document_character_count: 80, document_text_sha256: "b".repeat(64), outline_sha256: "c".repeat(64), is_truncated: false, truncation_reasons: [], created_at: "2026-08-06T01:00:01Z" },
+    artifact: { id: 5, extractor_version: "structured-content-v2", extractor_config_version: "canonical-document-v1", extraction_state: "ready", document_profile: "headed", section_count: 2, heading_count: 2, heading_counts: { h1: 1, h2: 1, h3: 0, h4: 0, h5: 0, h6: 0 }, document_word_count: 8, document_character_count: 80, document_text_sha256: "b".repeat(64), outline_sha256: "c".repeat(64), is_truncated: false, truncation_reasons: [], node_count: 5, canonical_document_sha256: "g".repeat(64), markdown_renderer_version: "structured-markdown-v1", markdown_sha256: "h".repeat(64), markdown_character_count: 80, created_at: "2026-08-06T01:00:01Z" },
     items: [
       section(10, null, 0, 1, "Page title", "Page introduction"),
       section(11, 10, 1, 2, "Details", "<script>window.structuredExecuted = true</script> Visible text"),

@@ -4,6 +4,10 @@ from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from starlette.routing import Route
 
+from app.crawler.canonical_document import (
+    STRUCTURED_CONTENT_CONFIG_VERSION,
+    STRUCTURED_CONTENT_EXTRACTOR_VERSION,
+)
 from app.crawler.safe_fetch import connect_error_type
 from app.crawler.scope import ScopeConfig
 from app.crawler.static_crawler import StaticPageCrawler, _retry_after_ms
@@ -11,6 +15,7 @@ from app.models import (
     ContentBlob,
     HtmlParseArtifact,
     HtmlStructuredContentArtifact,
+    HtmlStructuredContentNode,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -688,6 +693,11 @@ async def test_repeat_scan_revalidates_and_reuses_parse_artifact(db_session, tmp
     assert db_session.query(ContentBlob).count() == 1
     assert db_session.query(HtmlParseArtifact).count() == 1
     assert db_session.query(HtmlStructuredContentArtifact).count() == 1
+    artifact = db_session.query(HtmlStructuredContentArtifact).one()
+    assert artifact.extractor_version == STRUCTURED_CONTENT_EXTRACTOR_VERSION
+    assert artifact.extractor_config_version == STRUCTURED_CONTENT_CONFIG_VERSION
+    assert artifact.node_count == db_session.query(HtmlStructuredContentNode).count()
+    assert artifact.node_count > 0
     assert requests[-1].headers["if-none-match"] == '"v1"'
 
 

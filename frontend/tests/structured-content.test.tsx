@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StructuredContentView } from "../src/components/StructuredContentView";
-import type { StructuredContent } from "../src/types/scans";
+import type { StructuredContent, StructuredContentDocument, StructuredMarkdown } from "../src/types/scans";
 
 const ready: StructuredContent = {
   status: "ready",
@@ -22,8 +22,8 @@ const ready: StructuredContent = {
   },
   artifact: {
     id: 5,
-    extractor_version: "structured-content-v1",
-    extractor_config_version: "default-v1",
+    extractor_version: "structured-content-v2",
+    extractor_config_version: "canonical-document-v1",
     extraction_state: "ready",
     document_profile: "headed",
     section_count: 2,
@@ -35,6 +35,11 @@ const ready: StructuredContent = {
     outline_sha256: "c".repeat(64),
     is_truncated: false,
     truncation_reasons: [],
+    node_count: 5,
+    canonical_document_sha256: "g".repeat(64),
+    markdown_renderer_version: "structured-markdown-v1",
+    markdown_sha256: "h".repeat(64),
+    markdown_character_count: 22,
     created_at: "2026-08-10T12:00:01Z",
   },
   items: [
@@ -72,16 +77,76 @@ describe("StructuredContentView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Collapse Page title" }));
     expect(screen.queryByRole("button", { name: /Details/ })).not.toBeInTheDocument();
   });
+
+  it("inspects canonical nodes and escaped deterministic Markdown", async () => {
+    renderView(ready, vi.fn());
+    fireEvent.click(await screen.findByRole("tab", { name: /Document/ }));
+    expect(await screen.findByText("Paragraph")).toBeInTheDocument();
+    expect(screen.getByText("Visible source text")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Markdown" }));
+    expect(
+      await screen.findByText(
+        (_, element) => element?.tagName === "PRE" && element.textContent === markdownValue.text,
+      ),
+    ).toBeInTheDocument();
+    expect(document.querySelector("script")).toBeNull();
+    expect(screen.getAllByText(/structured-markdown-v1/)).toHaveLength(2);
+  });
 });
 
 function renderView(value: StructuredContent, prepare: () => Promise<StructuredContent>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <StructuredContentView queryKey={["content"]} load={() => Promise.resolve(value)} prepare={prepare} />
+      <StructuredContentView
+        queryKey={["content"]}
+        load={() => Promise.resolve(value)}
+        prepare={prepare}
+        loadDocument={() => Promise.resolve(documentValue)}
+        loadMarkdown={() => Promise.resolve(markdownValue)}
+      />
     </QueryClientProvider>,
   );
 }
+
+const documentValue: StructuredContentDocument = {
+  ...ready,
+  items: [
+    {
+      id: 20,
+      position: 3,
+      parent_node_id: 19,
+      kind: "paragraph",
+      depth: 2,
+      source_tag: "p",
+      source_dom_path: "html > body > p",
+      region_key: "main",
+      region_dom_path: "html > body > main",
+      text: "Visible source text",
+      inline: [{ kind: "text", text: "Visible source text" }],
+      source_attributes: {},
+      semantic: {},
+      semantic_sha256: "i".repeat(64),
+      subtree_sha256: "j".repeat(64),
+      child_count: 0,
+      descendant_count: 0,
+    },
+  ],
+  total: 1,
+};
+
+afterEach(cleanup);
+
+const markdownValue: StructuredMarkdown = {
+  text: "# Page title\n\n<script>not executed</script>",
+  extractorVersion: "structured-content-v2",
+  configVersion: "canonical-document-v1",
+  rendererVersion: "structured-markdown-v1",
+  sha256: "h".repeat(64),
+  partial: false,
+  totalCharacters: 42,
+};
 
 function section(
   id: number,

@@ -743,6 +743,29 @@ export type StructuredContentSection = {
   has_direct_content: boolean;
 };
 
+export type StructuredContentArtifact = {
+  id: number;
+  extractor_version: string;
+  extractor_config_version: string;
+  extraction_state: string;
+  document_profile: string;
+  section_count: number;
+  heading_count: number;
+  heading_counts: Record<string, number>;
+  document_word_count: number;
+  document_character_count: number;
+  document_text_sha256: string;
+  outline_sha256: string;
+  is_truncated: boolean;
+  truncation_reasons: string[];
+  node_count: number;
+  canonical_document_sha256: string | null;
+  markdown_renderer_version: string | null;
+  markdown_sha256: string | null;
+  markdown_character_count: number | null;
+  created_at: string;
+};
+
 export type StructuredContent = {
   status: "ready" | "partial" | "unavailable" | "not_prepared" | "not_applicable";
   reason: string | null;
@@ -758,27 +781,45 @@ export type StructuredContent = {
     retrieval_method: string | null;
     reused_from_snapshot_id: number | null;
   } | null;
-  artifact: {
-    id: number;
-    extractor_version: string;
-    extractor_config_version: string;
-    extraction_state: string;
-    document_profile: string;
-    section_count: number;
-    heading_count: number;
-    heading_counts: Record<string, number>;
-    document_word_count: number;
-    document_character_count: number;
-    document_text_sha256: string;
-    outline_sha256: string;
-    is_truncated: boolean;
-    truncation_reasons: string[];
-    created_at: string;
-  } | null;
+  artifact: StructuredContentArtifact | null;
   items: StructuredContentSection[];
   total: number;
   limit: number;
   offset: number;
+};
+
+export type StructuredContentNode = {
+  id: number;
+  position: number;
+  parent_node_id: number | null;
+  kind: string;
+  depth: number;
+  source_tag: string | null;
+  source_dom_path: string | null;
+  region_key: string;
+  region_dom_path: string | null;
+  text: string | null;
+  inline: Array<Record<string, unknown>>;
+  source_attributes: Record<string, string>;
+  semantic: Record<string, unknown>;
+  semantic_sha256: string;
+  subtree_sha256: string;
+  child_count: number;
+  descendant_count: number;
+};
+
+export type StructuredContentDocument = Omit<StructuredContent, "items"> & {
+  items: StructuredContentNode[];
+};
+
+export type StructuredMarkdown = {
+  text: string;
+  extractorVersion: string;
+  configVersion: string;
+  rendererVersion: string;
+  sha256: string;
+  partial: boolean;
+  totalCharacters: number;
 };
 
 export type PageObservation = {

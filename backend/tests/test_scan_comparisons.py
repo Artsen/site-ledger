@@ -43,6 +43,7 @@ from app.services.scan_comparisons import (
     queue_waiting_comparisons_for_scan,
 )
 from app.services.scan_projections import create_projection_build, execute_projection_build
+from app.services.structured_content import get_or_create_structured_artifact
 from app.storage.content_store import LocalContentStore
 
 
@@ -271,6 +272,39 @@ def test_render_differences_do_not_change_comparison_or_page_history(db_session)
     baseline_render.capture_state = "completed_with_warnings"
     baseline_render.navigation_http_status = 503
     target_render.capture_state = "failed"
+    db_session.commit()
+    rebuild = create_comparison_build(db_session, comparison.id, force=True)
+    db_session.commit()
+    rebuilt = execute_comparison_build(db_session, rebuild.id)
+    assert rebuilt.comparison_checksum_sha256 == first_checksum
+
+
+def test_structured_content_preparation_does_not_change_comparison_checksum(
+    db_session, tmp_path
+) -> None:
+    site, baseline, target, _ = _fixture(db_session)
+    source = b"<main><h1>About</h1><p>Stable comparison evidence.</p></main>"
+    store = LocalContentStore(tmp_path / "structured-comparison")
+    blob = store.put_html(db_session, source, "text/html", "utf-8")
+    snapshots = list(
+        db_session.scalars(
+            select(ResourceSnapshot).where(ResourceSnapshot.raw_html_sha256 == "about")
+        )
+    )
+    assert len(snapshots) == 2
+    for snapshot in snapshots:
+        snapshot.html_blob_id = blob.id
+        snapshot.raw_html_sha256 = blob.sha256
+    db_session.commit()
+
+    _prepare(db_session, baseline, target)
+    comparison = create_comparison(db_session, site.id, baseline.id, target.id)
+    build = create_comparison_build(db_session, comparison.id)
+    db_session.commit()
+    ready = execute_comparison_build(db_session, build.id)
+    first_checksum = ready.comparison_checksum_sha256
+
+    get_or_create_structured_artifact(db_session, blob, store=store)
     db_session.commit()
     rebuild = create_comparison_build(db_session, comparison.id, force=True)
     db_session.commit()

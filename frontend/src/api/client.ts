@@ -1,4 +1,4 @@
-import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryDeletionPreview, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderDeleteImpact, RenderDeleteResult, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, RenderRun, RenderRunDetail, RenderRunList, RenderRunTargetList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanProjectionBuild, ScanProjectionStatus, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, StaticFetchAttempt, StructuredContent, UrlSource, UrlSourceEntry, UrlSourceEntryList, UrlSourceList } from "../types/scans";
+import type { BulkMutationResult, InboundLinkList, InventoryList, LinkOccurrence, ManualUrlBatchResult, Note, NoteList, OutgoingLinkList, PageCategory, PageCategoryDeletionPreview, PageCategoryList, PageList, PageObservationList, PersistentPageDetail, PersistentPageList, RenderCapabilities, RenderDeleteImpact, RenderDeleteResult, RenderedConsoleMessage, RenderedEventList, RenderedNetworkEntry, RenderedObservation, RenderedPageError, RenderRun, RenderRunDetail, RenderRunList, RenderRunTargetList, Scan, ScanDeletePreview, ScanDeleteResult, ScanHistory, ScanProjectionBuild, ScanProjectionStatus, ScanSeedList, ScopeConfig, Site, SiteList, SitePayload, SiteScans, Snapshot, SourceRefresh, StaticFetchAttempt, StructuredContent, StructuredContentDocument, StructuredMarkdown, UrlSource, UrlSourceEntry, UrlSourceEntryList, UrlSourceList } from "../types/scans";
 import type { CategoryProvenance, CategoryRule, CategoryRuleCondition, CategoryRuleList, CategoryRulePreview, CategoryRuleRun, CategoryRuleRunList } from "../types/scans";
 import type { RenderedObservationIndexList, ResourceDetail, ResourceHistoryList, ResourceInventoryList, ResourceOccurrenceList, ResourceSummary } from "../types/scans";
 import type { GraphCapabilities, GraphEdgeOccurrenceList, GraphResponse } from "../types/graph";
@@ -20,6 +20,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw errorFromResponse(response.status, await response.text());
   }
   return response.json() as Promise<T>;
+}
+
+async function structuredMarkdown(path: string): Promise<StructuredMarkdown> {
+  const response = await fetch(`${API_BASE}${path}`);
+  if (!response.ok) throw errorFromResponse(response.status, await response.text());
+  return {
+    text: await response.text(),
+    extractorVersion: response.headers.get("X-Structured-Content-Extractor") ?? "unknown",
+    configVersion: response.headers.get("X-Structured-Content-Config") ?? "unknown",
+    rendererVersion: response.headers.get("X-Structured-Markdown-Renderer") ?? "unknown",
+    sha256: response.headers.get("X-Structured-Markdown-SHA256") ?? "",
+    partial: response.headers.get("X-Structured-Markdown-Partial") === "true",
+    totalCharacters: Number(response.headers.get("X-Structured-Markdown-Total-Characters") ?? 0),
+  };
 }
 
 export const defaultScope = (): ScopeConfig => ({
@@ -136,6 +150,8 @@ export const deleteAiDocumentSource = (sourceId: string) => request<{ deleted_so
 export const listSitePages = (siteId: string, query = "") => request<PersistentPageList>(`/api/sites/${siteId}/pages${query}`);
 export const getSitePage = (siteId: string, resourceId: string) => request<PersistentPageDetail>(`/api/sites/${siteId}/pages/${resourceId}`);
 export const getPageStructuredContent = (siteId: string, resourceId: string) => request<StructuredContent>(`/api/sites/${siteId}/pages/${resourceId}/structured-content?limit=2000`);
+export const getPageStructuredDocument = (siteId: string, resourceId: string) => request<StructuredContentDocument>(`/api/sites/${siteId}/pages/${resourceId}/structured-content/document?limit=2000`);
+export const getPageStructuredMarkdown = (siteId: string, resourceId: string) => structuredMarkdown(`/api/sites/${siteId}/pages/${resourceId}/structured-content/markdown`);
 export const preparePageStructuredContent = (siteId: string, resourceId: string) => request<StructuredContent>(`/api/sites/${siteId}/pages/${resourceId}/structured-content/prepare?limit=2000`, { method: "POST" });
 export const listPageObservations = (siteId: string, resourceId: string, query = "") => request<PageObservationList>(`/api/sites/${siteId}/pages/${resourceId}/observations${query}`);
 export const updatePageMetadata = (siteId: string, resourceId: string, payload: { owner_label?: string | null; workflow_status?: string; category_ids?: number[] }) => request<PersistentPageDetail>(`/api/sites/${siteId}/pages/${resourceId}/metadata`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -217,6 +233,8 @@ export const getPageRenderHistory = (siteId: string, resourceId: string, query =
 export const listErrors = (scanId: string) => request<Snapshot[]>(`/api/scans/${scanId}/errors`);
 export const getSnapshot = (snapshotId: string) => request<Snapshot>(`/api/snapshots/${snapshotId}`);
 export const getSnapshotStructuredContent = (snapshotId: string) => request<StructuredContent>(`/api/snapshots/${snapshotId}/structured-content?limit=2000`);
+export const getSnapshotStructuredDocument = (snapshotId: string) => request<StructuredContentDocument>(`/api/snapshots/${snapshotId}/structured-content/document?limit=2000`);
+export const getSnapshotStructuredMarkdown = (snapshotId: string) => structuredMarkdown(`/api/snapshots/${snapshotId}/structured-content/markdown`);
 export const prepareSnapshotStructuredContent = (snapshotId: string) => request<StructuredContent>(`/api/snapshots/${snapshotId}/structured-content/prepare?limit=2000`, { method: "POST" });
 export const getStaticFetchAttempts = (snapshotId: string) => request<StaticFetchAttempt[]>(`/api/snapshots/${snapshotId}/static-fetch-attempts`);
 export const getLinks = (snapshotId: string) => request<LinkOccurrence[]>(`/api/snapshots/${snapshotId}/links`);

@@ -8,12 +8,18 @@ from typing import Any
 
 from sqlalchemy import func, select, text
 
+from app.crawler.canonical_document import (
+    STRUCTURED_CONTENT_CONFIG_VERSION,
+    STRUCTURED_CONTENT_EXTRACTOR_VERSION,
+    STRUCTURED_MARKDOWN_RENDERER_VERSION,
+)
 from app.database import SessionLocal
 from app.models import (
     ArtifactBlob,
     BackgroundJob,
     ContentBlob,
     HtmlStructuredContentArtifact,
+    HtmlStructuredContentNode,
     RenderedArtifact,
     RenderedObservation,
     RenderRun,
@@ -270,6 +276,35 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             .having(func.count(HtmlStructuredContentArtifact.id) > 1)
         ).all()
         assert duplicate_artifacts == []
+        current_artifacts = list(
+            db.scalars(
+                select(HtmlStructuredContentArtifact).where(
+                    HtmlStructuredContentArtifact.extractor_version
+                    == STRUCTURED_CONTENT_EXTRACTOR_VERSION,
+                    HtmlStructuredContentArtifact.extractor_config_version
+                    == STRUCTURED_CONTENT_CONFIG_VERSION,
+                )
+            )
+        )
+        assert current_artifacts
+        assert all(
+            artifact.markdown_renderer_version == STRUCTURED_MARKDOWN_RENDERER_VERSION
+            and artifact.node_count > 0
+            for artifact in current_artifacts
+        )
+        duplicate_node_positions = db.execute(
+            select(
+                HtmlStructuredContentNode.artifact_id,
+                HtmlStructuredContentNode.position,
+                func.count(HtmlStructuredContentNode.id),
+            )
+            .group_by(
+                HtmlStructuredContentNode.artifact_id,
+                HtmlStructuredContentNode.position,
+            )
+            .having(func.count(HtmlStructuredContentNode.id) > 1)
+        ).all()
+        assert duplicate_node_positions == []
         duplicate_site_pages = db.execute(
             select(
                 SitePage.website_property_id,
@@ -353,6 +388,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "crawler_request_count": len(crawler_requests),
         "crawler_request_paths": sorted({entry["path"] for entry in crawler_requests}),
         "duplicate_artifact_identity_count": 0,
+        "duplicate_structured_node_position_count": 0,
         "duplicate_render_run_target_identity_count": 0,
         "duplicate_artifact_blob_identity_count": 0,
         "duplicate_current_source_identity_count": 0,
@@ -371,6 +407,9 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "projection_algorithm_identities": [build.algorithm_identity for build in projections],
         "projection_versions": [build.projection_version for build in projections],
         "structured_artifact_ids": artifact_ids,
+        "structured_extractor_identity": STRUCTURED_CONTENT_EXTRACTOR_VERSION,
+        "structured_config_identity": STRUCTURED_CONTENT_CONFIG_VERSION,
+        "structured_markdown_renderer_identity": STRUCTURED_MARKDOWN_RENDERER_VERSION,
         "structured_artifact_hashes": {
             path: [_artifact_hashes(db, snapshot) for snapshot in snapshots]
             for path, snapshots in observations.items()
@@ -397,11 +436,13 @@ def _artifact_id(db: Any, snapshot: ResourceSnapshot) -> int:
     artifact = db.scalar(
         select(HtmlStructuredContentArtifact).where(
             HtmlStructuredContentArtifact.content_blob_id == snapshot.html_blob_id,
-            HtmlStructuredContentArtifact.extractor_version == "structured-content-v1",
-            HtmlStructuredContentArtifact.extractor_config_version == "default-v1",
+            HtmlStructuredContentArtifact.extractor_version == STRUCTURED_CONTENT_EXTRACTOR_VERSION,
+            HtmlStructuredContentArtifact.extractor_config_version
+            == STRUCTURED_CONTENT_CONFIG_VERSION,
         )
     )
     assert artifact is not None and artifact.extraction_state == "ready"
+    assert artifact.markdown_renderer_version == STRUCTURED_MARKDOWN_RENDERER_VERSION
     return artifact.id
 
 

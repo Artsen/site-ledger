@@ -1,153 +1,118 @@
 # Structured Page Content
 
-Structured Page Content is deterministic, source-derived Page evidence. It records the heading
-outline and direct text sections of retained static HTML without replacing exact HTML, resolving
-links, executing JavaScript, or changing comparison semantics.
+Structured Page Content is a deterministic derivative of exact retained static HTML:
 
-The current identity is `structured-content-v1 | default-v1 | ContentBlob`. It is intentionally
-independent from `html-parser-v4-rel-token-semantics`, `document-content-v2`,
-`scan-comparison-v3`, and `scan-projection-v2`.
-
-## Ownership And Identity
-
-One compatible artifact belongs to one exact `ContentBlob`. The artifact is shared by every
-observation that references that blob, including observations with different base URLs. Link
-resolution remains in the base-URL-specific `HtmlParseArtifact`.
-
-```mermaid
-flowchart LR
-  Snapshot[ResourceSnapshot] --> Blob[ContentBlob exact HTML]
-  Blob --> Parse[HtmlParseArtifact]
-  Parse --> Links[Head, anchors, Resource references]
-  Blob --> Structured[HtmlStructuredContentArtifact]
-  Structured --> Sections[HtmlStructuredContentSection]
-  Blob --> Exact[Raw HTML evidence]
+```text
+Exact retained ContentBlob
+    -> Structured Content V2 canonical document
+    -> Outline / deterministic Markdown / future consumers
 ```
 
-Artifact identity is `(content_blob_id, extractor_version, extractor_config_version)`. The blob
-foreign key uses `ON DELETE CASCADE`; sections cascade from their artifact. Scan deletion keeps a
-shared blob and all derivatives while another observation references it. Deleting an exclusive
-blob removes its derivatives. Rebuild changes only compatible structured rows and never changes
-raw HTML, parse artifacts, projections, or comparisons.
+Exact HTML remains authoritative evidence. The current derivative identity is
+`structured-content-v2 | canonical-document-v1 | ContentBlob`; deterministic Markdown uses
+`structured-markdown-v1`. Markdown is a renderer output, not canonical truth.
 
-## Crawl And Reuse Lifecycle
+## Canonical Document
 
-Fresh HTML is stored by exact SHA-256, parsed for head/link evidence, and prepared as structured
-content. Conditional 304 handling checks both artifact identities before reading compressed HTML,
-so complete exact reuse requires no decompression or parse.
+V2 preserves meaningful structure without mirroring every DOM wrapper. Persisted structural node
+kinds are `document`, `section`, `heading`, `paragraph`, `list`, `list_item`, `figure`, `caption`,
+`blockquote`, `code_block`, `table`, `table_row`, `table_cell`, `definition_list`,
+`definition_term`, `definition_description`, `thematic_break`, and `generic_block`.
 
-```mermaid
-sequenceDiagram
-  participant C as Static crawler
-  participant B as ContentBlob store
-  participant P as Parse artifact service
-  participant S as Structured content service
-  C->>B: put exact HTML or select reused blob
-  C->>P: find blob + base URL artifact
-  C->>S: find blob artifact
-  alt both artifacts exist
-    P-->>C: reused links and head
-    S-->>C: reused structure
-  else an artifact is missing
-    B-->>C: exact retained HTML bytes
-    C->>P: build missing parse artifact
-    C->>S: build missing structured artifact
-  end
-  C->>C: persist observation referencing ContentBlob
-```
+Headings create deterministic semantic sections while retaining source-faithful h1-h6 levels,
+duplicates, empty headings, multiple h1 elements, and skipped levels. Incidental `div` and
+`section` wrappers are flattened. Unknown content-bearing block elements use `generic_block`.
+Section and database node IDs are artifact-local; cross-artifact section identity and matching are
+not implemented.
 
-Structured reuse does not reinterpret existing Scan parse counters. Those counters continue to
-describe the established head/link parser.
+Small inline semantics are retained as bounded ordered runs on structural rows instead of one SQL
+row per text fragment. Runs preserve text, links with nested display runs, images, inline code,
+strong/emphasis marks, and line breaks. Normal prose uses deterministic whitespace normalization;
+preformatted code retains indentation and line breaks after line-ending normalization.
 
-## Extraction Semantics
+`head`, `script`, `style`, `template`, `noscript`, and `svg` content is excluded. Extraction is
+static-source-derived: it does not execute JavaScript, apply CSS, infer visual visibility, inspect
+screenshots, or use Rendered DOM or accessibility evidence.
 
-The extractor uses lxml recovery parsing over static source HTML. It excludes `head`, `script`,
-`style`, `template`, `svg`, and `noscript`. It does not apply CSS, execute JavaScript, inject image
-alt text, infer visibility from classes, or resolve anchor destinations. Anchor text and readable
-table text remain content. Table cells use tab separators and rows use line separators.
+## Source And URL Semantics
 
-Text whitespace is normalized deterministically. Character counts are Unicode code-point counts.
-Word counts are non-empty Unicode whitespace-delimited tokens, not NLP tokens. The nearest
-semantic ancestor labels a section `main`, `article`, `nav`, `header`, `footer`, `aside`, `body`,
-or `unknown`; classes and IDs do not affect region classification.
+V2 is scoped to the exact ContentBlob, not an observation URL. Parser-observed relative `href` and
+`src` values remain unresolved, so one blob reused by observations with different URL bases still
+has one canonical artifact. Context-aware URL resolution belongs to a future consumer with its own
+provenance.
 
-Heading processing preserves every source `h1` through `h6`, including empty and duplicate
-headings, multiple `h1` elements, and skipped levels. For level N, prior stack entries with level
-greater than or equal to N are popped; the nearest remaining lower-level heading is the parent. No
-synthetic heading is inserted.
+Useful parser-observed attributes are retained under deterministic per-node count and character
+bounds: `href`, `src`, `alt`, `title`, `rel`, `target`, `width`, `height`, `start`, `type`, `scope`,
+`colspan`, `rowspan`, `id`, and `class`. They are not byte-exact source lexemes because lxml cannot
+preserve original quoting, order, or entity syntax. Event-handler attributes are not retained or
+executed. Exact attribute evidence remains in the ContentBlob.
 
-```mermaid
-flowchart TD
-  H[Encounter heading level N] --> Pop[Pop stack levels greater than or equal to N]
-  Pop --> Parent{Lower heading remains?}
-  Parent -->|yes| Child[Use nearest lower heading as parent]
-  Parent -->|no| Root[Create root heading section]
-  Child --> Push[Push heading N]
-  Root --> Push
-  Push --> Text[Collect direct text until next heading]
-```
+DOM and region paths (`main`, `article`, `nav`, `header`, `footer`, `aside`, `body`, or `unknown`)
+are provenance. Incidental paths and wrappers do not participate in semantic identity.
 
-Meaningful text before the first heading becomes `preamble`. A meaningful document with no
-headings becomes one `unheaded` section. Empty documents have no sections. Direct text belongs to
-the most recently encountered heading only until the next heading of any level; descendant text is
-not copied into ancestors.
+## Hashes And Bounds
 
-CSS-like DOM paths use lower-case names and add `:nth-of-type(n)` only where same-tag siblings need
-disambiguation. Paths are provenance, not semantic identity.
+Each structural node has a semantic hash over its kind, normalized text, inline semantics, and
+kind-specific semantics. Its subtree hash adds ordered child hashes. The artifact records a
+canonical document hash, source-faithful outline hash, document-text hash, and deterministic
+Markdown hash. IDs, timestamps, observation/Site/Scan context, DOM paths, and parser object identity
+are excluded.
 
-## Hashes And Counts
+Extraction is bounded by structural node count, retained text characters, nested inline run count,
+document depth, parser-observed attributes per node, and attribute characters per node. A reached
+bound produces `partial` state with explicit deterministic truncation reasons; it never claims
+completeness. API document reads are paginated up to 2,000 rows per request. Markdown reads are
+bounded and expose partial and total-character headers.
 
-All hashes use SHA-256 over UTF-8. Canonical structured values use compact, key-sorted JSON.
+## Persistence And Reuse
 
-- `direct_text_sha256` hashes normalized direct text.
-- `section_sha256` hashes kind, heading level, heading text, and direct text. It excludes database
-  IDs, parent IDs, timestamps, DOM paths, regions, and positions.
-- `subtree_sha256` hashes the section hash followed by ordered child subtree hashes.
-- `outline_sha256` hashes ordered kind, level, heading text, and hierarchy without body text.
-- `document_text_sha256` hashes the ordered heading/direct-text representation. It is not
-  `document-content-v2`.
+`HtmlStructuredContentArtifact` remains the versioned ContentBlob-scoped root. V2 adds canonical
+document and Markdown metadata to that root and stores ordered structure in
+`HtmlStructuredContentNode`. The unique identities are extractor/config per blob and position per
+artifact.
 
-```mermaid
-flowchart BT
-  Direct[Normalized direct text] --> DirectHash[Direct text SHA-256]
-  Identity[Kind + level + heading + direct text] --> SectionHash[Section SHA-256]
-  SectionHash --> Subtree[Subtree SHA-256]
-  ChildA[Ordered child subtree hash] --> Subtree
-  ChildB[Ordered child subtree hash] --> Subtree
-  Outline[Ordered heading hierarchy] --> OutlineHash[Outline SHA-256]
-  Document[Ordered heading and direct text] --> DocumentHash[Document text SHA-256]
-```
+An exact 304 or later observation that references an existing ContentBlob reuses its compatible V2
+artifact and nodes. Rebuilding replaces only the current V2 identity. Historical
+`structured-content-v1 | default-v1` artifacts and `HtmlStructuredContentSection` rows remain
+stored, unchanged, and diagnosable. Blobs with only V1 report current V2 as `not_prepared` until the
+existing Prepare workflow creates V2 beside V1; there is no bulk migration backfill.
+Downgrading below the V2 schema removes only `structured-content-v2 | canonical-document-v1`
+derivatives because schema V1 cannot represent them; retained ContentBlobs and V1 derivatives remain.
 
-Before persistence, validation recomputes positions, hierarchy, direct and section hashes, subtree
-hashes, child and descendant counts, word and character counts, heading counts, document hash, and
-outline hash. Invalid evidence is rejected rather than marked ready.
+Deleting one observation does not delete a derivative shared by other observations. Legitimate
+ContentBlob deletion cascades to its derivative rows through the existing content lifecycle.
 
-## Bounds And Failure States
+## Markdown
 
-The default maximum is 10,000 total sections and 2,000,000 extracted source characters. Reaching a
-bound produces `partial`, sets `is_truncated`, and records `section_limit` or `character_limit`.
-Unrecoverable parsing produces `unavailable`. Raw HTML remains authoritative in every state. These
-bounds control retained rows and text, not the crawler's earlier network response-size limit.
+`structured-markdown-v1` renders the canonical IR deterministically. It supports headings,
+paragraphs, unresolved links and images, nested ordered/unordered lists, figures/captions,
+blockquotes, inline and fenced code, readable tables including span labels, definition lists, line
+breaks, thematic breaks, and readable generic-block fallback. Fence length is selected from code
+content so embedded backticks cannot terminate a block. Arbitrary retained HTML is never passed
+through as executable markup.
 
-## Historical Preparation
+Pipe tables use the first source row as the Markdown header only when every cell in that row is a
+source `th`. Tables with a `td`-only or mixed first row receive a neutral blank Markdown header so
+every source row remains data. Destinations remain unresolved; values containing spaces,
+parentheses, backslashes, or angle brackets use deterministic angle-bracket Markdown destination
+syntax without changing canonical inline evidence.
 
-Migration `202608070020` performs no backfill. Historical blobs show `not_prepared` until prepared.
-A single Page or observation can prepare its blob from the Content tab. Larger Site work uses a
-durable, site-scoped `structured_content_build` job with progress, cancellation, bounded selection,
-and per-blob error continuation.
+## API And UI
 
-```mermaid
-flowchart LR
-  Select[Select blobs missing current identity] --> Batch[Bounded ordered batch]
-  Batch --> Read[Read exact gzip blob]
-  Read --> Extract[Extract and validate]
-  Extract --> Persist[Persist artifact and sections]
-  Persist --> Progress[Commit blob and update progress]
-  Extract -->|error| Continue[Record failure and continue]
-  Continue --> Progress
-```
+Existing Outline and Prepare routes remain:
 
-Run from `backend`:
+- `/api/snapshots/{snapshot_id}/structured-content`
+- `/api/sites/{site_id}/pages/{resource_id}/structured-content`
+- matching `/prepare` routes
+- `/api/sites/{site_id}/structured-content/prepare` for durable historical preparation
+
+Bounded V2 reads add `/structured-content/document` and `/structured-content/markdown` beneath
+both observation and persistent-Page routes. Markdown responds as `text/markdown` and exposes
+extractor, config, renderer, hash, partial-state, and total-character headers. The Content UI offers
+Outline, Document, and escaped Markdown views plus Copy Markdown.
+
+Historical bulk preparation continues through the durable `structured_content_build` job and its
+existing lease, ownership-loss, cancellation, and progress contracts. CLI diagnostics remain:
 
 ```powershell
 python -m app.structured_content build-missing --site-id 1 --limit 500
@@ -157,51 +122,14 @@ python -m app.structured_content rebuild 123
 python -m app.structured_content verify 123
 ```
 
-`build-missing` accepts Site and Scan filters and continues after individual blob failures by
-default. `rebuild` replaces only the current structured identity. `verify` checks persisted shape
-and ownership.
+## Independence And Limits
 
-## API And UI
+Preparing or rebuilding V2 does not change `scan-projection-v2`, `scan-comparison-v3`,
+`document-content-v2`, Page Change History, Render/Performance/Accessibility evidence, URL identity,
+Page identity, graph identity, or their checksums. V2 hashes are not comparison inputs in this PR.
 
-Exact observations use `/api/snapshots/{snapshot_id}/structured-content`. Persistent Pages use
-`/api/sites/{site_id}/pages/{resource_id}/structured-content` and select the latest successful
-retained HTML observation for that Site and Page. Matching `/prepare` POST endpoints prepare one
-blob. `/api/sites/{site_id}/structured-content/prepare` queues bulk preparation.
-
-Section reads are bounded and paginated with ordered flat rows and parent IDs. Responses include
-Scan, observation, blob, fetch, reuse, extractor, and artifact provenance. Absence is explicit as
-`not_prepared` or `not_applicable`.
-
-```mermaid
-flowchart LR
-  Page[Persistent Page Content tab] --> Latest[Latest successful Site observation]
-  Observation[Observation Content tab] --> Exact[Exact snapshot]
-  Latest --> API[Structured content API]
-  Exact --> API
-  API --> Artifact[Artifact metadata]
-  API --> Rows[Bounded ordered sections]
-  Rows --> Outline[Collapsible accessible outline]
-  Rows --> Detail[Selected plain-text details]
-```
-
-The UI displays strings through React text rendering. Direct text is escaped, pre-wrapped plain
-text; retained HTML is never executed. Empty headings are labeled, and preamble and unheaded
-sections are distinct. This release adds no section history/comparison, search index, embeddings,
-RAG, AI summary, or generated interpretation.
-
-## Operational Boundaries
-
-Structured content does not feed `scan-comparison-v3`, `document-content-v2`, or
-`scan-projection-v2`. It is an additional deterministic derivative of exact HTML. Existing source
-comparison normalization, exact evidence, projections, and checksums are unchanged.
-
-## Performance Benchmark
-
-Run `python -m app.structured_content_benchmark`. The default fixture creates 2,000 observations,
-1,500 unique blobs, and 500 exact reuses across headed, unheaded, deep, table-heavy, and
-navigation/footer shapes. It reports extraction, persistence, exact-reuse, API-query latency,
-database and compressed-storage growth, peak memory, and deterministic rebuild equivalence.
-
-Local targets are a full fixture under 60 seconds, exact-reuse p95 under 20 ms, API-query p95 under
-100 ms, peak traced memory under 512 MiB, and database size under 250 MiB. These are engineering
-guardrails, not production service-level guarantees.
+Not included: section matching or comparison, full-text search/FTS, rendered-DOM extraction,
+Resource/PDF bodies, Findings, embeddings/RAG/AI interpretation, or exotic HTML round-trip
+fidelity. Run `python -m app.structured_content_benchmark` for local extraction, persistence,
+exact-reuse, rebuild, Markdown, bounded-read, row-growth, storage, memory, and determinism metrics;
+these are engineering diagnostics rather than production SLA claims.
