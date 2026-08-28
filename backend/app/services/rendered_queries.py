@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.selectable import Subquery
 
@@ -36,6 +37,16 @@ RenderOutcome = Literal[
     "technical_failure",
     "evidence_deleted",
     "not_attempted_host_throttled",
+]
+
+RetainedRenderOutcome = Literal[
+    "successful",
+    "no_content",
+    "redirect",
+    "http_error",
+    "rate_limited",
+    "not_attempted_host_throttled",
+    "technical_failure",
 ]
 
 
@@ -668,11 +679,28 @@ def _artifact_presence_subquery() -> Subquery:
 
 
 def _render_outcome_condition(outcome: RenderOutcome) -> ColumnElement[bool]:
-    status = RenderedObservation.navigation_http_status
-    state = RenderedObservation.capture_state
-    skipped = func.coalesce(RenderedObservation.error_type == "host_rate_limit_circuit_open", False)
+    shared_outcome = (
+        "not_attempted_host_throttled"
+        if outcome == "not_attempted"
+        else cast(RetainedRenderOutcome, outcome)
+    )
+    return render_outcome_conditions()[shared_outcome]
+
+
+def render_outcome_conditions(
+    *,
+    status: ColumnElement[int | None] | InstrumentedAttribute[int | None] = (
+        RenderedObservation.navigation_http_status
+    ),
+    state: ColumnElement[str] | InstrumentedAttribute[str] = RenderedObservation.capture_state,
+    error_type: ColumnElement[str | None] | InstrumentedAttribute[str | None] = (
+        RenderedObservation.error_type
+    ),
+) -> dict[RetainedRenderOutcome, ColumnElement[bool]]:
+    """Return the mutually exclusive retained-observation outcome contract."""
+    skipped = func.coalesce(error_type == "host_rate_limit_circuit_open", False)
     rate_limited = func.coalesce(
-        (status == 429) | (RenderedObservation.error_type == "navigation_rate_limited"),
+        (status == 429) | (error_type == "navigation_rate_limited"),
         False,
     )
     no_content = func.coalesce(status.in_((204, 205)), False)
@@ -684,13 +712,13 @@ def _render_outcome_condition(outcome: RenderOutcome) -> ColumnElement[bool]:
         & ~no_content,
         False,
     )
-    conditions: dict[RenderOutcome, ColumnElement[bool]] = {
+    conditions: dict[RetainedRenderOutcome, ColumnElement[bool]] = {
         "successful": successful & ~rate_limited & ~skipped,
         "no_content": no_content & ~skipped,
         "redirect": redirect & ~skipped,
         "http_error": http_error & ~skipped,
         "rate_limited": rate_limited & ~skipped,
-        "not_attempted": skipped,
+        "not_attempted_host_throttled": skipped,
         "technical_failure": ~or_(
             *[
                 func.coalesce(value, False)
@@ -705,32 +733,23 @@ def _render_outcome_condition(outcome: RenderOutcome) -> ColumnElement[bool]:
             ]
         ),
     }
-    return func.coalesce(conditions[outcome], False)
+    return {name: func.coalesce(condition, False) for name, condition in conditions.items()}
 
 
 def _render_summary(db: Session, condition: ColumnElement[bool]) -> RenderedObservationSummary:
-    observations = list(db.scalars(select(RenderedObservation).where(condition)))
-    successful = no_content = redirects = http_errors = rate_limited = skipped = technical = 0
-    for item in observations:
-        status = item.navigation_http_status
-        if item.error_type == "host_rate_limit_circuit_open":
-            skipped += 1
-        elif status == 429 or item.error_type == "navigation_rate_limited":
-            rate_limited += 1
-        elif status in (204, 205):
-            no_content += 1
-        elif status is not None and 300 <= status <= 399:
-            redirects += 1
-        elif status is not None and 400 <= status <= 599:
-            http_errors += 1
-        elif (
-            item.capture_state in ("completed", "completed_with_warnings")
-            and status is not None
-            and 200 <= status <= 299
-        ):
-            successful += 1
-        else:
-            technical += 1
+    outcomes = render_outcome_conditions()
+    names: tuple[RetainedRenderOutcome, ...] = (
+        "successful",
+        "no_content",
+        "redirect",
+        "http_error",
+        "rate_limited",
+        "not_attempted_host_throttled",
+        "technical_failure",
+    )
+    counts = db.execute(
+        select(*[func.count(case((outcomes[name], 1))) for name in names]).where(condition)
+    ).one()
     artifact_total = (
         db.scalar(
             select(func.count(RenderedArtifact.id)).join(RenderedObservation).where(condition)
@@ -738,13 +757,13 @@ def _render_summary(db: Session, condition: ColumnElement[bool]) -> RenderedObse
         or 0
     )
     return RenderedObservationSummary(
-        successful_renders=successful,
-        no_content_responses=no_content,
-        redirect_responses=redirects,
-        http_error_responses=http_errors,
-        rate_limited=rate_limited,
-        skipped_after_throttling=skipped,
-        technical_failures=technical,
+        successful_renders=counts[0],
+        no_content_responses=counts[1],
+        redirect_responses=counts[2],
+        http_error_responses=counts[3],
+        rate_limited=counts[4],
+        skipped_after_throttling=counts[5],
+        technical_failures=counts[6],
         artifacts_retained=artifact_total,
     )
 

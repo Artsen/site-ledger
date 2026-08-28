@@ -16,17 +16,24 @@ from app.models import (
     PerformanceRun,
     RenderedObservation,
     RenderRun,
+    RenderRunTarget,
     ResourceSnapshot,
     Scan,
     ScanComparison,
     ScanComparisonBuild,
     ScanComparisonSummary,
+    SiteInventorySuppression,
     SitePage,
+    UrlSource,
+    UrlSourceEntry,
     WebResource,
     WebsiteProperty,
 )
+from app.services.rendered_deletion import delete_rendered_observations
 from app.services.scan_comparisons import SCAN_COMPARISON_ALGORITHM, SCAN_COMPARISON_VERSION
 from app.services.site_intelligence import get_site_intelligence
+from app.services.source_queries import list_inventory
+from app.storage.artifact_store import LocalArtifactStore
 
 
 def test_independent_clocks_and_active_page_universe_exclude_suppressed_history(
@@ -361,7 +368,74 @@ def test_structured_content_coverage_follows_latest_eligible_blob(db_session) ->
     assert after.structured_content.not_prepared == 0
 
 
-def _structured_artifact(blob_id: int) -> HtmlStructuredContentArtifact:
+def test_structured_content_clock_uses_snapshot_observation_not_preparation(db_session) -> None:
+    observed_monday = datetime(2026, 8, 24, 9, tzinfo=UTC)
+    prepared_friday = datetime(2026, 8, 28, 17, tzinfo=UTC)
+    site = WebsiteProperty(
+        name="Structured clock",
+        base_url="https://structured-clock.test/",
+        normalized_base_url="https://structured-clock.test/",
+        group_key="Other",
+        platform_key="Other",
+        ownership_key="Unknown",
+        scope_config={},
+    )
+    resource = WebResource(
+        resource_type="page",
+        normalized_url="https://structured-clock.test/page",
+        scheme="https",
+        host="structured-clock.test",
+        path="/page",
+        query="",
+    )
+    blob = ContentBlob(
+        sha256="7" * 64,
+        storage_key="77/page.html.gz",
+        content_type="text/html",
+        encoding="utf-8",
+        raw_byte_size=10,
+        stored_byte_size=10,
+    )
+    db_session.add_all([site, resource, blob])
+    db_session.flush()
+    db_session.add(SitePage(website_property_id=site.id, resource_id=resource.id))
+    scan = Scan(
+        website_property_id=site.id,
+        starting_url=site.base_url,
+        status="completed",
+        scope_config={},
+        created_at=observed_monday,
+    )
+    db_session.add(scan)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ResourceSnapshot(
+                scan_id=scan.id,
+                resource_id=resource.id,
+                requested_url=resource.normalized_url,
+                crawl_depth=0,
+                fetched_at=observed_monday,
+                fetch_state="fetched",
+                html_blob_id=blob.id,
+            ),
+            _structured_artifact(blob.id, created_at=prepared_friday),
+        ]
+    )
+    db_session.commit()
+
+    result = get_site_intelligence(db_session, site.id)
+
+    assert result is not None
+    assert result.structured_content.clock.oldest_current_observation_at == observed_monday
+    assert result.structured_content.clock.newest_current_observation_at == observed_monday
+    assert result.structured_content.clock.latest_observed_at == observed_monday
+    assert prepared_friday not in result.structured_content.clock.model_dump().values()
+
+
+def _structured_artifact(
+    blob_id: int, *, created_at: datetime | None = None
+) -> HtmlStructuredContentArtifact:
     return HtmlStructuredContentArtifact(
         content_blob_id=blob_id,
         extractor_version=STRUCTURED_CONTENT_EXTRACTOR_VERSION,
@@ -374,7 +448,108 @@ def _structured_artifact(blob_id: int) -> HtmlStructuredContentArtifact:
         markdown_renderer_version=STRUCTURED_MARKDOWN_RENDERER_VERSION,
         markdown_sha256="6" * 64,
         markdown_character_count=10,
+        created_at=created_at,
     )
+
+
+def test_inventory_totals_match_workspace_identity_and_suppression_semantics(db_session) -> None:
+    site = WebsiteProperty(
+        name="Inventory parity",
+        base_url="https://inventory.test/",
+        normalized_base_url="https://inventory.test/",
+        group_key="Other",
+        platform_key="Other",
+        ownership_key="Unknown",
+        scope_config={},
+    )
+    db_session.add(site)
+    db_session.flush()
+    sources = [
+        UrlSource(
+            website_property_id=site.id,
+            source_type="manual",
+            name=name,
+            discovery_mode="manual",
+            settings_json={},
+        )
+        for name in ("Primary", "Duplicate")
+    ]
+    db_session.add_all(sources)
+    db_session.flush()
+
+    def entry(source: UrlSource, raw: str, normalized: str | None) -> UrlSourceEntry:
+        return UrlSourceEntry(
+            url_source_id=source.id,
+            raw_url=raw,
+            normalized_url=normalized,
+            is_current=True,
+            validation_state="valid" if normalized else "invalid",
+            scope_decision="included" if normalized else "invalid_url",
+            source_metadata_json={},
+        )
+
+    db_session.add_all(
+        [
+            entry(
+                sources[0], "https://inventory.test/duplicate", "https://inventory.test/duplicate"
+            ),
+            entry(
+                sources[1], "https://inventory.test/duplicate", "https://inventory.test/duplicate"
+            ),
+            entry(sources[0], "https://inventory.test/current", "https://inventory.test/current"),
+            entry(sources[0], "javascript:alert(1)", None),
+            entry(sources[1], "javascript:alert(1)", None),
+            entry(sources[0], "https://inventory.test/a%2Fb", "https://inventory.test/a/b"),
+        ]
+    )
+    db_session.add_all(
+        [
+            SiteInventorySuppression(
+                website_property_id=site.id,
+                target_kind="normalized_url",
+                target_value="https://inventory.test/current",
+                normalization_version="url-normalization-v2",
+            ),
+            SiteInventorySuppression(
+                website_property_id=site.id,
+                target_kind="normalized_url",
+                target_value="https://inventory.test/a/b",
+                normalization_version="url-normalization-v1",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    overview = get_site_intelligence(db_session, site.id)
+    active = list_inventory(
+        db_session,
+        site.id,
+        search=None,
+        source_type=None,
+        source_id=None,
+        scope_decision=None,
+        validation_state=None,
+        visibility="active",
+        limit=100,
+        offset=0,
+    )
+    suppressed = list_inventory(
+        db_session,
+        site.id,
+        search=None,
+        source_type=None,
+        source_id=None,
+        scope_decision=None,
+        validation_state=None,
+        visibility="suppressed",
+        limit=100,
+        offset=0,
+    )
+
+    assert overview is not None and active is not None and suppressed is not None
+    assert overview.sources.current_inventory_count == active.total
+    assert overview.sources.suppressed_inventory_count == suppressed.total
+    assert (active.total, suppressed.total) == (2, 2)
 
 
 def test_only_current_compatible_comparison_is_presented(db_session) -> None:
@@ -526,3 +701,179 @@ def test_latest_render_run_targets_are_distinct_from_retained_site_coverage(db_s
     assert result.render.latest_run.target_count == 2
     assert result.render.retained_coverage.observed == 10
     assert result.render.retained_coverage.eligible == 10
+
+
+def test_render_outcomes_partition_current_retained_coverage(db_session) -> None:
+    site = WebsiteProperty(
+        name="Render outcomes",
+        base_url="https://render-outcomes.test/",
+        normalized_base_url="https://render-outcomes.test/",
+        group_key="Other",
+        platform_key="Other",
+        ownership_key="Unknown",
+        scope_config={},
+    )
+    db_session.add(site)
+    db_session.flush()
+    run = RenderRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=1,
+    )
+    db_session.add(run)
+    db_session.flush()
+    outcomes = [
+        ("completed", 200, None),
+        ("failed", 204, "navigation_http_no_content"),
+        ("failed", 205, "navigation_http_no_content"),
+        ("failed", 302, "navigation_http_redirect"),
+        ("failed", 500, "navigation_http_error"),
+        ("failed", 429, "navigation_rate_limited"),
+        ("failed", None, "host_rate_limit_circuit_open"),
+        ("failed", None, "navigation_failed"),
+    ]
+    for position, (state, status, error_type) in enumerate(outcomes):
+        resource = WebResource(
+            resource_type="page",
+            normalized_url=f"https://render-outcomes.test/{position}",
+            scheme="https",
+            host="render-outcomes.test",
+            path=f"/{position}",
+            query="",
+        )
+        db_session.add(resource)
+        db_session.flush()
+        db_session.add_all(
+            [
+                SitePage(website_property_id=site.id, resource_id=resource.id),
+                RenderedObservation(
+                    render_run_id=run.id,
+                    web_resource_id=resource.id,
+                    capture_state=state,
+                    requested_url=resource.normalized_url,
+                    navigation_http_status=status,
+                    error_type=error_type,
+                    browser_engine="chromium",
+                    renderer_version="2",
+                    browser_policy_version="2",
+                    capture_schema_version="2",
+                    viewport_width=1440,
+                    viewport_height=900,
+                    device_scale_factor=1,
+                    locale="en-US",
+                    timezone_id="UTC",
+                    color_scheme="light",
+                    reduced_motion="reduce",
+                    configuration_fingerprint=str(position) * 64,
+                ),
+            ]
+        )
+    db_session.commit()
+
+    result = get_site_intelligence(db_session, site.id)
+
+    assert result is not None
+    assert result.render.retained_coverage.observed == len(outcomes)
+    counts = (
+        result.render.successful,
+        result.render.no_content,
+        result.render.redirect,
+        result.render.http_error,
+        result.render.rate_limited,
+        result.render.not_attempted_host_throttled,
+        result.render.technical_failure,
+    )
+    assert counts == (1, 2, 1, 1, 1, 1, 1)
+    assert sum(counts) == result.render.retained_coverage.observed
+    assert result.render.latest_run.target_count == 1
+
+
+def test_deleted_newer_render_evidence_is_not_counted_as_retained(db_session, tmp_path) -> None:
+    site = WebsiteProperty(
+        name="Render deletion",
+        base_url="https://render-deletion.test/",
+        normalized_base_url="https://render-deletion.test/",
+        group_key="Other",
+        platform_key="Other",
+        ownership_key="Unknown",
+        scope_config={},
+    )
+    resource = WebResource(
+        resource_type="page",
+        normalized_url="https://render-deletion.test/page",
+        scheme="https",
+        host="render-deletion.test",
+        path="/page",
+        query="",
+    )
+    db_session.add_all([site, resource])
+    db_session.flush()
+    db_session.add(SitePage(website_property_id=site.id, resource_id=resource.id))
+    runs = [
+        RenderRun(
+            website_property_id=site.id,
+            status="completed",
+            trigger="site_workspace",
+            configuration_json={},
+            target_count=1,
+            created_at=datetime(2026, 8, day, tzinfo=UTC),
+        )
+        for day in (24, 25)
+    ]
+    db_session.add_all(runs)
+    db_session.flush()
+    targets = [
+        RenderRunTarget(
+            render_run_id=run.id,
+            web_resource_id=resource.id,
+            requested_url=resource.normalized_url,
+            position=1,
+        )
+        for run in runs
+    ]
+    db_session.add_all(targets)
+    db_session.flush()
+    observations = [
+        RenderedObservation(
+            render_run_id=run.id,
+            render_run_target_id=target.id,
+            web_resource_id=resource.id,
+            capture_state="completed" if status == 200 else "failed",
+            requested_url=resource.normalized_url,
+            navigation_http_status=status,
+            error_type=None if status == 200 else "navigation_http_error",
+            finished_at=run.created_at,
+            browser_engine="chromium",
+            renderer_version="2",
+            browser_policy_version="2",
+            capture_schema_version="2",
+            viewport_width=1440,
+            viewport_height=900,
+            device_scale_factor=1,
+            locale="en-US",
+            timezone_id="UTC",
+            color_scheme="light",
+            reduced_motion="reduce",
+            configuration_fingerprint=str(status) * 32,
+        )
+        for run, target, status in zip(runs, targets, (200, 500), strict=True)
+    ]
+    db_session.add_all(observations)
+    db_session.commit()
+
+    before = get_site_intelligence(db_session, site.id)
+    assert before is not None and before.render.http_error == 1
+
+    delete_rendered_observations(
+        db_session,
+        [observations[1].id],
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+    )
+    after = get_site_intelligence(db_session, site.id)
+
+    assert after is not None
+    assert after.render.retained_coverage.observed == 1
+    assert after.render.successful == 1
+    assert after.render.http_error == 0

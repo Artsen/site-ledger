@@ -79,8 +79,11 @@ export type SiteIntelligence = {
     };
     retained_coverage: EvidenceCoverage;
     successful: number;
+    no_content: number;
+    redirect: number;
+    http_error: number;
     rate_limited: number;
-    http_non_success: number;
+    not_attempted_host_throttled: number;
     technical_failure: number;
     clock: EvidenceClock;
   };

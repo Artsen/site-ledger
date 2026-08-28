@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from sqlalchemy import and_, case, exists, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
@@ -25,11 +25,9 @@ from app.models import (
     ScanComparison,
     ScanComparisonBuild,
     ScanComparisonSummary,
-    SiteInventorySuppression,
     SitePage,
     SourceRefresh,
     UrlSource,
-    UrlSourceEntry,
     WebsiteProperty,
 )
 from app.schemas.site_intelligence import (
@@ -49,6 +47,8 @@ from app.schemas.site_intelligence import (
     SourcesIntelligenceRead,
     StructuredContentIntelligenceRead,
 )
+from app.services.inventory_lifecycle import summarize_current_inventory
+from app.services.rendered_queries import render_outcome_conditions
 from app.services.scan_comparisons import SCAN_COMPARISON_ALGORITHM, SCAN_COMPARISON_VERSION
 from app.services.scan_projections import TERMINAL_SCAN_STATUSES
 
@@ -235,8 +235,8 @@ def _structured_content_state(
             func.count(case((HtmlStructuredContentArtifact.extraction_state == "partial", 1))),
             func.count(case((HtmlStructuredContentArtifact.extraction_state == "unavailable", 1))),
             func.count(HtmlStructuredContentArtifact.id),
-            func.min(HtmlStructuredContentArtifact.created_at),
-            func.max(HtmlStructuredContentArtifact.created_at),
+            func.min(current.c.observed_at),
+            func.max(current.c.observed_at),
         )
         .select_from(current)
         .outerjoin(
@@ -311,25 +311,42 @@ def _render_state(db: Session, site_id: int, active_total: int) -> RenderIntelli
         .subquery()
     )
     current = select(ranked).where(ranked.c.position == 1).subquery()
-    status = current.c.navigation_http_status
-    successful = (
-        current.c.capture_state.in_(("completed", "completed_with_warnings"))
-        & status.between(200, 299)
-        & status.notin_((204, 205))
+    outcomes = render_outcome_conditions(
+        status=current.c.navigation_http_status,
+        state=current.c.capture_state,
+        error_type=current.c.error_type,
     )
-    rate_limited = (status == 429) | (current.c.error_type == "navigation_rate_limited")
     values = db.execute(
         select(
             func.count(current.c.id),
-            func.count(case((successful, 1))),
-            func.count(case((rate_limited, 1))),
-            func.count(case((status.between(300, 599) & ~rate_limited, 1))),
-            func.count(case((~successful & ~rate_limited & ~status.between(300, 599), 1))),
+            *[
+                func.count(case((outcomes[name], 1)))
+                for name in (
+                    "successful",
+                    "no_content",
+                    "redirect",
+                    "http_error",
+                    "rate_limited",
+                    "not_attempted_host_throttled",
+                    "technical_failure",
+                )
+            ],
             func.min(current.c.finished_at),
             func.max(current.c.finished_at),
         ).select_from(current)
     ).one()
-    covered, success, limited, http_non_success, technical, oldest, newest = values
+    (
+        covered,
+        success,
+        no_content,
+        redirect,
+        http_error,
+        limited,
+        throttled,
+        technical,
+        oldest,
+        newest,
+    ) = values
     return RenderIntelligenceRead(
         latest_run=RenderLatestRunRead(
             present=run is not None,
@@ -342,8 +359,11 @@ def _render_state(db: Session, site_id: int, active_total: int) -> RenderIntelli
         ),
         retained_coverage=_coverage(covered or 0, active_total),
         successful=success or 0,
+        no_content=no_content or 0,
+        redirect=redirect or 0,
+        http_error=http_error or 0,
         rate_limited=limited or 0,
-        http_non_success=http_non_success or 0,
+        not_attempted_host_throttled=throttled or 0,
         technical_failure=technical or 0,
         clock=EvidenceClock(
             latest_observed_at=newest,
@@ -555,36 +575,14 @@ def _sources_state(db: Session, site_id: int) -> SourcesIntelligenceRead:
         )
         .limit(1)
     ).first()
-    suppressed_match = exists(
-        select(SiteInventorySuppression.id).where(
-            SiteInventorySuppression.website_property_id == site_id,
-            or_(
-                and_(
-                    SiteInventorySuppression.target_kind == "normalized_url",
-                    SiteInventorySuppression.target_value == UrlSourceEntry.normalized_url,
-                ),
-                and_(
-                    SiteInventorySuppression.target_kind == "raw_url",
-                    SiteInventorySuppression.target_value == UrlSourceEntry.raw_url,
-                ),
-            ),
-        )
-    )
-    inventory_identity = func.coalesce(UrlSourceEntry.normalized_url, UrlSourceEntry.raw_url)
-    current, suppressed = db.execute(
-        select(
-            func.count(func.distinct(case((~suppressed_match, inventory_identity)))),
-            func.count(func.distinct(case((suppressed_match, inventory_identity)))),
-        )
-        .select_from(UrlSourceEntry)
-        .join(UrlSource, UrlSource.id == UrlSourceEntry.url_source_id)
-        .where(UrlSource.website_property_id == site_id, UrlSourceEntry.is_current.is_(True))
-    ).one()
+    site = db.get(WebsiteProperty, site_id)
+    assert site is not None
+    inventory = summarize_current_inventory(db, site)
     return SourcesIntelligenceRead(
         active_source_count=active or 0,
         inactive_source_count=inactive or 0,
-        current_inventory_count=current or 0,
-        suppressed_inventory_count=suppressed or 0,
+        current_inventory_count=inventory.active_count,
+        suppressed_inventory_count=inventory.suppressed_count,
         latest_refresh_status=latest_refresh[0] if latest_refresh else None,
         latest_refresh_finished_at=latest_refresh[1] if latest_refresh else None,
     )

@@ -89,8 +89,11 @@ class RenderIntelligenceRead(BaseModel):
     latest_run: RenderLatestRunRead
     retained_coverage: CoverageRead
     successful: int
+    no_content: int
+    redirect: int
+    http_error: int
     rate_limited: int
-    http_non_success: int
+    not_attempted_host_throttled: int
     technical_failure: int
     clock: EvidenceClock
 
