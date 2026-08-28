@@ -13,6 +13,7 @@ from app.database import get_db
 from app.models import (
     ArtifactBlob,
     BackgroundJob,
+    ContentBlob,
     PageCategory,
     RenderedArtifact,
     RenderedObservation,
@@ -57,6 +58,7 @@ from app.services.scan_projections import (
     projection_status,
 )
 from app.services.scan_queries import list_scan_pages_dynamic, list_scan_pages_routed
+from app.services.structured_content import get_or_create_structured_artifact
 from app.storage.artifact_store import LocalArtifactStore
 from app.storage.content_store import LocalContentStore
 
@@ -173,6 +175,39 @@ def test_render_evidence_does_not_change_scan_projection(db_session) -> None:
     assert db_session.get(ScanProjectionBuild, second_ready.id).checksum_sha256 == (
         first_ready.checksum_sha256
     )
+
+
+def test_structured_content_preparation_does_not_change_scan_projection(
+    db_session, tmp_path
+) -> None:
+    scan = _fixture(db_session, "completed")
+    source = b"<main><h1>Stable</h1><p>Structured derivative.</p></main>"
+    store = LocalContentStore(tmp_path / "structured-projection")
+    blob = store.put_html(db_session, source, "text/html", "utf-8")
+    snapshot = db_session.scalar(
+        select(ResourceSnapshot)
+        .where(ResourceSnapshot.scan_id == scan.id)
+        .order_by(ResourceSnapshot.id)
+    )
+    assert snapshot is not None
+    snapshot.html_blob_id = blob.id
+    snapshot.raw_html_sha256 = blob.sha256
+    db_session.commit()
+
+    first = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    first_ready = execute_projection_build(db_session, first.id)
+    first_rows = _page_projection_payloads(db_session, first_ready.id)
+
+    get_or_create_structured_artifact(db_session, blob, store=store)
+    db_session.commit()
+    assert db_session.scalar(select(func.count(ContentBlob.id))) == 1
+
+    rebuild = create_projection_build(db_session, scan.id, force=True)
+    db_session.commit()
+    second_ready = execute_projection_build(db_session, rebuild.id)
+    assert second_ready.checksum_sha256 == first_ready.checksum_sha256
+    assert _page_projection_payloads(db_session, second_ready.id) == first_rows
 
 
 def test_render_deletion_does_not_change_projection_or_leave_stale_page_state(

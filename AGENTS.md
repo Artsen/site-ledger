@@ -65,8 +65,8 @@ Implemented capabilities include:
 - Optional IANA Site display timezone with UTC evidence semantics.
 - Deterministic occurrence-specific link roles and classification provenance.
 - Exact retained HTML evidence, conditional HTTP revalidation, and parse-artifact reuse.
-- ContentBlob-scoped `structured-content-v1` heading, hierarchy, region, and direct-text evidence,
-  with observation/Page inspection and historical preparation.
+- ContentBlob-scoped `structured-content-v2 | canonical-document-v1` canonical document evidence,
+  deterministic `structured-markdown-v1`, observation/Page inspection, and historical preparation.
 - Resource Inventory for observed and referenced non-HTML Resources without general Resource-body
   storage.
 - Inbound and outgoing link provenance.
@@ -121,9 +121,10 @@ behavior. Keep storage behind the existing content-store abstraction.
 - models.comparisons, services.scan_comparisons, services.comparison_queries, and
   api.comparison_routes own deterministic Comparison builds, materialized results, coverage,
   drill-down, and Page Change History.
-- crawler.structured_content, services.structured_content,
+- crawler.canonical_document, services.structured_content,
   services.structured_content_queries, api.structured_content_routes,
-  HtmlStructuredContentArtifact, and HtmlStructuredContentSection own structured Page content.
+  HtmlStructuredContentArtifact, HtmlStructuredContentNode, and historical
+  HtmlStructuredContentSection own structured Page content.
 - browser.*, models.rendered, services.render_runs, services.rendered_capture,
   services.rendered_queries, and api.render_routes own bounded browser capture, durable Render Runs,
   rendered observations, and rendered artifacts.
@@ -162,6 +163,7 @@ Do not rename these models or their tables for branding:
 - RenderRunTarget
 - HtmlStructuredContentArtifact
 - HtmlStructuredContentSection
+- HtmlStructuredContentNode
 - PageCategoryRule
 - ScanProjectionBuild
 - ScanProjectionState
@@ -198,9 +200,15 @@ Preserve these unless a dedicated compatibility migration is explicitly designed
 never make existing local data appear missing or silently discard saved preferences.
 
 Current deterministic compatibility identifiers include `html-parser-v4-rel-token-semantics`,
-`structured-content-v1` with `default-v1`, `document-content-v2`, `scan-comparison-v3`, and
+`structured-content-v2` with `canonical-document-v1`, `structured-markdown-v1`,
+`document-content-v2`, `scan-comparison-v3`, and
 `scan-projection-v2`. Treat identity changes as explicit versioned compatibility changes, not
 incidental refactors.
+
+Structured-content identity describes the ContentBlob-scoped canonical representation. Relative
+URLs remain unresolved; DOM paths are provenance; Markdown is a renderer rather than canonical
+truth. Preserve V1 artifacts as historical derivative evidence and never relabel or bulk rewrite
+them when a new current representation is introduced.
 
 Scan projection algorithm provenance describes projection computation. Do not encode upstream
 evidence-producer versions when those versions are already preserved on their own artifacts. Keep

@@ -23,6 +23,12 @@ type Json = Record<string, unknown> & {
   raw_html_sha256: string | null;
   content_blob_id: number | null;
   extraction_state: string;
+  extractor_version: string;
+  extractor_config_version: string;
+  markdown_renderer_version: string;
+  markdown_sha256: string;
+  node_count: number;
+  position: number;
   document_text_sha256: string;
   outline_sha256: string;
   sections: Array<{ direct_text: string }>;
@@ -42,8 +48,11 @@ type Json = Record<string, unknown> & {
 };
 
 type StructuredEvidence = {
+  artifact_id: number;
   document_text_sha256: string;
   outline_sha256: string;
+  markdown_sha256: string;
+  node_positions: number[];
   sections: Array<{ direct_text: string }>;
 };
 
@@ -148,6 +157,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(technicalDiff.diff_text).toContain("build=1");
   expect(technicalDiff.diff_text).toContain("build=2");
   expect(evidence1["/unchanged/"].observation.content_blob_id).toBe(evidence2["/unchanged/"].observation.content_blob_id);
+  expect(evidence1["/unchanged/"].structured.artifact_id).toBe(evidence2["/unchanged/"].structured.artifact_id);
   expect(evidence1["/technical/"].observation.raw_html_sha256).not.toBe(evidence2["/technical/"].observation.raw_html_sha256);
   expect(evidence1["/technical/"].structured.document_text_sha256).toBe(evidence2["/technical/"].structured.document_text_sha256);
   expect(evidence1["/technical/"].structured.outline_sha256).toBe(evidence2["/technical/"].structured.outline_sha256);
@@ -342,12 +352,26 @@ async function collectEvidence(request: APIRequestContext, siteId: number, scanI
     if (!observation) throw new Error(`Observation for Scan ${scanId} and ${item.requested_url} was not found`);
     expect(structured.status).toBe("ready");
     if (!structured.artifact) throw new Error(`Structured artifact for ${item.requested_url} was not ready`);
+    expect(structured.artifact.extractor_version).toBe("structured-content-v2");
+    expect(structured.artifact.extractor_config_version).toBe("canonical-document-v1");
+    expect(structured.artifact.markdown_renderer_version).toBe("structured-markdown-v1");
+    const document = await getJson(request, `${apiUrl}/api/snapshots/${item.id}/structured-content/document?limit=2000`);
+    const positions = document.items.map((node) => Number(node.position));
+    expect(new Set(positions).size).toBe(positions.length);
+    expect(document.total).toBe(structured.artifact.node_count);
+    const markdown = await request.get(`${apiUrl}/api/snapshots/${item.id}/structured-content/markdown`);
+    expect(markdown.ok()).toBe(true);
+    expect(markdown.headers()["x-structured-markdown-renderer"]).toBe("structured-markdown-v1");
+    expect(markdown.headers()["x-structured-markdown-sha256"]).toBe(structured.artifact.markdown_sha256);
     result[path] = {
       item,
       observation,
       structured: {
+        artifact_id: structured.artifact.id,
         document_text_sha256: structured.artifact.document_text_sha256,
         outline_sha256: structured.artifact.outline_sha256,
+        markdown_sha256: structured.artifact.markdown_sha256,
+        node_positions: positions,
         sections: structured.items.map((section) => ({ direct_text: String(section.direct_text) }))
       }
     };

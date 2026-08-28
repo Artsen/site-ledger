@@ -15,6 +15,8 @@ import {
   listPageObservations,
   getPageChangeHistory,
   getPageStructuredContent,
+  getPageStructuredDocument,
+  getPageStructuredMarkdown,
   preparePageStructuredContent,
   removePageCategoryExclusion,
   updatePageMetadata,
@@ -190,7 +192,7 @@ export function PersistentPageDetailPage() {
           <ScansTab siteId={siteId} resourceId={resourceId} />
         ) : null}
         {tab === "history" ? <ChangeHistoryTab siteId={siteId} resourceId={resourceId} /> : null}
-        {tab === "content" ? <StructuredContentView queryKey={["page-structured-content", siteId, resourceId]} load={() => getPageStructuredContent(siteId, resourceId)} prepare={() => preparePageStructuredContent(siteId, resourceId)} /> : null}
+        {tab === "content" ? <StructuredContentView queryKey={["page-structured-content", siteId, resourceId]} load={() => getPageStructuredContent(siteId, resourceId)} prepare={() => preparePageStructuredContent(siteId, resourceId)} loadDocument={() => getPageStructuredDocument(siteId, resourceId)} loadMarkdown={() => getPageStructuredMarkdown(siteId, resourceId)} /> : null}
         {tab === "links" ? <LinksTab detail={page.data} /> : null}
         {tab === "browser" ? <BrowserEvidenceTab siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "rendered" ? <PageRenderedPanel siteId={siteId} resourceId={resourceId} /> : null}

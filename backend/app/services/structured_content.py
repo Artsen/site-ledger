@@ -1,22 +1,27 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.crawler.structured_content import (
+from app.crawler.canonical_document import (
     STRUCTURED_CONTENT_CONFIG_VERSION,
     STRUCTURED_CONTENT_EXTRACTOR_VERSION,
-    ExtractedStructuredContent,
-    extract_structured_content,
-    validate_extracted_content,
+    STRUCTURED_MARKDOWN_RENDERER_VERSION,
+    CanonicalDocument,
+    canonical_semantic_sha256,
+    canonical_subtree_sha256,
+    extract_canonical_document,
+    render_markdown,
+    validate_canonical_document,
 )
 from app.models import (
     ContentBlob,
     HtmlStructuredContentArtifact,
-    HtmlStructuredContentSection,
+    HtmlStructuredContentNode,
     ResourceSnapshot,
     Scan,
 )
@@ -29,7 +34,7 @@ def compatible_structured_artifact(
 ) -> HtmlStructuredContentArtifact | None:
     return db.scalar(
         select(HtmlStructuredContentArtifact)
-        .options(selectinload(HtmlStructuredContentArtifact.sections))
+        .options(selectinload(HtmlStructuredContentArtifact.nodes))
         .where(
             HtmlStructuredContentArtifact.content_blob_id == content_blob_id,
             HtmlStructuredContentArtifact.extractor_version == STRUCTURED_CONTENT_EXTRACTOR_VERSION,
@@ -53,8 +58,8 @@ def get_or_create_structured_artifact(
         if store is None:
             raise ValueError("Content or a content store is required to build structured content.")
         content = store.get(blob)
-    result = extract_structured_content(content)
-    validate_extracted_content(result)
+    result = extract_canonical_document(content)
+    validate_canonical_document(result)
     try:
         with db.begin_nested():
             artifact = _persist_result(db, blob, result)
@@ -78,21 +83,35 @@ def rebuild_structured_artifact(
 
 
 def verify_structured_artifact(db: Session, artifact: HtmlStructuredContentArtifact) -> None:
-    sections = list(
+    nodes = list(
         db.scalars(
-            select(HtmlStructuredContentSection)
-            .where(HtmlStructuredContentSection.artifact_id == artifact.id)
-            .order_by(HtmlStructuredContentSection.position)
+            select(HtmlStructuredContentNode)
+            .where(HtmlStructuredContentNode.artifact_id == artifact.id)
+            .order_by(HtmlStructuredContentNode.position)
         )
     )
-    if [section.position for section in sections] != list(range(len(sections))):
-        raise ValueError("Persisted structured section positions are not contiguous.")
-    if artifact.section_count != len(sections):
-        raise ValueError("Persisted structured section count does not match its rows.")
-    ids = {section.id for section in sections}
-    for section in sections:
-        if section.parent_section_id is not None and section.parent_section_id not in ids:
-            raise ValueError("Persisted structured section parent is outside its artifact.")
+    if [node.position for node in nodes] != list(range(len(nodes))):
+        raise ValueError("Persisted canonical node positions are not contiguous.")
+    if artifact.node_count != len(nodes):
+        raise ValueError("Persisted canonical node count does not match its rows.")
+    ids = {node.id for node in nodes}
+    children: dict[int, list[HtmlStructuredContentNode]] = {}
+    for node in nodes:
+        if node.parent_node_id is not None and node.parent_node_id not in ids:
+            raise ValueError("Persisted canonical node parent is outside its artifact.")
+        if node.parent_node_id is not None:
+            children.setdefault(node.parent_node_id, []).append(node)
+        if node.semantic_sha256 != canonical_semantic_sha256(node):
+            raise ValueError("Persisted canonical node semantic hash is invalid.")
+    for node in reversed(nodes):
+        child_hashes = [child.subtree_sha256 for child in children.get(node.id, [])]
+        if node.subtree_sha256 != canonical_subtree_sha256(node.semantic_sha256, child_hashes):
+            raise ValueError("Persisted canonical node subtree hash is invalid.")
+    if not nodes or artifact.canonical_document_sha256 != nodes[0].subtree_sha256:
+        raise ValueError("Persisted canonical document hash is invalid.")
+    markdown = render_markdown(nodes)
+    if artifact.markdown_sha256 != hashlib.sha256(markdown.encode()).hexdigest():
+        raise ValueError("Persisted Structured Markdown hash is invalid.")
 
 
 def missing_structured_blob_ids(
@@ -167,7 +186,7 @@ def build_missing_structured_content(
 
 
 def _persist_result(
-    db: Session, blob: ContentBlob, result: ExtractedStructuredContent
+    db: Session, blob: ContentBlob, result: CanonicalDocument
 ) -> HtmlStructuredContentArtifact:
     artifact = HtmlStructuredContentArtifact(
         content_blob_id=blob.id,
@@ -175,7 +194,7 @@ def _persist_result(
         extractor_config_version=STRUCTURED_CONTENT_CONFIG_VERSION,
         extraction_state=result.extraction_state,
         document_profile=result.document_profile,
-        section_count=len(result.sections),
+        section_count=sum(node.kind == "section" for node in result.nodes),
         heading_count=result.heading_count,
         heading_counts_json=result.heading_counts,
         document_word_count=result.document_word_count,
@@ -184,40 +203,39 @@ def _persist_result(
         outline_sha256=result.outline_sha256,
         is_truncated=result.is_truncated,
         truncation_reasons_json=list(result.truncation_reasons),
+        node_count=len(result.nodes),
+        canonical_document_sha256=result.canonical_document_sha256,
+        markdown_renderer_version=STRUCTURED_MARKDOWN_RENDERER_VERSION,
+        markdown_sha256=result.markdown_sha256,
+        markdown_character_count=len(result.markdown),
     )
     db.add(artifact)
     db.flush()
-    persisted: dict[int, HtmlStructuredContentSection] = {}
-    rows: list[HtmlStructuredContentSection] = []
-    for section in result.sections:
-        parent = (
-            persisted.get(section.parent_position) if section.parent_position is not None else None
-        )
-        row = HtmlStructuredContentSection(
+    persisted: dict[int, HtmlStructuredContentNode] = {}
+    rows: list[HtmlStructuredContentNode] = []
+    for node in result.nodes:
+        parent = persisted.get(node.parent_position) if node.parent_position is not None else None
+        row = HtmlStructuredContentNode(
             artifact_id=artifact.id,
             parent=parent,
-            position=section.position,
-            kind=section.kind,
-            heading_level=section.heading_level,
-            heading_text=section.heading_text,
-            heading_dom_path=section.heading_dom_path,
-            region_key=section.region_key,
-            region_dom_path=section.region_dom_path,
-            direct_text=section.direct_text,
-            direct_text_sha256=section.direct_text_sha256,
-            section_sha256=section.section_sha256,
-            subtree_sha256=section.subtree_sha256,
-            direct_word_count=section.direct_word_count,
-            direct_character_count=section.direct_character_count,
-            subtree_word_count=section.subtree_word_count,
-            subtree_character_count=section.subtree_character_count,
-            child_count=section.child_count,
-            descendant_count=section.descendant_count,
-            block_count=section.block_count,
-            has_direct_content=section.has_direct_content,
+            position=node.position,
+            kind=node.kind,
+            depth=node.depth,
+            source_tag=node.source_tag,
+            source_dom_path=node.source_dom_path,
+            region_key=node.region_key,
+            region_dom_path=node.region_dom_path,
+            text=node.text,
+            inline_json=node.inline,
+            source_attributes_json=node.source_attributes,
+            semantic_json=node.semantic,
+            semantic_sha256=node.semantic_sha256,
+            subtree_sha256=node.subtree_sha256,
+            child_count=node.child_count,
+            descendant_count=node.descendant_count,
         )
         rows.append(row)
-        persisted[section.position] = row
+        persisted[node.position] = row
     db.add_all(rows)
     db.flush()
     verify_structured_artifact(db, artifact)

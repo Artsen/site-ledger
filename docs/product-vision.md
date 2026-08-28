@@ -28,7 +28,8 @@ The current application implements:
 - Deterministic link roles on individual source-DOM occurrences.
 - Conditional HTTP revalidation and parsed-result reuse.
 - Stored HTML evidence and parsed head metadata.
-- Versioned deterministic outlines and direct source-text sections derived from stored HTML.
+- A versioned canonical source-document representation, outline, and deterministic Markdown
+  derived from exact stored HTML.
 - Inbound and outgoing link occurrence provenance.
 - Scan-specific 2D and 3D topology graphs.
 - Versioned prepared results for immutable terminal Scans, with raw evidence fallback and rebuilds.

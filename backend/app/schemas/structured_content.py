@@ -32,6 +32,11 @@ class StructuredContentArtifactRead(BaseModel):
     outline_sha256: str
     is_truncated: bool
     truncation_reasons: list[str]
+    node_count: int
+    canonical_document_sha256: str | None
+    markdown_renderer_version: str | None
+    markdown_sha256: str | None
+    markdown_character_count: int | None
     created_at: datetime
 
 
@@ -65,6 +70,37 @@ class StructuredContentRead(BaseModel):
     provenance: StructuredContentProvenance | None = None
     artifact: StructuredContentArtifactRead | None = None
     items: list[StructuredContentSectionRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class StructuredContentNodeRead(BaseModel):
+    id: int
+    position: int
+    parent_node_id: int | None
+    kind: str
+    depth: int
+    source_tag: str | None
+    source_dom_path: str | None
+    region_key: str
+    region_dom_path: str | None
+    text: str | None
+    inline: list[dict[str, object]]
+    source_attributes: dict[str, str]
+    semantic: dict[str, object]
+    semantic_sha256: str
+    subtree_sha256: str
+    child_count: int
+    descendant_count: int
+
+
+class StructuredContentDocumentRead(BaseModel):
+    status: Literal["ready", "partial", "unavailable", "not_prepared", "not_applicable"]
+    reason: str | None = None
+    provenance: StructuredContentProvenance | None = None
+    artifact: StructuredContentArtifactRead | None = None
+    items: list[StructuredContentNodeRead]
     total: int
     limit: int
     offset: int

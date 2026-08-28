@@ -14,19 +14,25 @@ from typing import Any
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.crawler.structured_content import extract_structured_content
+from app.crawler.canonical_document import extract_canonical_document, render_markdown
 from app.database import Base
 from app.models import (
     ContentBlob,
     HtmlStructuredContentArtifact,
-    HtmlStructuredContentSection,
+    HtmlStructuredContentNode,
     ResourceSnapshot,
     Scan,
     WebResource,
     WebsiteProperty,
 )
-from app.services.structured_content import get_or_create_structured_artifact
-from app.services.structured_content_queries import structured_content_for_snapshot
+from app.services.structured_content import (
+    get_or_create_structured_artifact,
+    rebuild_structured_artifact,
+)
+from app.services.structured_content_queries import (
+    structured_content_for_snapshot,
+    structured_document_for_snapshot,
+)
 from app.storage.content_store import LocalContentStore
 
 DEFAULT_OBSERVATIONS = 2_000
@@ -51,6 +57,8 @@ def run_benchmark(
         persistence_latencies: list[float] = []
         reuse_latencies: list[float] = []
         query_latencies: list[float] = []
+        markdown_latencies: list[float] = []
+        rebuild_latencies: list[float] = []
         deterministic = True
 
         tracemalloc.start()
@@ -60,11 +68,12 @@ def run_benchmark(
             blobs: list[ContentBlob] = []
             for source in sources:
                 started = time.perf_counter()
-                first = extract_structured_content(source)
+                first = extract_canonical_document(source)
                 extraction_latencies.append(time.perf_counter() - started)
+                repeated = extract_canonical_document(source)
                 deterministic = deterministic and (
-                    first.document_text_sha256
-                    == extract_structured_content(source).document_text_sha256
+                    first.canonical_document_sha256 == repeated.canonical_document_sha256
+                    and first.markdown_sha256 == repeated.markdown_sha256
                 )
                 blob = store.put_html(db, source, "text/html", "utf-8")
                 started = time.perf_counter()
@@ -110,10 +119,55 @@ def run_benchmark(
             for snapshot in snapshots[: min(200, len(snapshots))]:
                 started = time.perf_counter()
                 structured_content_for_snapshot(db, snapshot, limit=500, offset=0)
+                structured_document_for_snapshot(db, snapshot, limit=500, offset=0)
                 query_latencies.append(time.perf_counter() - started)
 
+            artifacts = list(
+                db.scalars(
+                    select(HtmlStructuredContentArtifact)
+                    .order_by(HtmlStructuredContentArtifact.id)
+                    .limit(min(50, unique_blob_count))
+                )
+            )
+            before_rebuild = {
+                artifact.content_blob_id: (
+                    artifact.canonical_document_sha256,
+                    artifact.outline_sha256,
+                    render_markdown(artifact.nodes),
+                    artifact.markdown_sha256,
+                    [
+                        (node.position, node.semantic_sha256, node.subtree_sha256)
+                        for node in artifact.nodes
+                    ],
+                )
+                for artifact in artifacts
+            }
+            for artifact in artifacts:
+                started = time.perf_counter()
+                markdown = render_markdown(artifact.nodes)
+                markdown_latencies.append(time.perf_counter() - started)
+                deterministic = deterministic and bool(markdown or artifact.node_count == 1)
+                rebuild_blob = db.get(ContentBlob, artifact.content_blob_id)
+                if rebuild_blob is None:
+                    deterministic = False
+                    continue
+                started = time.perf_counter()
+                rebuilt = rebuild_structured_artifact(db, rebuild_blob, store)
+                rebuild_latencies.append(time.perf_counter() - started)
+                deterministic = deterministic and before_rebuild[rebuild_blob.id] == (
+                    rebuilt.canonical_document_sha256,
+                    rebuilt.outline_sha256,
+                    render_markdown(rebuilt.nodes),
+                    rebuilt.markdown_sha256,
+                    [
+                        (node.position, node.semantic_sha256, node.subtree_sha256)
+                        for node in rebuilt.nodes
+                    ],
+                )
+            db.commit()
+
             artifact_count = db.scalar(select(func.count(HtmlStructuredContentArtifact.id))) or 0
-            section_count = db.scalar(select(func.count(HtmlStructuredContentSection.id))) or 0
+            node_count = db.scalar(select(func.count(HtmlStructuredContentNode.id))) or 0
             blob_count = db.scalar(select(func.count(ContentBlob.id))) or 0
 
         elapsed = time.perf_counter() - benchmark_started
@@ -127,7 +181,8 @@ def run_benchmark(
                 "unique_blobs": unique_blob_count,
                 "reused_observations": observation_count - unique_blob_count,
                 "artifacts": artifact_count,
-                "sections": section_count,
+                "structural_nodes": node_count,
+                "structural_nodes_per_blob": round(node_count / max(blob_count, 1), 3),
                 "content_blobs": blob_count,
             },
             "duration_seconds": round(elapsed, 3),
@@ -135,6 +190,8 @@ def run_benchmark(
             "persistence_latency_ms": _percentiles(persistence_latencies),
             "exact_reuse_lookup_latency_ms": _percentiles(reuse_latencies),
             "api_query_latency_ms": _percentiles(query_latencies),
+            "markdown_render_latency_ms": _percentiles(markdown_latencies),
+            "v2_rebuild_latency_ms": _percentiles(rebuild_latencies),
             "database_bytes": database_bytes,
             "compressed_html_storage_bytes": html_storage_bytes,
             "peak_memory_bytes": peak_memory,

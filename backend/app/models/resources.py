@@ -305,6 +305,11 @@ class HtmlStructuredContentArtifact(Base):
     outline_sha256: Mapped[str] = mapped_column(String(64), index=True)
     is_truncated: Mapped[bool] = mapped_column(default=False, index=True)
     truncation_reasons_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    node_count: Mapped[int] = mapped_column(Integer, default=0)
+    canonical_document_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    markdown_renderer_version: Mapped[str | None] = mapped_column(String(64), index=True)
+    markdown_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    markdown_character_count: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     content_blob: Mapped[ContentBlob] = relationship(back_populates="structured_content_artifacts")
@@ -313,6 +318,12 @@ class HtmlStructuredContentArtifact(Base):
         cascade="all, delete-orphan",
         order_by="HtmlStructuredContentSection.position",
         foreign_keys="HtmlStructuredContentSection.artifact_id",
+    )
+    nodes: Mapped[list["HtmlStructuredContentNode"]] = relationship(
+        back_populates="artifact",
+        cascade="all, delete-orphan",
+        order_by="HtmlStructuredContentNode.position",
+        foreign_keys="HtmlStructuredContentNode.artifact_id",
     )
 
     __table_args__ = (
@@ -376,6 +387,51 @@ class HtmlStructuredContentSection(Base):
         Index(
             "ix_html_structured_content_sections_artifact_position",
             "artifact_id",
+            "position",
+        ),
+    )
+
+
+class HtmlStructuredContentNode(Base):
+    __tablename__ = "html_structured_content_nodes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    artifact_id: Mapped[int] = mapped_column(
+        ForeignKey("html_structured_content_artifacts.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    parent_node_id: Mapped[int | None] = mapped_column(
+        ForeignKey("html_structured_content_nodes.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    depth: Mapped[int] = mapped_column(Integer)
+    source_tag: Mapped[str | None] = mapped_column(String(128))
+    source_dom_path: Mapped[str | None] = mapped_column(Text)
+    region_key: Mapped[str] = mapped_column(String(32), index=True)
+    region_dom_path: Mapped[str | None] = mapped_column(Text)
+    text: Mapped[str | None] = mapped_column(Text)
+    inline_json: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    source_attributes_json: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    semantic_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    semantic_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    subtree_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    child_count: Mapped[int] = mapped_column(Integer, default=0)
+    descendant_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    artifact: Mapped[HtmlStructuredContentArtifact] = relationship(
+        back_populates="nodes", foreign_keys=[artifact_id]
+    )
+    parent: Mapped["HtmlStructuredContentNode | None"] = relationship(
+        remote_side=[id], foreign_keys=[parent_node_id]
+    )
+
+    __table_args__ = (
+        UniqueConstraint("artifact_id", "position", name="uq_structured_node_position"),
+        Index("ix_html_structured_content_nodes_artifact_position", "artifact_id", "position"),
+        Index(
+            "ix_html_structured_content_nodes_artifact_parent_position",
+            "artifact_id",
+            "parent_node_id",
             "position",
         ),
     )
