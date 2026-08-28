@@ -320,7 +320,12 @@ def execute_evaluation(
 
 
 def mark_evaluation_terminal(
-    db: Session, evaluation_id: int, status: str, error: BaseException | str | None = None
+    db: Session,
+    evaluation_id: int,
+    status: str,
+    *,
+    error_type: str | None = None,
+    error_message: str | None = None,
 ) -> None:
     evaluation = db.get(FindingEvaluation, evaluation_id)
     if evaluation is None or evaluation.status == "completed":
@@ -331,9 +336,8 @@ def mark_evaluation_terminal(
         evaluation.failed_at = now
     else:
         evaluation.finished_at = now
-    if error is not None:
-        evaluation.error_type = type(error).__name__ if isinstance(error, BaseException) else status
-        evaluation.error_message = str(error)
+    evaluation.error_type = error_type
+    evaluation.error_message = error_message
 
 
 def _classify(snapshot: ResourceSnapshot | None) -> tuple[str, str | None]:

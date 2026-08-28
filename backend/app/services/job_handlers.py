@@ -913,7 +913,8 @@ def _mark_domain_cancelled(
                 db,
                 int(job.payload_json.get("finding_evaluation_id", 0)),
                 "cancelled",
-                "Finding evaluation cancelled by user.",
+                error_type="cancelled",
+                error_message="Finding evaluation cancelled by user.",
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
@@ -984,7 +985,8 @@ def _mark_domain_interrupted(
                 db,
                 int(job.payload_json.get("finding_evaluation_id", 0)),
                 "failed",
-                "Worker interrupted during Finding evaluation.",
+                error_type=reason,
+                error_message="Worker interrupted during Finding evaluation.",
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(
@@ -1066,7 +1068,8 @@ def _mark_domain_failed(
                 db,
                 int(job.payload_json.get("finding_evaluation_id", 0)),
                 "failed",
-                exc,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
             )
         elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
             mark_comparison_build_terminal(

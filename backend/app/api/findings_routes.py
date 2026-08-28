@@ -34,7 +34,12 @@ def post_finding_evaluation(site_id: int, db: DbSession) -> FindingEvaluationRea
         evaluation, created = create_evaluation(db, site_id)
         if created:
             background_jobs.enqueue_finding_evaluation_job(db, evaluation.id, site_id)
+        elif evaluation.status in {"failed", "cancelled"}:
+            background_jobs.requeue_finding_evaluation_job(db, evaluation.id, site_id)
         db.commit()
+    except RuntimeError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         db.rollback()
         raise HTTPException(409 if "terminal Scan" in str(exc) else 404, str(exc)) from exc

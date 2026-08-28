@@ -98,7 +98,10 @@ progress, cooperates with cancellation, and continues after individual blob fail
 `finding_evaluation` is a Site-scoped deterministic evaluation over one pinned terminal Scan and a
 frozen active-Page universe. The handler owns its Session in the blocking thread and atomically
 commits lifecycle transitions, immutable assessments, evaluation completion, and BackgroundJob
-completion under the active lease. See [Findings](findings.md).
+completion under the active lease. Lease-expiry recovery interrupts the job and fails an otherwise
+nonterminal evaluation with explicit provenance. Failed or cancelled exact inputs can only be
+requeued by an explicit Finding run request; the same evaluation and job retain attempt/event
+history, and completed inputs never rerun. See [Findings](findings.md).
 
 `performance_run` executes a bounded canonical request set serially through fixed PageSpeed and CrUX
 adapters. It commits each immutable observation independently, reports ready/unavailable/failed

@@ -146,6 +146,37 @@ def get_finding(db: Session, site_id: int, finding_id: int) -> FindingDetail | N
             )
         )
     }
+    evaluation_job_ids = _evaluation_job_ids(db, list(evaluations))
+    snapshot_ids = {
+        reference.evidence_id
+        for reference in references
+        if reference.evidence_kind == "resource_snapshot"
+    }
+    snapshot_links = (
+        {
+            snapshot_id: (scan_id, resource_id)
+            for snapshot_id, scan_id, resource_id in db.execute(
+                select(
+                    ResourceSnapshot.id, ResourceSnapshot.scan_id, ResourceSnapshot.resource_id
+                ).where(ResourceSnapshot.id.in_(snapshot_ids))
+            )
+        }
+        if snapshot_ids
+        else {}
+    )
+    scan_ids = {
+        reference.evidence_id for reference in references if reference.evidence_kind == "scan"
+    }
+    retained_scans = (
+        {
+            scan_id: website_property_id
+            for scan_id, website_property_id in db.execute(
+                select(Scan.id, Scan.website_property_id).where(Scan.id.in_(scan_ids))
+            )
+        }
+        if scan_ids
+        else {}
+    )
     base = _list_item(finding, url, workspace, current)
     return FindingDetail(
         **base.model_dump(),
@@ -162,9 +193,13 @@ def get_finding(db: Session, site_id: int, finding_id: int) -> FindingDetail | N
                 details_json=item.details_json,
                 assessment_sha256=item.assessment_sha256,
                 created_at=item.created_at,
-                evaluation=_evaluation_read(db, evaluations[item.finding_evaluation_id]),
+                evaluation=_evaluation_read(
+                    evaluations[item.finding_evaluation_id],
+                    evaluation_job_ids.get(item.finding_evaluation_id),
+                ),
                 evidence_references=[
-                    _reference_read(db, ref, site_id) for ref in refs_by_assessment.get(item.id, [])
+                    _reference_read(ref, site_id, snapshot_links, retained_scans)
+                    for ref in refs_by_assessment.get(item.id, [])
                 ],
             )
             for item in assessments
@@ -185,15 +220,18 @@ def list_evaluations(
         )
         or 0
     )
-    items = db.scalars(
-        select(FindingEvaluation)
-        .where(FindingEvaluation.website_property_id == site_id)
-        .order_by(FindingEvaluation.created_at.desc(), FindingEvaluation.id.desc())
-        .limit(limit)
-        .offset(offset)
+    items = list(
+        db.scalars(
+            select(FindingEvaluation)
+            .where(FindingEvaluation.website_property_id == site_id)
+            .order_by(FindingEvaluation.created_at.desc(), FindingEvaluation.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
     )
+    job_ids = _evaluation_job_ids(db, [item.id for item in items])
     return FindingEvaluationList(
-        items=[_evaluation_read(db, item) for item in items],
+        items=[_evaluation_read(item, job_ids.get(item.id)) for item in items],
         total=total,
         limit=limit,
         offset=offset,
@@ -207,7 +245,10 @@ def get_evaluation(db: Session, site_id: int, evaluation_id: int) -> FindingEval
             FindingEvaluation.website_property_id == site_id,
         )
     )
-    return _evaluation_read(db, item) if item else None
+    if item is None:
+        return None
+    job_ids = _evaluation_job_ids(db, [item.id])
+    return _evaluation_read(item, job_ids.get(item.id))
 
 
 def set_acknowledged(
@@ -247,30 +288,48 @@ def _list_item(
     )
 
 
-def _evaluation_read(db: Session, item: FindingEvaluation) -> FindingEvaluationRead:
-    job_id = db.scalar(
-        select(BackgroundJob.id).where(BackgroundJob.dedupe_key == f"finding-evaluation:{item.id}")
-    )
+def _evaluation_read(
+    item: FindingEvaluation, background_job_id: int | None
+) -> FindingEvaluationRead:
     return FindingEvaluationRead.model_validate(item).model_copy(
-        update={"background_job_id": job_id}
+        update={"background_job_id": background_job_id}
     )
+
+
+def _evaluation_job_ids(db: Session, evaluation_ids: list[int]) -> dict[int, int]:
+    if not evaluation_ids:
+        return {}
+    key_to_evaluation_id = {
+        f"finding-evaluation:{evaluation_id}": evaluation_id for evaluation_id in evaluation_ids
+    }
+    return {
+        key_to_evaluation_id[dedupe_key]: job_id
+        for job_id, dedupe_key in db.execute(
+            select(BackgroundJob.id, BackgroundJob.dedupe_key).where(
+                BackgroundJob.dedupe_key.in_(key_to_evaluation_id)
+            )
+        )
+    }
 
 
 def _reference_read(
-    db: Session, item: FindingEvidenceReference, site_id: int
+    item: FindingEvidenceReference,
+    site_id: int,
+    snapshot_links: dict[int, tuple[int, int]],
+    retained_scans: dict[int, int],
 ) -> FindingEvidenceReferenceRead:
     retained = False
     href: str | None = None
     if item.evidence_kind == "resource_snapshot":
-        snapshot = db.get(ResourceSnapshot, item.evidence_id)
-        retained = bool(snapshot and snapshot.resource_id)
-        if snapshot:
-            href = f"/scans/{snapshot.scan_id}/pages/{snapshot.id}"
+        snapshot = snapshot_links.get(item.evidence_id)
+        retained = snapshot is not None
+        if snapshot is not None:
+            scan_id, _resource_id = snapshot
+            href = f"/scans/{scan_id}/pages/{item.evidence_id}"
     elif item.evidence_kind == "scan":
-        scan = db.get(Scan, item.evidence_id)
-        retained = bool(scan and scan.website_property_id == site_id)
-        if scan:
-            href = f"/scans/{scan.id}"
+        retained = retained_scans.get(item.evidence_id) == site_id
+        if retained:
+            href = f"/scans/{item.evidence_id}"
     return FindingEvidenceReferenceRead(
         id=item.id,
         position=item.position,

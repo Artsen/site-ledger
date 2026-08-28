@@ -244,6 +244,87 @@ def enqueue_finding_evaluation_job(
     )
 
 
+def requeue_finding_evaluation_job(
+    db: Session, evaluation_id: int, website_property_id: int, *, priority: int = 115
+) -> BackgroundJob:
+    """Requeue one terminal Finding attempt without changing its frozen input identity."""
+    from app.models import FindingAssessment, FindingEvaluation
+
+    evaluation = db.get(FindingEvaluation, evaluation_id)
+    if evaluation is None or evaluation.website_property_id != website_property_id:
+        raise ValueError("Finding evaluation not found.")
+    job = db.scalar(
+        select(BackgroundJob).where(
+            BackgroundJob.dedupe_key == f"finding-evaluation:{evaluation_id}"
+        )
+    )
+    if job is None:
+        raise ValueError("Finding evaluation job not found.")
+    if evaluation.status == "completed" or job.status == JOB_STATUS_COMPLETED:
+        raise ValueError("Completed Finding evaluations cannot be retried.")
+    if evaluation.status not in {"failed", "cancelled"}:
+        raise ValueError("Only failed or cancelled Finding evaluations can be retried.")
+    if job.status not in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED, JOB_STATUS_INTERRUPTED}:
+        raise ValueError("Finding evaluation already has an active execution.")
+    assessment_count = db.scalar(
+        select(func.count(FindingAssessment.id)).where(
+            FindingAssessment.finding_evaluation_id == evaluation.id
+        )
+    )
+    if assessment_count:
+        raise RuntimeError("A failed Finding evaluation contains committed assessments.")
+
+    evaluation.status = "queued"
+    evaluation.detected_count = 0
+    evaluation.clear_count = 0
+    evaluation.unknown_count = 0
+    evaluation.created_finding_count = 0
+    evaluation.resolved_finding_count = 0
+    evaluation.reopened_finding_count = 0
+    evaluation.assessment_count = 0
+    evaluation.evaluation_checksum_sha256 = None
+    evaluation.started_at = None
+    evaluation.finished_at = None
+    evaluation.failed_at = None
+    evaluation.error_type = None
+    evaluation.error_message = None
+
+    now = datetime.now(UTC)
+    previous_status = job.status
+    job.status = JOB_STATUS_QUEUED
+    job.priority = priority
+    job.available_at = now
+    job.claimed_at = None
+    job.heartbeat_at = None
+    job.lease_expires_at = None
+    job.finished_at = None
+    job.worker_id = None
+    job.lease_token = None
+    job.cancellation_requested_at = None
+    job.cancelled_at = None
+    job.error_type = None
+    job.error_message = None
+    job.error_details_json = None
+    job.last_error_at = None
+    job.result_json = None
+    job.progress_version = 1
+    job.progress_json = {"version": 1, "phase": "queued", "updated_at": now.isoformat()}
+    job.current_operation = None
+    job.progress_current = None
+    job.progress_total = None
+    job.progress_unit = None
+    emit_event(
+        db,
+        job.id,
+        "manually_requeued",
+        "info",
+        "Finding evaluation explicitly requeued.",
+        {"previous_status": previous_status, "attempt_count": job.attempt_count},
+    )
+    db.flush()
+    return job
+
+
 def _enqueue_job(
     db: Session,
     *,
@@ -531,7 +612,8 @@ def request_cancellation(
                 db,
                 int(job.payload_json.get("finding_evaluation_id", 0)),
                 "cancelled",
-                "Finding evaluation cancelled before execution.",
+                error_type="cancelled",
+                error_message="Finding evaluation cancelled before execution.",
             )
         emit_event(db, job.id, "cancelled", "info", "Queued job cancelled.")
     db.commit()
@@ -771,6 +853,16 @@ def recover_expired_jobs(
                 render_run.finished_at = now
                 render_run.error_summary = "Worker lease expired during rendered capture."
                 mark_render_run_capturing_interrupted(db, render_run.id, "lease_expired")
+        elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
+            from app.services.finding_evaluations import mark_evaluation_terminal
+
+            mark_evaluation_terminal(
+                db,
+                int(job.payload_json.get("finding_evaluation_id", 0)),
+                "failed",
+                error_type="lease_expired",
+                error_message="Worker lease expired during Finding evaluation.",
+            )
         elif job.scan_id:
             scan = db.get(Scan, job.scan_id)
             if scan and scan.status not in TERMINAL_JOB_STATUSES:
@@ -838,6 +930,14 @@ def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
     elif job.job_type == JOB_TYPE_RENDER_RUN:
         render_run = db.get(RenderRun, int(job.payload_json.get("render_run_id", 0)))
         domain_status = render_run.status if render_run else JOB_STATUS_FAILED
+    elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
+        from app.models import FindingEvaluation
+
+        evaluation = db.get(
+            FindingEvaluation, int(job.payload_json.get("finding_evaluation_id", 0))
+        )
+        if evaluation is not None and evaluation.status in {"completed", "cancelled"}:
+            domain_status = evaluation.status
     elif job.scan_id:
         scan = db.get(Scan, job.scan_id)
         domain_status = scan.status if scan else JOB_STATUS_FAILED

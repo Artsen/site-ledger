@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.api.findings_routes import router as findings_router
@@ -26,8 +26,14 @@ from app.services.finding_evaluations import (
     create_evaluation,
     execute_evaluation,
 )
-from app.services.findings import get_finding, list_findings, set_acknowledged
-from app.services.job_handlers import FindingEvaluationJobHandler, JobExecutionContext
+from app.services.findings import get_finding, list_evaluations, list_findings, set_acknowledged
+from app.services.job_handlers import (
+    FindingEvaluationJobHandler,
+    JobExecutionContext,
+    JobHandlerRegistry,
+    run_claimed_job,
+)
+from app.services.job_types import JOB_TYPE_FINDING_EVALUATION
 
 
 def _site_page(db):
@@ -87,6 +93,26 @@ def _evaluate(db, site):
     result = execute_evaluation(db, evaluation.id)
     db.commit()
     return evaluation, result
+
+
+def _findings_client(db_session) -> TestClient:
+    application = FastAPI()
+    application.include_router(findings_router)
+
+    def override_db():
+        yield db_session
+
+    application.dependency_overrides[get_db] = override_db
+    return TestClient(application)
+
+
+def _job_context(factory, job, lease_token: str) -> JobExecutionContext:
+    return JobExecutionContext(
+        session_factory=factory,
+        job_id=job.id,
+        lease_token=lease_token,
+        lease_seconds=30,
+    )
 
 
 def test_http_finding_lifecycle_uses_one_identity_and_evidence_time(db_session) -> None:
@@ -224,8 +250,28 @@ def test_findings_api_queues_lists_details_and_keeps_acknowledgement_separate(
             select(BackgroundJob).where(BackgroundJob.job_type == "finding_evaluation")
         )
         assert job is not None
-        execute_evaluation(db_session, evaluation_id)
-        db_session.commit()
+        queued_duplicate = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert queued_duplicate.json()["id"] == evaluation_id
+        assert db_session.query(BackgroundJob).count() == 1
+
+        claimed = background_jobs.claim_next_job(
+            db_session, worker_id="finding-api-worker", lease_seconds=30
+        )
+        assert claimed is not None and claimed.job.id == job.id
+        running_duplicate = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert running_duplicate.json()["id"] == evaluation_id
+        assert db_session.query(BackgroundJob).count() == 1
+        factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+        FindingEvaluationJobHandler(factory)._execute_blocking(
+            claimed.job,
+            evaluation_id,
+            _job_context(factory, claimed.job, claimed.lease_token),
+        )
+        db_session.expire_all()
+        completed_duplicate = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert completed_duplicate.json()["id"] == evaluation_id
+        assert db_session.get(BackgroundJob, job.id).attempt_count == 1
+        assert db_session.query(FindingAssessment).count() == 1
 
         listing = client.get(f"/api/sites/{site.id}/findings").json()
         assert listing["total"] == 1
@@ -294,3 +340,302 @@ def test_queued_job_cancellation_terminalizes_the_evaluation(db_session) -> None
     assert job.status == "cancelled"
     assert evaluation.status == "cancelled"
     assert db_session.query(Finding).count() == 0
+
+
+def test_expired_finding_job_rolls_back_then_recovers_and_explicitly_retries(
+    db_session, monkeypatch
+) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 8, 24, tzinfo=UTC), 404)
+    evaluation, _ = create_evaluation(db_session, site.id)
+    input_fingerprint = evaluation.input_fingerprint_sha256
+    job = background_jobs.enqueue_finding_evaluation_job(db_session, evaluation.id, site.id)
+    db_session.commit()
+    claimed = background_jobs.claim_next_job(
+        db_session, worker_id="finding-worker-dead", lease_seconds=30
+    )
+    assert claimed is not None and claimed.job.id == job.id
+
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+    handler = FindingEvaluationJobHandler(factory)
+    real_complete = background_jobs.complete_job
+
+    def fail_before_terminal_commit(*_args, **_kwargs):
+        raise RuntimeError("simulated worker death before commit")
+
+    monkeypatch.setattr(background_jobs, "complete_job", fail_before_terminal_commit)
+    with pytest.raises(RuntimeError, match="simulated worker death"):
+        handler._execute_blocking(
+            claimed.job,
+            evaluation.id,
+            _job_context(factory, claimed.job, claimed.lease_token),
+        )
+    monkeypatch.setattr(background_jobs, "complete_job", real_complete)
+
+    db_session.expire_all()
+    persisted_job = db_session.get(BackgroundJob, job.id)
+    persisted_evaluation = db_session.get(FindingEvaluation, evaluation.id)
+    assert persisted_job is not None and persisted_job.status == "running"
+    assert persisted_evaluation is not None and persisted_evaluation.status == "queued"
+    assert db_session.query(Finding).count() == 0
+    assert db_session.query(FindingAssessment).count() == 0
+    assert db_session.query(FindingEvidenceReference).count() == 0
+
+    persisted_job.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+    assert background_jobs.recover_expired_jobs(db_session) == 1
+    db_session.refresh(persisted_job)
+    db_session.refresh(persisted_evaluation)
+    assert persisted_job.status == "interrupted"
+    assert persisted_evaluation.status == "failed"
+    assert persisted_evaluation.failed_at is not None
+    assert persisted_evaluation.error_type == "lease_expired"
+    assert persisted_evaluation.error_message == "Worker lease expired during Finding evaluation."
+    assert db_session.query(Finding).count() == 0
+    assert db_session.query(FindingAssessment).count() == 0
+    assert db_session.query(FindingEvidenceReference).count() == 0
+
+    with _findings_client(db_session) as client:
+        retried = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert retried.status_code == 202
+        assert retried.json()["id"] == evaluation.id
+    db_session.expire_all()
+    retried_job = db_session.get(BackgroundJob, job.id)
+    retried_evaluation = db_session.get(FindingEvaluation, evaluation.id)
+    assert retried_job is not None and retried_job.status == "queued"
+    assert retried_evaluation is not None and retried_evaluation.status == "queued"
+    assert retried_evaluation.input_fingerprint_sha256 == input_fingerprint
+    assert (
+        db_session.query(BackgroundJob)
+        .filter(BackgroundJob.status.in_({"queued", "running"}))
+        .count()
+        == 1
+    )
+
+    retry_claim = background_jobs.claim_next_job(
+        db_session, worker_id="finding-worker-retry", lease_seconds=30
+    )
+    assert retry_claim is not None and retry_claim.job.id == job.id
+    handler._execute_blocking(
+        retry_claim.job,
+        evaluation.id,
+        _job_context(factory, retry_claim.job, retry_claim.lease_token),
+    )
+    db_session.expire_all()
+    assert db_session.get(FindingEvaluation, evaluation.id).status == "completed"
+    assert db_session.get(BackgroundJob, job.id).status == "completed"
+    assert db_session.query(Finding).count() == 1
+    assert db_session.query(FindingAssessment).count() == 1
+    finding_fingerprint = db_session.scalar(select(Finding.fingerprint_sha256))
+
+    with _findings_client(db_session) as client:
+        completed_duplicate = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert completed_duplicate.status_code == 202
+        assert completed_duplicate.json()["id"] == evaluation.id
+    db_session.expire_all()
+    assert db_session.get(BackgroundJob, job.id).status == "completed"
+    assert db_session.get(BackgroundJob, job.id).attempt_count == 2
+    assert db_session.query(Finding).count() == 1
+    assert db_session.query(FindingAssessment).count() == 1
+    assert db_session.scalar(select(Finding.fingerprint_sha256)) == finding_fingerprint
+    event_types = list(
+        db_session.scalars(
+            select(background_jobs.JobEvent.event_type)
+            .where(background_jobs.JobEvent.job_id == job.id)
+            .order_by(background_jobs.JobEvent.id)
+        )
+    )
+    assert event_types.count("claimed") == 2
+    assert event_types.count("lease_expired") == 1
+    assert event_types.count("manually_requeued") == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_finding_job_can_be_explicitly_retried_and_completed(
+    db_session, monkeypatch
+) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 8, 24, tzinfo=UTC), 404)
+    with _findings_client(db_session) as client:
+        response = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert response.status_code == 202
+        evaluation_id = response.json()["id"]
+    job = db_session.scalar(
+        select(BackgroundJob).where(BackgroundJob.job_type == JOB_TYPE_FINDING_EVALUATION)
+    )
+    assert job is not None
+    claimed = background_jobs.claim_next_job(
+        db_session, worker_id="finding-worker-failure", lease_seconds=30
+    )
+    assert claimed is not None
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+    registry = JobHandlerRegistry(
+        {JOB_TYPE_FINDING_EVALUATION: FindingEvaluationJobHandler(factory)}
+    )
+
+    def fail_evaluator(*_args, **_kwargs):
+        raise RuntimeError("forced evaluator failure")
+
+    monkeypatch.setattr("app.services.job_handlers.execute_evaluation", fail_evaluator)
+    await run_claimed_job(
+        session_factory=factory,
+        registry=registry,
+        claimed_job=claimed,
+        lease_seconds=30,
+    )
+    monkeypatch.setattr("app.services.job_handlers.execute_evaluation", execute_evaluation)
+    db_session.expire_all()
+    assert db_session.get(FindingEvaluation, evaluation_id).status == "failed"
+    assert db_session.get(BackgroundJob, job.id).status == "failed"
+    assert db_session.query(Finding).count() == 0
+    assert db_session.query(FindingAssessment).count() == 0
+
+    with _findings_client(db_session) as client:
+        retried = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert retried.status_code == 202
+        assert retried.json()["id"] == evaluation_id
+    retry_claim = background_jobs.claim_next_job(
+        db_session, worker_id="finding-worker-success", lease_seconds=30
+    )
+    assert retry_claim is not None and retry_claim.job.id == job.id
+    await run_claimed_job(
+        session_factory=factory,
+        registry=registry,
+        claimed_job=retry_claim,
+        lease_seconds=30,
+    )
+    db_session.expire_all()
+    assert db_session.get(FindingEvaluation, evaluation_id).status == "completed"
+    assert db_session.get(BackgroundJob, job.id).status == "completed"
+    assert db_session.query(Finding).count() == 1
+    assert db_session.query(FindingAssessment).count() == 1
+
+    with _findings_client(db_session) as client:
+        duplicate = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert duplicate.status_code == 202
+        assert duplicate.json()["id"] == evaluation_id
+    db_session.expire_all()
+    assert db_session.get(BackgroundJob, job.id).attempt_count == 2
+    assert db_session.query(FindingAssessment).count() == 1
+
+
+def test_cancelled_finding_evaluation_can_be_explicitly_retried(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 8, 24, tzinfo=UTC), 404)
+    with _findings_client(db_session) as client:
+        response = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        evaluation_id = response.json()["id"]
+    job = db_session.scalar(
+        select(BackgroundJob).where(BackgroundJob.job_type == JOB_TYPE_FINDING_EVALUATION)
+    )
+    assert job is not None
+    background_jobs.request_cancellation(db_session, job)
+    assert job.status == "cancelled"
+    assert db_session.get(FindingEvaluation, evaluation_id).status == "cancelled"
+
+    with _findings_client(db_session) as client:
+        retried = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert retried.status_code == 202
+        assert retried.json()["id"] == evaluation_id
+    db_session.expire_all()
+    assert db_session.get(BackgroundJob, job.id).status == "queued"
+    assert db_session.get(FindingEvaluation, evaluation_id).status == "queued"
+    claimed = background_jobs.claim_next_job(
+        db_session, worker_id="finding-worker-after-cancel", lease_seconds=30
+    )
+    assert claimed is not None and claimed.job.id == job.id
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+    FindingEvaluationJobHandler(factory)._execute_blocking(
+        claimed.job,
+        evaluation_id,
+        _job_context(factory, claimed.job, claimed.lease_token),
+    )
+    db_session.expire_all()
+    assert db_session.get(FindingEvaluation, evaluation_id).status == "completed"
+    assert db_session.get(BackgroundJob, job.id).status == "completed"
+    assert db_session.query(Finding).count() == 1
+    assert db_session.query(FindingAssessment).count() == 1
+
+
+def test_evaluation_list_batches_background_job_lookup(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, _snapshot = _scan(db_session, site, resource, datetime(2026, 8, 24, tzinfo=UTC), 200)
+    evaluations = [
+        FindingEvaluation(
+            website_property_id=site.id,
+            source_scan_id=scan.id,
+            evaluator_version="finding-evaluator-v1",
+            detector_bundle_identity="finding-detectors-v1",
+            input_fingerprint_sha256=f"{index:064x}",
+            evidence_horizon_at=scan.finished_at,
+            active_page_count=1,
+            active_page_universe_sha256=f"{index + 100:064x}",
+            active_page_resource_ids_json=[resource.id],
+            status="completed",
+        )
+        for index in range(100)
+    ]
+    db_session.add_all(evaluations)
+    db_session.flush()
+    for evaluation in evaluations:
+        background_jobs.enqueue_finding_evaluation_job(db_session, evaluation.id, site.id)
+    db_session.commit()
+    db_session.expire_all()
+
+    selects = 0
+
+    def count_selects(_connection, _cursor, statement, *_args) -> None:
+        nonlocal selects
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects += 1
+
+    event.listen(db_session.bind, "before_cursor_execute", count_selects)
+    try:
+        result = list_evaluations(db_session, site.id, 100, 0)
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", count_selects)
+    assert result is not None and len(result.items) == 100
+    assert all(item.background_job_id is not None for item in result.items)
+    assert selects <= 4
+    print(f"finding evaluation list: evaluations=100 selects={selects}")
+
+
+def test_finding_detail_batches_retained_evidence_resolution(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    start = datetime(2026, 8, 24, tzinfo=UTC)
+    for index in range(25):
+        _scan(
+            db_session,
+            site,
+            resource,
+            start + timedelta(hours=index),
+            404 if index % 2 == 0 else 500,
+        )
+        _evaluate(db_session, site)
+    finding = db_session.scalar(select(Finding))
+    assert finding is not None
+    site_id = site.id
+    finding_id = finding.id
+    db_session.expire_all()
+
+    selects = 0
+
+    def count_selects(_connection, _cursor, statement, *_args) -> None:
+        nonlocal selects
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects += 1
+
+    event.listen(db_session.bind, "before_cursor_execute", count_selects)
+    try:
+        detail = get_finding(db_session, site_id, finding_id)
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", count_selects)
+    assert detail is not None and len(detail.assessments) == 25
+    assert sum(len(item.evidence_references) for item in detail.assessments) == 50
+    assert all(
+        reference.retained
+        for assessment in detail.assessments
+        for reference in assessment.evidence_references
+    )
+    assert selects <= 7
+    print(f"finding detail: assessments=25 references=50 selects={selects}")

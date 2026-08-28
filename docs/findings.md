@@ -35,6 +35,17 @@ Assessments are immutable and are stored only for newly detected Findings and ex
 Clean or unknown Pages with no Finding do not create rows. Exact-input fingerprints deduplicate
 evaluations and their assessments.
 
+A completed exact input is immutable and never reruns. An input with queued or running execution
+also deduplicates to that active attempt. A user may explicitly rerun the same failed or cancelled
+input: V1 reuses its frozen FindingEvaluation and BackgroundJob, preserves job events and attempt
+count, verifies that the failed transaction committed no assessments, and resets only execution
+result state. This is manual recovery, not an automatic retry policy.
+
+If a running Finding job loses its lease, recovery interrupts the BackgroundJob and marks the
+FindingEvaluation failed with `lease_expired` provenance. The abandoned evaluation transaction is
+rolled back, so no partial Finding, assessment, evidence reference, or lifecycle transition is
+applied. The user can then explicitly rerun that exact immutable input.
+
 ## Workflow And Visibility
 
 Acknowledgement is mutable workflow and never changes condition state. Resolution retains current
@@ -48,6 +59,12 @@ Evidence references are ordered durable typed pointers rather than polymorphic f
 Creation validates the referenced Scan or ResourceSnapshot. Evidence deletion therefore preserves
 Finding and assessment history, while reads truthfully report that a source is no longer retained.
 Raw evidence is never copied into Finding tables.
+
+Evaluation and detail reads batch BackgroundJob and retained-evidence resolution by evidence kind.
+Evaluation SELECT work remains bounded as the active Page universe grows. Write volume currently
+scales with persisted operational Findings, assessments, and evidence references rather than with
+every clean Page; bulk write optimization is deferred until detector packs materially increase
+Finding volume.
 
 Future detector packs may add indexability and other deterministic conditions. They must preserve
 these identity, chronology, evidence, and unknown-state contracts.
