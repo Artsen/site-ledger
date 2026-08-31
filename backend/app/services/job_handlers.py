@@ -115,6 +115,20 @@ class JobExecutionContext:
         if self.lease_lost:
             raise ExecutionOwnershipLost("Job lease ownership was lost.")
 
+    def fence_domain_mutation(self, db: Session) -> None:
+        """Fence collector writes in the transaction that owns their domain mutation."""
+        self.raise_if_lease_lost()
+        try:
+            background_jobs.guard_execution_ownership(
+                db,
+                job_id=self.job_id,
+                lease_token=self.lease_token,
+                lease_seconds=self.lease_seconds,
+            )
+        except background_jobs.StaleLeaseError as exc:
+            self.mark_lease_lost()
+            raise ExecutionOwnershipLost("Job lease ownership was lost.") from exc
+
     def check_cancelled(self) -> bool:
         self.raise_if_lease_lost()
         with self.session_factory() as db:
@@ -482,6 +496,7 @@ class PerformanceRunJobHandler:
             self.session_factory,
             run_id,
             should_cancel=context.check_cancelled,
+            fence_domain_mutation=context.fence_domain_mutation,
             progress=lambda current, total, counters: context.progress(
                 phase="collecting",
                 current_operation="Collecting external Performance evidence",
@@ -516,6 +531,7 @@ class AccessibilityRunJobHandler:
             self.session_factory,
             run_id,
             should_cancel=context.check_cancelled,
+            fence_domain_mutation=context.fence_domain_mutation,
             progress=lambda current, total, counters: context.progress(
                 phase="auditing",
                 current_operation="Collecting automated Accessibility evidence",
@@ -549,6 +565,7 @@ class RenderRunJobHandler:
             self.session_factory,
             run_id,
             should_cancel=context.check_cancelled,
+            fence_domain_mutation=context.fence_domain_mutation,
             progress=lambda current, total, counters: context.progress(
                 phase="capturing",
                 current_operation="Capturing rendered Page evidence",

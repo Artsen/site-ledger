@@ -103,6 +103,14 @@ nonterminal evaluation with explicit provenance. Failed or cancelled exact input
 requeued by an explicit Finding run request; the same evaluation and job retain attempt/event
 history, and completed inputs never rerun. See [Findings](findings.md).
 
+Execution ownership governs authority to mutate durable domain state, not only authority to
+terminalize a BackgroundJob. Work that can block outside the database follows the transactional
+shape `external work -> ownership fence -> domain mutation -> commit`. The fence renews and verifies
+the current running lease in the same transaction as the resulting domain write, so recovery and a
+stale executor cannot both commit authority-dependent state. Checking ownership before long work is
+still necessary for bounded cancellation, but is insufficient by itself because ownership can be
+lost while that work is in flight.
+
 `performance_run` executes a bounded canonical request set serially through fixed PageSpeed and CrUX
 adapters. It commits each immutable observation independently, reports ready/unavailable/failed
 counters, cooperates between provider requests, and skips already-retained logical requests after a

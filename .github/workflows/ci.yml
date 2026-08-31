@@ -44,6 +44,10 @@ jobs:
         run: uv lock --check
       - name: Sync backend dependencies
         run: uv sync --extra dev --locked
+      - name: Audit locked backend runtime dependencies
+        run: |
+          uv export --locked --no-dev --no-emit-local --format requirements.txt --output-file "$RUNNER_TEMP/backend-runtime-requirements.txt"
+          uv run --extra dev --locked pip-audit -r "$RUNNER_TEMP/backend-runtime-requirements.txt"
       - name: Install backend Chromium
         run: uv run --extra dev --locked playwright install --with-deps chromium
       - name: Run backend tests

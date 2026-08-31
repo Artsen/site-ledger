@@ -486,8 +486,10 @@ Do not disable checks or weaken tests to force passing results.
 - A stale lease token may never heartbeat, report progress, complete, or fail a job. Job and worker
   heartbeats are operational liveness state, not permanent event spam. Confirmed lease loss also
   removes authority over domain execution: blocking work must stop at its next bounded checkpoint
-  without replacing recovery's domain state. Domain and BackgroundJob terminalization must share a
-  guarded ownership transaction.
+  without replacing recovery's domain state. Execution ownership governs every durable domain
+  mutation, not only terminalization. After external work, fence ownership and apply its domain
+  mutation in the same transaction before commit. Domain and BackgroundJob terminalization must
+  likewise share a guarded ownership transaction.
 - Do not compensate for event-loop starvation by merely increasing job lease timeout defaults.
 - Avoid unrelated refactors and dependency upgrades.
 - Do not create fake data, placeholder APIs, or controls that do nothing.

@@ -503,7 +503,7 @@ def update_progress(
     db.commit()
 
 
-def guard_terminalization(
+def guard_execution_ownership(
     db: Session,
     *,
     job_id: int,
@@ -511,7 +511,7 @@ def guard_terminalization(
     lease_seconds: float,
     now: datetime | None = None,
 ) -> None:
-    """Hold current ownership through a shared domain/job terminal transaction."""
+    """Fence durable domain mutation inside the caller's current transaction."""
     now = now or datetime.now(UTC)
     result = cast(
         CursorResult[Any],
@@ -528,6 +528,24 @@ def guard_terminalization(
     if result.rowcount != 1:
         db.rollback()
         raise StaleLeaseError("Job lease is no longer active.")
+
+
+def guard_terminalization(
+    db: Session,
+    *,
+    job_id: int,
+    lease_token: str,
+    lease_seconds: float,
+    now: datetime | None = None,
+) -> None:
+    """Hold current ownership through a shared domain/job terminal transaction."""
+    guard_execution_ownership(
+        db,
+        job_id=job_id,
+        lease_token=lease_token,
+        lease_seconds=lease_seconds,
+        now=now,
+    )
 
 
 def _touch_assigned_worker(db: Session, job_id: int, now: datetime) -> None:
