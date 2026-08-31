@@ -443,11 +443,15 @@ class StructuredContentBuildJobHandler:
             raise ValueError("Structured content job is missing site_id.")
         scan_id_value = job.payload_json.get("scan_id")
         limit_value = job.payload_json.get("limit")
+        content_blob_ids_value = job.payload_json.get("content_blob_ids")
         return await asyncio.to_thread(
             self._execute_blocking,
             site_id,
             int(scan_id_value) if scan_id_value is not None else None,
             int(limit_value) if limit_value is not None else None,
+            [int(value) for value in content_blob_ids_value]
+            if content_blob_ids_value is not None
+            else None,
             context,
         )
 
@@ -456,6 +460,7 @@ class StructuredContentBuildJobHandler:
         site_id: int,
         scan_id: int | None,
         limit: int | None,
+        content_blob_ids: list[int] | None,
         context: JobExecutionContext,
     ) -> HandlerResult:
         with self.session_factory() as db:
@@ -465,6 +470,8 @@ class StructuredContentBuildJobHandler:
                 site_id=site_id,
                 scan_id=scan_id,
                 limit=limit,
+                content_blob_ids=content_blob_ids,
+                fence_domain_mutation=context.fence_domain_mutation,
                 should_cancel=context.check_cancelled,
                 progress=lambda current, total, counters: context.progress(
                     phase="preparing",

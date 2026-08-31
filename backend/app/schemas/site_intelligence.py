@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.collection_plans import CollectionCoverageRead
+
 
 class CoverageRead(BaseModel):
     observed: int
@@ -179,3 +181,4 @@ class SiteIntelligenceRead(BaseModel):
     sources: SourcesIntelligenceRead
     findings: FindingsIntelligenceRead
     activity: ActivityIntelligenceRead
+    collection_coverage: list[CollectionCoverageRead] = Field(default_factory=list)

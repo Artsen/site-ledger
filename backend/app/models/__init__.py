@@ -13,6 +13,11 @@ from app.models.category_rules import (
     PageCategoryRuleRevision,
     PageCategoryRuleRun,
 )
+from app.models.collection_plans import (
+    CollectionPlan,
+    CollectionPlanBatch,
+    CollectionPlanTarget,
+)
 from app.models.comparisons import (
     ScanComparison,
     ScanComparisonBuild,
@@ -97,6 +102,9 @@ __all__ = [
     "AiDocumentValidation",
     "BackgroundJob",
     "ContentBlob",
+    "CollectionPlan",
+    "CollectionPlanBatch",
+    "CollectionPlanTarget",
     "Finding",
     "FindingAssessment",
     "FindingEvaluation",

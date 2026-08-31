@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.sql import Subquery
 
 from app.crawler.canonical_document import (
     STRUCTURED_CONTENT_CONFIG_VERSION,
@@ -24,6 +25,7 @@ from app.models import (
     HtmlStructuredContentNode,
     ResourceSnapshot,
     Scan,
+    SitePage,
 )
 from app.services.job_types import ExecutionOwnershipLost
 from app.storage.content_store import LocalContentStore
@@ -148,6 +150,40 @@ def missing_structured_blob_ids(
     return list(db.scalars(statement))
 
 
+def latest_page_content_snapshot_subquery(site_id: int) -> Subquery:
+    ranked = (
+        select(
+            ResourceSnapshot.id.label("source_snapshot_id"),
+            ResourceSnapshot.resource_id,
+            ResourceSnapshot.html_blob_id.label("content_blob_id"),
+            func.coalesce(ResourceSnapshot.fetched_at, Scan.created_at).label("observed_at"),
+            func.row_number()
+            .over(
+                partition_by=ResourceSnapshot.resource_id,
+                order_by=(
+                    func.coalesce(ResourceSnapshot.fetched_at, Scan.created_at).desc(),
+                    ResourceSnapshot.id.desc(),
+                ),
+            )
+            .label("position"),
+        )
+        .join(Scan, Scan.id == ResourceSnapshot.scan_id)
+        .join(
+            SitePage,
+            (SitePage.website_property_id == site_id)
+            & (SitePage.resource_id == ResourceSnapshot.resource_id),
+        )
+        .where(
+            Scan.website_property_id == site_id,
+            SitePage.workspace_state == "active",
+            ResourceSnapshot.fetch_state == "fetched",
+            ResourceSnapshot.html_blob_id.is_not(None),
+        )
+        .subquery()
+    )
+    return select(ranked).where(ranked.c.position == 1).subquery()
+
+
 def build_missing_structured_content(
     db: Session,
     store: LocalContentStore,
@@ -158,8 +194,14 @@ def build_missing_structured_content(
     stop_on_error: bool = False,
     should_cancel: Callable[[], bool] | None = None,
     progress: Callable[[int, int, dict[str, int]], None] | None = None,
+    content_blob_ids: list[int] | None = None,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> dict[str, int]:
-    blob_ids = missing_structured_blob_ids(db, site_id=site_id, scan_id=scan_id, limit=limit)
+    blob_ids = (
+        list(dict.fromkeys(content_blob_ids))
+        if content_blob_ids is not None
+        else missing_structured_blob_ids(db, site_id=site_id, scan_id=scan_id, limit=limit)
+    )
     counters = {"prepared": 0, "ready": 0, "partial": 0, "unavailable": 0, "failed": 0}
     for index, blob_id in enumerate(blob_ids, 1):
         if should_cancel and should_cancel():
@@ -168,7 +210,22 @@ def build_missing_structured_content(
             blob = db.get(ContentBlob, blob_id)
             if blob is None:
                 raise ValueError(f"ContentBlob {blob_id} no longer exists.")
-            artifact, _ = get_or_create_structured_artifact(db, blob, store=store)
+            artifact = compatible_structured_artifact(db, blob.id)
+            if artifact is None:
+                content = store.get(blob)
+                result = extract_canonical_document(content)
+                validate_canonical_document(result)
+                if fence_domain_mutation is not None:
+                    fence_domain_mutation(db)
+                artifact = compatible_structured_artifact(db, blob.id)
+                if artifact is None:
+                    try:
+                        with db.begin_nested():
+                            artifact = _persist_result(db, blob, result)
+                    except IntegrityError:
+                        artifact = compatible_structured_artifact(db, blob.id)
+                        if artifact is None:
+                            raise
             counters["prepared"] += 1
             counters[artifact.extraction_state] += 1
             db.commit()

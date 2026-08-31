@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,7 +8,9 @@ import type { Site } from "../src/types/scans";
 import type { SiteIntelligence } from "../src/types/siteIntelligence";
 
 const api = vi.hoisted(() => ({ getSiteIntelligence: vi.fn() }));
+const plans = vi.hoisted(() => ({ previewCollectionPlan: vi.fn(), createCollectionPlan: vi.fn() }));
 vi.mock("../src/api/siteIntelligence", () => api);
+vi.mock("../src/api/collectionPlans", () => plans);
 
 const site = { id: 3, name: "Example", display_timezone: "UTC" } as Site;
 const clock = (value: string | null) => ({
@@ -32,11 +34,17 @@ function intelligence(): SiteIntelligence {
     sources: { active_source_count: 2, inactive_source_count: 1, current_inventory_count: 11, suppressed_inventory_count: 2, latest_refresh_status: "completed", latest_refresh_finished_at: "2026-08-27T05:00:00Z" },
     findings: { detected: 2, unknown: 1, acknowledged_detected: 1, unresolved_total: 3, latest_evaluation_id: 6, latest_evidence_horizon_at: "2026-08-27T05:00:00Z", latest_evaluation_completed_at: "2026-08-27T05:01:00Z" },
     activity: { active_job_count: 0, queued_count: 0, running_count: 0, jobs: [] },
+    collection_coverage: [{ evidence_domain: "accessibility", target_mode: "missing_current", context_identity: "accessibility:test", context: { profile: "desktop" }, active_page_count: 10, active_page_universe_sha256: "a".repeat(64), eligible: 10, covered: 4, in_flight: 1, missing: 5, ineligible: 0, batch_size: 250, estimated_batch_count: 1, collectable: true, non_collectable_reason: null }],
   };
 }
 
 describe("Site Intelligence overview", () => {
-  beforeEach(() => { vi.clearAllMocks(); api.getSiteIntelligence.mockResolvedValue(intelligence()); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getSiteIntelligence.mockResolvedValue(intelligence());
+    plans.previewCollectionPlan.mockResolvedValue({ ...intelligence().collection_coverage[0], target_total: 5, limit: 20, offset: 0, targets: [{ position: 0, web_resource_id: 42, requested_url: "https://example.test/missing", selection_reason: "missing_current", source_snapshot_id: null, content_blob_id: null }] });
+    plans.createCollectionPlan.mockResolvedValue({ id: 91 });
+  });
   afterEach(() => cleanup());
 
   it("shows explicit coverage, independent dates, and separate Performance contexts", async () => {
@@ -112,6 +120,18 @@ describe("Site Intelligence overview", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("previews missing Pages and confirms visible batch counts before collection", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderOverview();
+    fireEvent.click(await screen.findByRole("button", { name: "View missing" }));
+    expect(await screen.findByText("https://example.test/missing")).toBeInTheDocument();
+    expect(screen.getByText("42")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Collect missing" }));
+    await waitFor(() => expect(plans.createCollectionPlan).toHaveBeenCalledTimes(1));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Batch 1: 5"));
+    confirm.mockRestore();
   });
 });
 

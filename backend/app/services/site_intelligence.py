@@ -32,6 +32,7 @@ from app.models import (
     UrlSource,
     WebsiteProperty,
 )
+from app.schemas.collection_plans import CollectionCoverageRead, CollectionPlanRequest
 from app.schemas.site_intelligence import (
     AccessibilityIntelligenceRead,
     ActiveJobRead,
@@ -50,10 +51,12 @@ from app.schemas.site_intelligence import (
     SourcesIntelligenceRead,
     StructuredContentIntelligenceRead,
 )
+from app.services.collection_plans import Selection, active_page_candidates, build_selection
 from app.services.inventory_lifecycle import summarize_current_inventory
 from app.services.rendered_queries import render_outcome_conditions
 from app.services.scan_comparisons import SCAN_COMPARISON_ALGORITHM, SCAN_COMPARISON_VERSION
 from app.services.scan_projections import TERMINAL_SCAN_STATUSES
+from app.services.structured_content import latest_page_content_snapshot_subquery
 
 
 def _coverage(observed: int, eligible: int) -> CoverageRead:
@@ -89,7 +92,60 @@ def get_site_intelligence(db: Session, site_id: int) -> SiteIntelligenceRead | N
         sources=_sources_state(db, site_id),
         findings=_findings_state(db, site_id),
         activity=_activity_state(db, site_id),
+        collection_coverage=_collection_coverage(db, site_id, active_total),
     )
+
+
+def _selection_coverage(selection: Selection) -> CollectionCoverageRead:
+    missing = len(selection.targets)
+    return CollectionCoverageRead(
+        evidence_domain=selection.domain,
+        target_mode=selection.target_mode,
+        context_identity=selection.context_identity,
+        context=selection.context,
+        active_page_count=len(selection.active),
+        active_page_universe_sha256=selection.universe_sha256,
+        eligible=len(selection.eligible),
+        covered=len(selection.covered_ids),
+        in_flight=len(selection.in_flight_ids),
+        missing=missing,
+        ineligible=selection.ineligible_count,
+        batch_size=selection.batch_size,
+        estimated_batch_count=(missing + selection.batch_size - 1) // selection.batch_size,
+        collectable=selection.collectable,
+        non_collectable_reason=selection.non_collectable_reason,
+    )
+
+
+def _collection_coverage(
+    db: Session, site_id: int, active_total: int
+) -> list[CollectionCoverageRead]:
+    requests = [
+        CollectionPlanRequest(
+            evidence_domain="performance",
+            context={"provider": provider, "dimension": dimension},
+        )
+        for provider, dimensions in (
+            ("pagespeed", ("mobile", "desktop")),
+            ("crux", ("PHONE", "DESKTOP")),
+        )
+        for dimension in dimensions
+    ]
+    requests.extend(
+        CollectionPlanRequest(evidence_domain="accessibility", context={"profile": profile})
+        for profile in ("desktop", "mobile")
+    )
+    requests.extend(
+        (
+            CollectionPlanRequest(evidence_domain="render"),
+            CollectionPlanRequest(evidence_domain="structured_content"),
+        )
+    )
+    active_override = active_page_candidates(db, site_id) if active_total else ()
+    return [
+        _selection_coverage(build_selection(db, site_id, request, active_override=active_override))
+        for request in requests
+    ]
 
 
 def _page_population(db: Session, site_id: int) -> PagePopulationRead:
@@ -265,31 +321,7 @@ def _comparison_state(db: Session, site_id: int) -> ComparisonIntelligenceRead:
 def _structured_content_state(
     db: Session, site_id: int, active_total: int
 ) -> StructuredContentIntelligenceRead:
-    ranked = (
-        select(
-            ResourceSnapshot.resource_id,
-            ResourceSnapshot.html_blob_id,
-            func.coalesce(ResourceSnapshot.fetched_at, Scan.created_at).label("observed_at"),
-            func.row_number()
-            .over(
-                partition_by=ResourceSnapshot.resource_id,
-                order_by=(
-                    func.coalesce(ResourceSnapshot.fetched_at, Scan.created_at).desc(),
-                    ResourceSnapshot.id.desc(),
-                ),
-            )
-            .label("position"),
-        )
-        .join(Scan, Scan.id == ResourceSnapshot.scan_id)
-        .where(
-            Scan.website_property_id == site_id,
-            ResourceSnapshot.resource_id.in_(_active_pages(site_id)),
-            ResourceSnapshot.fetch_state == "fetched",
-            ResourceSnapshot.html_blob_id.is_not(None),
-        )
-        .subquery()
-    )
-    current = select(ranked).where(ranked.c.position == 1).subquery()
+    current = latest_page_content_snapshot_subquery(site_id)
     values = db.execute(
         select(
             func.count(current.c.resource_id),
@@ -304,7 +336,7 @@ def _structured_content_state(
         .outerjoin(
             HtmlStructuredContentArtifact,
             and_(
-                HtmlStructuredContentArtifact.content_blob_id == current.c.html_blob_id,
+                HtmlStructuredContentArtifact.content_blob_id == current.c.content_blob_id,
                 HtmlStructuredContentArtifact.extractor_version
                 == STRUCTURED_CONTENT_EXTRACTOR_VERSION,
                 HtmlStructuredContentArtifact.extractor_config_version

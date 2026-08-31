@@ -1,13 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
-import { Activity, Accessibility, Braces, FileStack, Gauge, GitCompareArrows, MonitorUp, SearchCheck, Settings } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Activity, Accessibility, Braces, FileStack, Gauge, GitCompareArrows, MonitorUp, Plus, SearchCheck, Settings } from "lucide-react";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 
 import { getSiteIntelligence } from "../../api/siteIntelligence";
+import { createCollectionPlan, previewCollectionPlan } from "../../api/collectionPlans";
+import { Button } from "../../components/ui/Button";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
 import { LoadingBlock } from "../../components/ui/Loading";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { siteAreaHref, type SiteArea } from "../../navigation/workspaceNavigation";
 import type { Site } from "../../types/scans";
+import type { CollectionCoverage, CollectionPlanRequest } from "../../types/collectionPlans";
 import type { EvidenceCoverage, EvidenceClock } from "../../types/siteIntelligence";
 import { formatDate, formatStatus } from "../../utils/format";
 
@@ -48,6 +52,57 @@ function EvidencePanel({ title, area, icon: Icon, coverage, clock, children, sit
   );
 }
 
+function planRequest(coverage: CollectionCoverage): CollectionPlanRequest {
+  const context = coverage.evidence_domain === "performance"
+    ? { provider: coverage.context.provider, dimension: coverage.context.dimension }
+    : coverage.evidence_domain === "accessibility"
+      ? { profile: coverage.context.profile }
+      : {};
+  return { evidence_domain: coverage.evidence_domain, target_mode: "missing_current", context };
+}
+
+function collectionLabel(coverage: CollectionCoverage) {
+  if (coverage.context.provider) return `${formatStatus(coverage.context.provider)} / ${formatStatus(coverage.context.dimension)}`;
+  if (coverage.context.profile) return formatStatus(coverage.context.profile);
+  return coverage.evidence_domain === "render" ? "Current capture profile" : "Current extractor";
+}
+
+function CollectionCoverageActions({ site, values }: { site: Site; values: CollectionCoverage[] }) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [visiblePreview, setVisiblePreview] = useState<Awaited<ReturnType<typeof previewCollectionPlan>> | null>(null);
+  const previewMutation = useMutation({
+    mutationFn: (coverage: CollectionCoverage) => previewCollectionPlan(site.id, planRequest(coverage)),
+    onSuccess: setVisiblePreview,
+  });
+  const mutation = useMutation({
+    mutationFn: async (coverage: CollectionCoverage) => {
+      const payload = planRequest(coverage);
+      const preview = await previewCollectionPlan(site.id, payload);
+      if (!preview.missing) throw new Error("No missing current evidence remains for this context.");
+      const batchSizes = Array.from({ length: preview.estimated_batch_count }, (_, index) => Math.min(preview.batch_size, preview.missing - index * preview.batch_size));
+      const confirmed = window.confirm(`Collect ${preview.missing.toLocaleString()} missing Page${preview.missing === 1 ? "" : "s"}?\n\nCurrent identity:\n${preview.context_identity}\n\nPer-Run limit: ${preview.batch_size.toLocaleString()} Pages\nSite Ledger will create ${preview.estimated_batch_count} bounded batch${preview.estimated_batch_count === 1 ? "" : "es"}:\n${batchSizes.map((size, index) => `Batch ${index + 1}: ${size.toLocaleString()}`).join("\n")}\n\nCovered: ${preview.covered.toLocaleString()}\nAlready in flight: ${preview.in_flight.toLocaleString()}\nIneligible: ${preview.ineligible.toLocaleString()}\n\nTargets will be frozen when collection starts.`);
+      if (!confirmed) return null;
+      return createCollectionPlan(site.id, payload);
+    },
+    onSuccess: async (plan) => {
+      if (!plan) return;
+      await queryClient.invalidateQueries({ queryKey: ["site-intelligence", String(site.id)] });
+      await queryClient.invalidateQueries({ queryKey: ["collection-plans", String(site.id)] });
+      navigate(`/sites/${site.id}/collection-plans/${plan.id}`);
+    },
+  });
+  return (
+    <section className="border-b border-stone-200 py-4">
+      <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Current collection contexts</h3><p className="mt-1 text-xs text-stone-500">Collect only active Pages without compatible current evidence.</p></div><Link className="text-xs font-medium underline" to={siteAreaHref(site.id, "collection-plans")}>History</Link></div>
+      <div className="mt-3 divide-y divide-stone-100 border-y border-stone-100">{values.map((coverage) => <div key={coverage.context_identity} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><span className="text-sm font-medium">{formatStatus(coverage.evidence_domain)} / {collectionLabel(coverage)}</span><p className="mt-0.5 text-xs text-stone-500">{coverage.covered.toLocaleString()} covered, {coverage.in_flight.toLocaleString()} in flight, {coverage.missing.toLocaleString()} missing{coverage.ineligible ? `, ${coverage.ineligible.toLocaleString()} ineligible` : ""}</p></div><div className="flex gap-2"><Button type="button" variant="ghost" className="min-h-8 px-2 py-1 text-xs" loading={previewMutation.isPending && previewMutation.variables?.context_identity === coverage.context_identity} disabled={coverage.missing === 0 || previewMutation.isPending} onClick={() => previewMutation.mutate(coverage)}>View missing</Button><Button type="button" className="min-h-8 px-2 py-1 text-xs" loading={mutation.isPending && mutation.variables?.context_identity === coverage.context_identity} disabled={!coverage.collectable || coverage.missing === 0 || mutation.isPending} title={coverage.non_collectable_reason ?? undefined} onClick={() => mutation.mutate(coverage)}><Plus className="mr-1 size-3.5" />Collect missing</Button></div></div>)}</div>
+      {visiblePreview ? <div className="mt-3 rounded-md border border-stone-200 bg-stone-50 p-3"><div className="flex items-center justify-between gap-3"><div><h4 className="text-sm font-semibold">Missing preview</h4><p className="text-xs text-stone-500">Showing {visiblePreview.targets.length} of {visiblePreview.target_total.toLocaleString()} authoritative targets. Ineligible Pages are excluded.</p></div><Button variant="ghost" className="min-h-8 px-2 py-1 text-xs" onClick={() => setVisiblePreview(null)}>Close</Button></div><div className="mt-3 max-h-64 overflow-auto"><table className="min-w-full text-left text-xs"><thead className="text-stone-500"><tr><th className="pb-2 pr-3">Page</th><th className="pb-2 pr-3">Identity</th><th className="pb-2">Reason / source</th></tr></thead><tbody>{visiblePreview.targets.map((target) => <tr key={target.web_resource_id} className="border-t border-stone-200 align-top"><td className="max-w-lg break-all py-2 pr-3 font-mono">{target.requested_url}</td><td className="py-2 pr-3 tabular-nums">{target.web_resource_id}</td><td className="py-2">{formatStatus(target.selection_reason)}{target.source_snapshot_id ? <span className="block text-stone-500">Snapshot {target.source_snapshot_id} / Blob {target.content_blob_id}</span> : null}</td></tr>)}</tbody></table></div></div> : null}
+      {previewMutation.error ? <div className="mt-3"><ErrorBanner error={previewMutation.error} title="Could not preview missing Pages" /></div> : null}
+      {mutation.error ? <div className="mt-3"><ErrorBanner error={mutation.error} title="Could not create Collection Plan" /></div> : null}
+    </section>
+  );
+}
+
 export function SiteIntelligenceOverview({ site }: { site: Site }) {
   const query = useQuery({
     queryKey: ["site-intelligence", String(site.id)],
@@ -74,6 +129,7 @@ export function SiteIntelligenceOverview({ site }: { site: Site }) {
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
         <section className="rounded-md border border-stone-200 bg-white px-4">
           <h2 className="border-b border-stone-200 py-4 text-base font-semibold">Evidence coverage</h2>
+          <CollectionCoverageActions site={site} values={data.collection_coverage ?? []} />
           <EvidencePanel title="Static observations" area="scans" icon={FileStack} coverage={data.scan.active_page_observed} clock={data.scan.clock} site={site}><p className="mt-2 text-xs text-stone-600">{data.scan.active_page_fetched.observed.toLocaleString()} successfully fetched in the latest terminal Scan</p></EvidencePanel>
           <EvidencePanel title="Structured Content V2" area="pages" icon={Braces} coverage={data.structured_content.coverage} clock={data.structured_content.clock} site={site}><p className="mt-2 text-xs text-stone-600">{data.structured_content.ready} ready, {data.structured_content.partial} partial, {data.structured_content.not_prepared} not prepared, {data.structured_content.ineligible} without eligible retained HTML</p></EvidencePanel>
           <EvidencePanel title="Retained render evidence" area="rendered" icon={MonitorUp} coverage={data.render.retained_coverage} clock={data.render.clock} site={site}><p className="mt-2 text-xs text-stone-600">{data.render.successful} successful, {data.render.no_content} no content, {data.render.redirect} redirects, {data.render.http_error} HTTP errors, {data.render.rate_limited} rate limited, {data.render.not_attempted_host_throttled} skipped after throttling, {data.render.technical_failure} technical failures.</p><p className="mt-1 text-xs text-stone-600">Latest Run targeted {data.render.latest_run.target_count} Pages; retained Site coverage is calculated independently.</p></EvidencePanel>

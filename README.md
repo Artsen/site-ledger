@@ -336,6 +336,7 @@ files when the declared dependency set changes.
 - [AI Document Sources](docs/ai-document-sources.md)
 - [Deterministic Scan comparisons](docs/scan-comparisons.md)
 - [Full-stack Golden Path testing](docs/full-stack-testing.md)
+- [Collection Plans](docs/collection-plans.md)
 - [Product workspace navigation](docs/workspace-navigation.md)
 
 ## Current Limitations

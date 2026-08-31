@@ -12,6 +12,7 @@ from starlette.responses import Response
 from app.api.accessibility_routes import router as accessibility_router
 from app.api.ai_document_routes import router as ai_document_router
 from app.api.category_rule_routes import router as category_rule_router
+from app.api.collection_plan_routes import router as collection_plan_router
 from app.api.comparison_routes import router as comparison_router
 from app.api.findings_routes import router as findings_router
 from app.api.performance_routes import router as performance_router
@@ -102,6 +103,7 @@ def create_app(*, session_factory: Callable[[], Session] = SessionLocal) -> Fast
     app.include_router(ai_document_router)
     app.include_router(category_rule_router)
     app.include_router(comparison_router)
+    app.include_router(collection_plan_router)
     app.include_router(structured_content_router)
     app.include_router(performance_router)
     app.include_router(render_router)
