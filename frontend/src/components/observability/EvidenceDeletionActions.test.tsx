@@ -46,7 +46,7 @@ describe("observability deletion actions", () => {
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
     await waitFor(() => expect(performanceDeleted).toHaveBeenCalled());
-    expect(invalidation).toHaveBeenCalled();
+    expect(invalidation).toHaveBeenCalledWith({ queryKey: ["site-intelligence", "3"] });
     view.unmount();
 
     vi.mocked(client.getAccessibilityObservationDeletePreview).mockResolvedValue({ ...common, observation_id: 4, run_id: 5, profile: "desktop", outcome: "ready", observed_at: "2026-01-01", requested_url: "https://example.test", violation_rule_count: 1, incomplete_rule_count: 0, rule_rows_deleted: 1, node_rows_deleted: 2, payload_present: true, payload_shared: false, payload_reference_count: 1, payload_raw_bytes: 700, raw_bytes_reclaimable: 700 });

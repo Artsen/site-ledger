@@ -6,6 +6,7 @@ import {
   Boxes,
   ChartNoAxesCombined,
   CircleGauge,
+  ClipboardList,
   FileStack,
   FolderKanban,
   GitCompareArrows,
@@ -25,6 +26,7 @@ import {
 export type SiteArea =
   | "overview"
   | "scans"
+  | "collection-plans"
   | "pages"
   | "resources"
   | "sources"
@@ -65,6 +67,7 @@ export const siteNavigation: SiteNavigationGroup[] = [
     items: [
       { area: "overview", label: "Overview", icon: CircleGauge, segment: "" },
       { area: "scans", label: "Scans", icon: ScanSearch, segment: "scans" },
+      { area: "collection-plans", label: "Collection Plans", icon: ClipboardList, segment: "collection-plans" },
       { area: "pages", label: "Pages", icon: FileStack, segment: "pages" },
       { area: "resources", label: "Resources", icon: Boxes, segment: "resources" },
       { area: "sources", label: "Sources", icon: FolderKanban, segment: "sources" },

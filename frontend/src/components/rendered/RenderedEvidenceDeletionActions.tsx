@@ -15,6 +15,7 @@ import {
   purgeSiteRenderedEvidence,
 } from "../../api/client";
 import type { RenderDeleteImpact, RenderDeleteResult } from "../../types/scans";
+import { invalidateSiteIntelligence } from "../../api/queryKeys";
 import { DeletionImpact, DestructiveEvidenceAction } from "../observability/DestructiveEvidenceAction";
 
 function formatBytes(value: number) {
@@ -36,13 +37,16 @@ function Impact({ value }: { value: RenderDeleteImpact }) {
   ]} />;
 }
 
-async function invalidateRendered(queryClient: ReturnType<typeof useQueryClient>) {
-  await queryClient.invalidateQueries({
-    predicate: (query) => query.queryKey[0] === "pages" || query.queryKey.some((part) => {
-      const value = String(part);
-      return value.includes("render") || value === "scan";
+async function invalidateRendered(queryClient: ReturnType<typeof useQueryClient>, siteId?: string) {
+  await Promise.all([
+    queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey[0] === "pages" || query.queryKey.some((part) => {
+        const value = String(part);
+        return value.includes("render") || value === "scan";
+      }),
     }),
-  });
+    ...(siteId ? [invalidateSiteIntelligence(queryClient, siteId)] : []),
+  ]);
 }
 
 type Complete = (result: RenderDeleteResult) => void | Promise<void>;
@@ -58,23 +62,23 @@ export function RenderedDeletionNotice({ result }: { result: RenderDeleteResult 
 
 export function RenderObservationDeleteAction({ siteId, observationId, onDeleted }: { siteId: string; observationId: string; onDeleted: Complete }) {
   const queryClient = useQueryClient();
-  return <DestructiveEvidenceAction label="Delete observation" title="Delete rendered observation" description="This removes retained browser evidence and exclusively referenced artifacts. The Page, Scan, and static evidence remain." queryKey={["rendered-observation-delete-preview", siteId, observationId]} loadPreview={() => getRenderedObservationDeletionPreview(siteId, observationId)} deleteEvidence={() => deleteRenderedObservation(siteId, observationId)} onDeleted={async (result) => { await invalidateRendered(queryClient); await onDeleted(result); }} renderPreview={(preview) => <Impact value={preview} />} />;
+  return <DestructiveEvidenceAction label="Delete observation" title="Delete rendered observation" description="This removes retained browser evidence and exclusively referenced artifacts. The Page, Scan, and static evidence remain." queryKey={["rendered-observation-delete-preview", siteId, observationId]} loadPreview={() => getRenderedObservationDeletionPreview(siteId, observationId)} deleteEvidence={() => deleteRenderedObservation(siteId, observationId)} onDeleted={async (result) => { await invalidateRendered(queryClient, siteId); await onDeleted(result); }} renderPreview={(preview) => <Impact value={preview} />} />;
 }
 
 export function RenderTargetBulkDeleteAction({ siteId, runId, targetIds, onDeleted }: { siteId: string; runId: string; targetIds: number[]; onDeleted: Complete }) {
   const queryClient = useQueryClient();
-  return <DestructiveEvidenceAction label={`Delete evidence (${targetIds.length})`} title="Delete selected rendered evidence" description="Only retained browser observations are removed. Frozen Run targets remain and can be rerendered." queryKey={["render-target-delete-preview", siteId, runId, ...targetIds]} loadPreview={() => getRenderTargetDeletionPreview(siteId, runId, targetIds)} deleteEvidence={() => deleteRenderTargetEvidence(siteId, runId, targetIds)} onDeleted={async (result) => { await invalidateRendered(queryClient); await onDeleted(result); }} renderPreview={(preview) => <Impact value={preview} />} />;
+  return <DestructiveEvidenceAction label={`Delete evidence (${targetIds.length})`} title="Delete selected rendered evidence" description="Only retained browser observations are removed. Frozen Run targets remain and can be rerendered." queryKey={["render-target-delete-preview", siteId, runId, ...targetIds]} loadPreview={() => getRenderTargetDeletionPreview(siteId, runId, targetIds)} deleteEvidence={() => deleteRenderTargetEvidence(siteId, runId, targetIds)} onDeleted={async (result) => { await invalidateRendered(queryClient, siteId); await onDeleted(result); }} renderPreview={(preview) => <Impact value={preview} />} />;
 }
 
 export function RenderRunDeleteAction({ siteId, runId, onDeleted, compact = false }: { siteId: string; runId: number; onDeleted: Complete; compact?: boolean }) {
   const queryClient = useQueryClient();
   const phrase = `DELETE RENDER RUN ${runId}`;
-  return <DestructiveEvidenceAction className={compact ? "min-h-8 px-2 py-1 text-xs" : undefined} label={compact ? "Delete" : "Delete run"} title={`Delete Render Run ${runId}`} description="This removes the Run, targets, browser observations, job history, and unshared artifacts. Pages and Scans remain." queryKey={["render-run-delete-preview", siteId, runId]} loadPreview={() => getRenderRunDeletionPreview(siteId, String(runId))} deleteEvidence={(confirmation) => deleteRenderRun(siteId, String(runId), confirmation)} confirmationPhrase={phrase} onDeleted={async (result) => { await invalidateRendered(queryClient); await onDeleted(result); }} renderPreview={(preview) => <Impact value={preview} />} />;
+  return <DestructiveEvidenceAction className={compact ? "min-h-8 px-2 py-1 text-xs" : undefined} label={compact ? "Delete" : "Delete run"} title={`Delete Render Run ${runId}`} description="This removes the Run, targets, browser observations, job history, and unshared artifacts. Pages and Scans remain." queryKey={["render-run-delete-preview", siteId, runId]} loadPreview={() => getRenderRunDeletionPreview(siteId, String(runId))} deleteEvidence={(confirmation) => deleteRenderRun(siteId, String(runId), confirmation)} confirmationPhrase={phrase} onDeleted={async (result) => { await invalidateRendered(queryClient, siteId); await onDeleted(result); }} renderPreview={(preview) => <Impact value={preview} />} />;
 }
 
 export function RenderSiteDeleteAction({ siteId, onDeleted }: { siteId: string; onDeleted: Complete }) {
   const queryClient = useQueryClient();
-  return <DestructiveEvidenceAction label="Delete all Rendered evidence" title="Delete all Rendered evidence" description="This removes Site-owned Render Runs and legacy browser evidence. Pages, Scans, Performance, Accessibility, notes, and categories remain." queryKey={["render-site-delete-preview", siteId]} loadPreview={() => getSiteRenderedDeletionPreview(siteId)} deleteEvidence={(confirmation) => purgeSiteRenderedEvidence(siteId, confirmation)} confirmationPhrase="DELETE RENDERED EVIDENCE" onDeleted={async (result) => { await invalidateRendered(queryClient); await onDeleted(result); }} renderPreview={(preview) => <Impact value={preview} />} />;
+  return <DestructiveEvidenceAction label="Delete all Rendered evidence" title="Delete all Rendered evidence" description="This removes Site-owned Render Runs and legacy browser evidence. Pages, Scans, Performance, Accessibility, notes, and categories remain." queryKey={["render-site-delete-preview", siteId]} loadPreview={() => getSiteRenderedDeletionPreview(siteId)} deleteEvidence={(confirmation) => purgeSiteRenderedEvidence(siteId, confirmation)} confirmationPhrase="DELETE RENDERED EVIDENCE" onDeleted={async (result) => { await invalidateRendered(queryClient, siteId); await onDeleted(result); }} renderPreview={(preview) => <Impact value={preview} />} />;
 }
 
 export function RenderScanDeleteAction({ scanId, onDeleted }: { scanId: string; onDeleted: Complete }) {

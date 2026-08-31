@@ -99,6 +99,28 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(pages1.total).toBe(4);
   const rootPage = pages1.items.find((item) => new URL(item.requested_url).pathname === "/");
   if (!rootPage) throw new Error("Golden Path root Page was not found");
+  const initialIntelligence = await getJson(request, `${apiUrl}/api/sites/${site.id}/intelligence`);
+  const initialCollectionCoverage = initialIntelligence.collection_coverage as Json[];
+  const renderCoverage = initialCollectionCoverage.find((item) => item.evidence_domain === "render");
+  if (!renderCoverage) throw new Error("Current Render collection coverage was not found");
+  expect(renderCoverage.covered).toBe(1);
+  expect(renderCoverage.missing).toBe(3);
+  const renderPlanPayload = {
+    evidence_domain: "render",
+    target_mode: "missing_current",
+    context: {}
+  };
+  const renderPlanPreview = await postJson(request, `${apiUrl}/api/sites/${site.id}/collection-plans/preview`, renderPlanPayload);
+  expect(renderPlanPreview.target_total).toBe(3);
+  expect(renderPlanPreview.estimated_batch_count).toBe(1);
+  const queuedRenderPlan = await postJson(request, `${apiUrl}/api/sites/${site.id}/collection-plans`, renderPlanPayload);
+  const completedRenderPlan = await waitForCollectionPlan(request, site.id, queuedRenderPlan.id);
+  expect(completedRenderPlan.status).toBe("completed");
+  expect(completedRenderPlan.target_count).toBe(3);
+  expect((completedRenderPlan.progress as Record<string, number>).processed_target_count).toBe(3);
+  const coveredIntelligence = await getJson(request, `${apiUrl}/api/sites/${site.id}/intelligence`);
+  const coveredRender = (coveredIntelligence.collection_coverage as Json[]).find((item) => item.evidence_domain === "render");
+  expect(coveredRender?.missing).toBe(0);
   const standaloneRenderRun = await postJson(request, `${apiUrl}/api/sites/${site.id}/render-runs`, {
     resource_ids: [rootPage.resource_id],
     trigger: "site_workspace",
@@ -381,6 +403,16 @@ async function waitForFindingEvaluation(request: APIRequestContext, siteId: numb
     }
     return value.status === "completed" ? value : null;
   }, `Finding evaluation ${evaluationId}`);
+}
+
+async function waitForCollectionPlan(request: APIRequestContext, siteId: number, planId: number): Promise<Json> {
+  return poll(async () => {
+    const value = await getJson(request, `${apiUrl}/api/sites/${siteId}/collection-plans/${planId}`);
+    if (["failed", "cancelled", "completed_with_errors"].includes(value.status)) {
+      throw new Error(`Collection Plan failed: ${JSON.stringify(value)}`);
+    }
+    return value.status === "completed" ? value : null;
+  }, `Collection Plan ${planId}`);
 }
 
 async function collectEvidence(request: APIRequestContext, siteId: number, scanId: number): Promise<Record<string, Evidence>> {

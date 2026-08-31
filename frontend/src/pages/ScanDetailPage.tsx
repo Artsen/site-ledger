@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { buildScanProjection, cancelScan, createRenderRun, createScanNote, deleteScan, getScan, getScanDeletePreview, getScanProjectionStatus, getWorkerHealth, listErrors, listJobs, listPages, listScanNotes, listScanRenderedObservations, listScanSeeds, rebuildScanProjection } from "../api/client";
+import { invalidateSiteIntelligence } from "../api/queryKeys";
 import { NotesPanel } from "../components/NotesPanel";
 import { RenderedObservationTable } from "../components/RenderedObservationTable";
 import { LegacyRenderBulkDeleteAction, RenderedDeletionNotice, RenderScanDeleteAction } from "../components/rendered/RenderedEvidenceDeletionActions";
@@ -121,6 +122,7 @@ export function ScanDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["scan", scanId] });
       await queryClient.invalidateQueries({ queryKey: ["scans"] });
+      if (scan.data?.website_property_id) await invalidateSiteIntelligence(queryClient, scan.data.website_property_id);
     }
   });
   const deletePreview = useQuery({
@@ -134,6 +136,7 @@ export function ScanDetailPage() {
       queryClient.removeQueries({ predicate: (query) => query.queryKey.some((part) => String(part) === scanId) });
       await queryClient.invalidateQueries({ queryKey: ["scans"] });
       await queryClient.invalidateQueries({ queryKey: ["scan-history"] });
+      if (scan.data?.website_property_id) await invalidateSiteIntelligence(queryClient, scan.data.website_property_id);
       navigate("/scans");
     }
   });
@@ -149,7 +152,10 @@ export function ScanDetailPage() {
       [...new Set(loadedRendered.filter((item) => selectedRendered.includes(item.id)).map((item) => item.resource_id))],
       "site_workspace",
     ),
-    onSuccess: (run) => navigate(`/sites/${scan.data?.website_property_id}/rendered/runs/${run.id}`),
+    onSuccess: async (run) => {
+      if (scan.data?.website_property_id) await invalidateSiteIntelligence(queryClient, scan.data.website_property_id);
+      navigate(`/sites/${scan.data?.website_property_id}/rendered/runs/${run.id}`);
+    },
   });
 
   if (scan.isLoading) return <PageFrame><LoadingBlock label="Loading scan..." /></PageFrame>;

@@ -39,6 +39,7 @@ const SiteAiDocumentsPage = lazyWorkspacePage("SiteAiDocumentsPage");
 const SiteCategoriesPage = lazyWorkspacePage("SiteCategoriesPage");
 const SiteCategoryRulesPage = lazyWorkspacePage("SiteCategoryRulesPage");
 const SiteComparisonsPage = lazyWorkspacePage("SiteComparisonsPage");
+const SiteCollectionPlansPage = lazyWorkspacePage("SiteCollectionPlansPage");
 const SiteGraphPage = lazyWorkspacePage("SiteGraphPage");
 const SiteInventoryPage = lazyWorkspacePage("SiteInventoryPage");
 const SiteNotesPage = lazyWorkspacePage("SiteNotesPage");
@@ -68,6 +69,8 @@ const router = createBrowserRouter([
         children: [
           { index: true, element: <LegacySiteRedirect /> },
           { path: "scans", element: <SiteScansPage /> },
+          { path: "collection-plans", element: <SiteCollectionPlansPage /> },
+          { path: "collection-plans/:planId", element: <SiteCollectionPlansPage /> },
           { path: "pages", element: <SitePagesPage /> },
           { path: "pages/:resourceId", element: <PersistentPageDetailPage /> },
           { path: "resources", element: <SiteResourcesPage /> },

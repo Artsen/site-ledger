@@ -19,6 +19,7 @@ import {
   getPageLatestAccessibility,
   listAccessibilityRuns,
 } from "../api/client";
+import { invalidateSiteIntelligence } from "../api/queryKeys";
 import { CollectionPageSelector } from "../components/observability/CollectionPageSelector";
 import { AccessibilityRunDeleteAction, AccessibilitySiteDeleteAction, EvidenceDeletionNotice, type EvidenceDeleteResult } from "../components/observability/EvidenceDeletionActions";
 import { Button } from "../components/ui/Button";
@@ -157,7 +158,7 @@ export function AccessibilityRunPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const run = useQuery({ queryKey: ["accessibility-run", String(site.id), runId], queryFn: () => getAccessibilityRun(String(site.id), runId, "?limit=500"), refetchInterval: (query) => query.state.data && !TERMINAL.has(query.state.data.status) ? 2_000 : false });
-  const cancel = useMutation({ mutationFn: () => cancelAccessibilityRun(String(site.id), runId), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["accessibility-run", String(site.id), runId] }) });
+  const cancel = useMutation({ mutationFn: () => cancelAccessibilityRun(String(site.id), runId), onSuccess: () => Promise.all([queryClient.invalidateQueries({ queryKey: ["accessibility-run", String(site.id), runId] }), invalidateSiteIntelligence(queryClient, site.id)]) });
   if (run.isLoading) return <LoadingBlock label="Loading Accessibility run..." />;
   if (run.error) return <ErrorBanner error={run.error} title="Could not load Accessibility run" />;
   if (!run.data) return null;
@@ -227,7 +228,7 @@ function CollectAccessibilityPanel({ siteId, capabilities, onClose, initialResou
   const profiles: AccessibilityProfile[] = [...(desktop ? ["desktop" as const] : []), ...(mobile ? ["mobile" as const] : [])];
   const auditCount = selected.length * profiles.length;
   const payload: AccessibilityRunPayload = { resource_ids: selected, profiles, trigger: initialResourceId ? "page_workspace" : "site_workspace" };
-  const create = useMutation({ mutationFn: () => createAccessibilityRun(siteId, payload), onSuccess: async (run) => { await queryClient.invalidateQueries({ queryKey: ["accessibility-runs", siteId] }); navigate(`/sites/${siteId}/accessibility/runs/${run.id}`); } });
+  const create = useMutation({ mutationFn: () => createAccessibilityRun(siteId, payload), onSuccess: async (run) => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["accessibility-runs", siteId] }), invalidateSiteIntelligence(queryClient, siteId)]); navigate(`/sites/${siteId}/accessibility/runs/${run.id}`); } });
   const pageLimit = capabilities.hard_page_limit;
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;

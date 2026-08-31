@@ -70,6 +70,27 @@ describe("StructuredContentView", () => {
     expect(screen.getByText("Page introduction")).toBeInTheDocument();
   });
 
+  it("invalidates Site Intelligence after preparing current Page content", async () => {
+    const prepare = vi.fn().mockResolvedValue(ready);
+    const { client } = renderView({
+      status: "not_prepared",
+      reason: "Not prepared",
+      provenance: ready.provenance,
+      artifact: null,
+      items: [],
+      total: 0,
+      limit: 2000,
+      offset: 0,
+    }, prepare, "2");
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Prepare content" }));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["site-intelligence", "2"],
+    }));
+  });
+
   it("selects and collapses nested headings without rendering text as HTML", async () => {
     renderView(ready, vi.fn());
     fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
@@ -95,11 +116,12 @@ describe("StructuredContentView", () => {
   });
 });
 
-function renderView(value: StructuredContent, prepare: () => Promise<StructuredContent>) {
+function renderView(value: StructuredContent, prepare: () => Promise<StructuredContent>, siteId?: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <StructuredContentView
+        siteId={siteId}
         queryKey={["content"]}
         load={() => Promise.resolve(value)}
         prepare={prepare}
@@ -108,6 +130,7 @@ function renderView(value: StructuredContent, prepare: () => Promise<StructuredC
       />
     </QueryClientProvider>,
   );
+  return { client };
 }
 
 const documentValue: StructuredContentDocument = {

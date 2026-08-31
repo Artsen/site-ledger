@@ -16,6 +16,7 @@ import {
   listPerformanceRuns,
   performancePayloadUrl,
 } from "../api/client";
+import { invalidateSiteIntelligence } from "../api/queryKeys";
 import { Button } from "../components/ui/Button";
 import { EvidenceDeletionNotice, PerformanceRunDeleteAction, PerformanceSiteDeleteAction, type EvidenceDeleteResult } from "../components/observability/EvidenceDeletionActions";
 import { CollectionPageSelector } from "../components/observability/CollectionPageSelector";
@@ -154,7 +155,7 @@ function CollectPanel({ siteId, capabilities, onClose, initialResourceId }: { si
   const cruxDesktopOrigin = crux && origin && cruxDesktop ? 1 : 0;
   const requestCount = pageSpeedMobile + pageSpeedDesktop + cruxPhoneUrl + cruxDesktopUrl + cruxPhoneOrigin + cruxDesktopOrigin;
   const payload: PerformanceRunPayload = { resource_ids: selected, providers: [...(pagespeed ? ["pagespeed" as const] : []), ...(crux ? ["crux" as const] : [])], pagespeed_strategies: [...(mobile ? ["mobile" as const] : []), ...(desktop ? ["desktop" as const] : [])], crux_form_factors: [...(phone ? ["PHONE" as const] : []), ...(cruxDesktop ? ["DESKTOP" as const] : [])], include_origin_crux: origin, trigger: initialResourceId ? "page_workspace" : "site_workspace" };
-  const create = useMutation({ mutationFn: () => createPerformanceRun(siteId, payload), onSuccess: async (run) => { await queryClient.invalidateQueries({ queryKey: ["performance-runs", siteId] }); navigate(`/sites/${siteId}/performance/runs/${run.id}`); } });
+  const create = useMutation({ mutationFn: () => createPerformanceRun(siteId, payload), onSuccess: async (run) => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["performance-runs", siteId] }), invalidateSiteIntelligence(queryClient, siteId)]); navigate(`/sites/${siteId}/performance/runs/${run.id}`); } });
   const runPageLimit = capabilities.hard_page_limit;
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -205,7 +206,7 @@ export function PerformanceRunPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const run = useQuery({ queryKey: ["performance-run", String(site.id), runId], queryFn: () => getPerformanceRun(String(site.id), runId, "?limit=500"), refetchInterval: (query) => query.state.data && !TERMINAL.has(query.state.data.status) ? 2_000 : false });
-  const cancel = useMutation({ mutationFn: () => cancelPerformanceRun(String(site.id), runId), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["performance-run", String(site.id), runId] }) });
+  const cancel = useMutation({ mutationFn: () => cancelPerformanceRun(String(site.id), runId), onSuccess: () => Promise.all([queryClient.invalidateQueries({ queryKey: ["performance-run", String(site.id), runId] }), invalidateSiteIntelligence(queryClient, site.id)]) });
   if (run.isLoading) return <LoadingBlock label="Loading Performance run..." />;
   if (run.error) return <ErrorBanner error={run.error} title="Could not load Performance run" />;
   if (!run.data) return null;

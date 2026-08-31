@@ -22,6 +22,7 @@ import {
   updatePageMetadata,
   updatePageWorkspaceState,
 } from "../api/client";
+import { invalidateSiteIntelligence } from "../api/queryKeys";
 import { NotesPanel } from "../components/NotesPanel";
 import { StructuredContentView } from "../components/StructuredContentView";
 import { PagePerformancePanel } from "./PerformanceWorkspace";
@@ -139,6 +140,7 @@ export function PersistentPageDetailPage() {
                 await updatePageWorkspaceState(siteId, resourceId, value.workspace_state === "suppressed" ? "active" : "suppressed");
                 await queryClient.invalidateQueries({ queryKey: ["site-page", siteId, resourceId] });
                 await queryClient.invalidateQueries({ queryKey: ["site-pages", siteId] });
+                await invalidateSiteIntelligence(queryClient, siteId);
               }}
             />
             <LifecycleAction
@@ -192,7 +194,7 @@ export function PersistentPageDetailPage() {
           <ScansTab siteId={siteId} resourceId={resourceId} />
         ) : null}
         {tab === "history" ? <ChangeHistoryTab siteId={siteId} resourceId={resourceId} /> : null}
-        {tab === "content" ? <StructuredContentView queryKey={["page-structured-content", siteId, resourceId]} load={() => getPageStructuredContent(siteId, resourceId)} prepare={() => preparePageStructuredContent(siteId, resourceId)} loadDocument={() => getPageStructuredDocument(siteId, resourceId)} loadMarkdown={() => getPageStructuredMarkdown(siteId, resourceId)} /> : null}
+        {tab === "content" ? <StructuredContentView siteId={siteId} queryKey={["page-structured-content", siteId, resourceId]} load={() => getPageStructuredContent(siteId, resourceId)} prepare={() => preparePageStructuredContent(siteId, resourceId)} loadDocument={() => getPageStructuredDocument(siteId, resourceId)} loadMarkdown={() => getPageStructuredMarkdown(siteId, resourceId)} /> : null}
         {tab === "links" ? <LinksTab detail={page.data} /> : null}
         {tab === "browser" ? <BrowserEvidenceTab siteId={siteId} resourceId={resourceId} /> : null}
         {tab === "rendered" ? <PageRenderedPanel siteId={siteId} resourceId={resourceId} /> : null}
@@ -396,6 +398,7 @@ function OrganizationEditor({
       });
       await queryClient.invalidateQueries({ queryKey: ["site-pages", siteId] });
       await queryClient.invalidateQueries({ queryKey: ["page-category-provenance", siteId, resourceId] });
+      await invalidateSiteIntelligence(queryClient, siteId);
       close();
     },
   });

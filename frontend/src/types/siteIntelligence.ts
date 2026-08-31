@@ -1,3 +1,5 @@
+import type { CollectionCoverage } from "./collectionPlans";
+
 export type EvidenceCoverage = {
   observed: number;
   eligible: number;
@@ -147,4 +149,5 @@ export type SiteIntelligence = {
       started_at: string | null;
     }>;
   };
+  collection_coverage: CollectionCoverage[];
 };

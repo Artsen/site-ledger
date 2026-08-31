@@ -13,6 +13,7 @@ import {
   listRenderRuns,
   rerenderTargets,
 } from "../api/client";
+import { invalidateSiteIntelligence } from "../api/queryKeys";
 import { CollectionPageSelector } from "../components/observability/CollectionPageSelector";
 import { RenderedObservationTable } from "../components/RenderedObservationTable";
 import { RenderedObservationView } from "../components/RenderedObservationView";
@@ -73,7 +74,7 @@ function StartRenderRun({ siteId, onClose }: { siteId: string; onClose: () => vo
   const queryClient = useQueryClient();
   const dialogRef = useRef<HTMLElement>(null);
   const capabilities = useQuery({ queryKey: ["render-capabilities"], queryFn: getRenderCapabilities });
-  const create = useMutation({ mutationFn: () => createRenderRun(siteId, selected, "site_workspace", configuration), onSuccess: async (run) => { await queryClient.invalidateQueries({ queryKey: ["render-runs", siteId] }); navigate(`/sites/${siteId}/rendered/runs/${run.id}`); } });
+  const create = useMutation({ mutationFn: () => createRenderRun(siteId, selected, "site_workspace", configuration), onSuccess: async (run) => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["render-runs", siteId] }), invalidateSiteIntelligence(queryClient, siteId)]); navigate(`/sites/${siteId}/rendered/runs/${run.id}`); } });
   useEffect(() => { dialogRef.current?.querySelector<HTMLElement>("button")?.focus(); }, []);
   return <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="start-render-title" className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-3 sm:p-8"><div className="mx-auto max-w-3xl rounded-md bg-white p-4 shadow-xl sm:p-6"><header className="flex items-start justify-between gap-3"><div><h2 id="start-render-title" className="text-lg font-semibold">Run renders</h2><p className="text-sm text-stone-600">Targets and browser configuration are frozen when the Run is queued.</p></div><button type="button" aria-label="Close Render Run" onClick={onClose} className="rounded p-2 hover:bg-stone-100"><X size={20} /></button></header><div className="mt-5"><CollectionPageSelector siteId={siteId} selected={selected} hardLimit={1_000} label="Rendered capture" onChange={setSelected} /></div>{capabilities.data ? <RenderSettings capabilities={capabilities.data} configuration={configuration} onChange={setConfiguration} /> : capabilities.error ? <div className="mt-4"><ErrorBanner error={capabilities.error} title="Could not load browser settings" /></div> : <LoadingBlock label="Loading browser settings..." />}<div className="mt-5 flex justify-end gap-2 border-t border-stone-200 pt-4"><Button type="button" onClick={onClose}>Cancel</Button><Button type="button" variant="primary" loading={create.isPending} disabled={!selected.length || !capabilities.data} onClick={() => create.mutate()}>Queue {selected.length} {selected.length === 1 ? "Page" : "Pages"}</Button></div>{create.error ? <div className="mt-3"><ErrorBanner error={create.error} title="Could not start Render Run" /></div> : null}</div></section>;
 }
@@ -91,8 +92,8 @@ export function RenderRunPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const run = useQuery({ queryKey: ["render-run", String(site.id), runId], queryFn: () => getRenderRun(String(site.id), runId, "?limit=1"), refetchInterval: (query) => query.state.data && !TERMINAL.has(query.state.data.status) ? 2_000 : false });
-  const cancel = useMutation({ mutationFn: () => cancelRenderRun(String(site.id), runId), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["render-run", String(site.id), runId] }) });
-  const rerender = useMutation({ mutationFn: () => rerenderTargets(String(site.id), runId, selected), onSuccess: async (created) => { await queryClient.invalidateQueries({ queryKey: ["render-runs", String(site.id)] }); navigate(`/sites/${site.id}/rendered/runs/${created.id}`); } });
+  const cancel = useMutation({ mutationFn: () => cancelRenderRun(String(site.id), runId), onSuccess: () => Promise.all([queryClient.invalidateQueries({ queryKey: ["render-run", String(site.id), runId] }), invalidateSiteIntelligence(queryClient, site.id)]) });
+  const rerender = useMutation({ mutationFn: () => rerenderTargets(String(site.id), runId, selected), onSuccess: async (created) => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["render-runs", String(site.id)] }), invalidateSiteIntelligence(queryClient, site.id)]); navigate(`/sites/${site.id}/rendered/runs/${created.id}`); } });
   if (run.isLoading) return <LoadingBlock label="Loading Render Run..." />;
   if (run.error) return <ErrorBanner error={run.error} title="Could not load Render Run" />;
   if (!run.data) return null;
@@ -130,9 +131,10 @@ function useNavigationDeletionResult() {
 
 export function PageRenderedPanel({ siteId, resourceId }: { siteId: string; resourceId: string }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const create = useMutation({
     mutationFn: () => createRenderRun(siteId, [Number(resourceId)], "page_workspace"),
-    onSuccess: (run) => navigate(`/sites/${siteId}/rendered/runs/${run.id}`),
+    onSuccess: async (run) => { await invalidateSiteIntelligence(queryClient, siteId); navigate(`/sites/${siteId}/rendered/runs/${run.id}`); },
   });
   return <div className="space-y-4"><header className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold">Rendered evidence</h2><p className="text-sm text-stone-600">Browser observations are retained independently of Scans.</p></div><Button type="button" variant="primary" loading={create.isPending} onClick={() => create.mutate()}><MonitorUp className="mr-2 size-4" />Render this Page</Button></header>{create.error ? <ErrorBanner error={create.error} title="Could not start Render Run" /> : null}<RenderedObservationTable renderMode="all_eligible" queryKey={["page-render-history", siteId, resourceId]} loadObservations={(query) => getPageRenderHistory(siteId, resourceId, query)} observationHref={(id) => `/sites/${siteId}/rendered/observations/${id}`} /></div>;
 }

@@ -144,5 +144,6 @@ def test_site_intelligence_scale_fixture_keeps_query_count_bounded(db_session) -
     assert result.page_population.suppressed_page_total == historical_total
     assert result.scan.active_page_observed.observed == active_total
     assert result.sources.current_inventory_count == active_total + historical_total
-    assert statement_count <= 22
+    # Includes eight fixed Collection Plan contexts; query count must remain Page-independent.
+    assert statement_count <= 40
     assert elapsed < 10

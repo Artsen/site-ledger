@@ -166,6 +166,9 @@ def enqueue_structured_content_job(
     scan_id: int | None = None,
     limit: int | None = None,
     priority: int = 115,
+    content_blob_ids: list[int] | None = None,
+    collection_plan_id: int | None = None,
+    collection_plan_batch_position: int | None = None,
 ) -> BackgroundJob:
     scope = f"scan-{scan_id}" if scan_id is not None else "site"
     limit_key = str(limit) if limit is not None else "all"
@@ -178,16 +181,35 @@ def enqueue_structured_content_job(
             )
         )
     )
+    normalized_blob_ids = list(dict.fromkeys(content_blob_ids)) if content_blob_ids else None
     for job in active:
-        if job.payload_json.get("scan_id") == scan_id and job.payload_json.get("limit") == limit:
+        if normalized_blob_ids is not None:
+            if job.payload_json.get("content_blob_ids") == normalized_blob_ids:
+                return job
+        elif job.payload_json.get("scan_id") == scan_id and job.payload_json.get("limit") == limit:
             return job
+    plan_key = (
+        f":plan-{collection_plan_id}:batch-{collection_plan_batch_position}"
+        if collection_plan_id is not None
+        else ""
+    )
     return _enqueue_job(
         db,
         job_type=JOB_TYPE_STRUCTURED_CONTENT_BUILD,
-        dedupe_key=f"structured-content:{site_id}:{scope}:{limit_key}:{datetime.now(UTC).isoformat()}",
+        dedupe_key=(
+            f"structured-content:{site_id}:{scope}:{limit_key}{plan_key}:"
+            f"{datetime.now(UTC).isoformat()}"
+        ),
         website_property_id=site_id,
         priority=priority,
-        payload={"site_id": site_id, "scan_id": scan_id, "limit": limit},
+        payload={
+            "site_id": site_id,
+            "scan_id": scan_id,
+            "limit": limit,
+            "content_blob_ids": normalized_blob_ids,
+            "collection_plan_id": collection_plan_id,
+            "collection_plan_batch_position": collection_plan_batch_position,
+        },
     )
 
 
@@ -610,7 +632,11 @@ def fail_job(
 
 
 def request_cancellation(
-    db: Session, job: BackgroundJob, message: str = "Cancellation requested."
+    db: Session,
+    job: BackgroundJob,
+    message: str = "Cancellation requested.",
+    *,
+    commit: bool = True,
 ) -> BackgroundJob:
     if job.status in TERMINAL_JOB_STATUSES:
         return job
@@ -634,8 +660,9 @@ def request_cancellation(
                 error_message="Finding evaluation cancelled before execution.",
             )
         emit_event(db, job.id, "cancelled", "info", "Queued job cancelled.")
-    db.commit()
-    db.refresh(job)
+    if commit:
+        db.commit()
+        db.refresh(job)
     return job
 
 

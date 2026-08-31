@@ -20,6 +20,7 @@ import { formatDate } from "../../utils/format";
 import { useUrlPagination } from "../../utils/useUrlPagination";
 import type { SiteWorkspaceContext } from "./SiteWorkspaceLayout";
 import { SiteIntelligenceOverview } from "./SiteIntelligenceOverview";
+import { CollectionPlansWorkspace } from "./CollectionPlansWorkspace";
 import { SiteFindingDetailPage as FindingDetail, SiteFindingsWorkspace } from "./SiteFindingsWorkspace";
 
 function useSiteWorkspace() {
@@ -28,6 +29,10 @@ function useSiteWorkspace() {
 
 export function SiteOverviewPage() {
   return <SiteIntelligenceOverview site={useSiteWorkspace()} />;
+}
+
+export function SiteCollectionPlansPage() {
+  return <CollectionPlansWorkspace site={useSiteWorkspace()} />;
 }
 
 export function SitePagesPage() {
