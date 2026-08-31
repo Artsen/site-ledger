@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { createScan, createSiteScan, defaultScope, getRenderCapabilities, listSites, listSources } from "../api/client";
+import { invalidateSiteIntelligence } from "../api/queryKeys";
 import { Button } from "../components/ui/Button";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Field } from "../components/ui/Field";
@@ -70,6 +71,7 @@ export function NewScanPage() {
     mutationFn: () => mode === "site" && selectedSite ? createSiteScan(String(selectedSite.id), effectiveScope, includeInventory, selectedSourceIds) : createScan(urlValidation.normalizedUrl, effectiveScope),
     onSuccess: async (scan) => {
       await queryClient.invalidateQueries({ queryKey: ["scans"] });
+      if (selectedSite) await invalidateSiteIntelligence(queryClient, selectedSite.id);
       navigate(`/scans/${scan.id}`);
     },
     onSettled: () => {

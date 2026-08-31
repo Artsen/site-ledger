@@ -44,6 +44,7 @@ from app.models import (
 from app.schemas.collection_plans import CollectionPlanRequest
 from app.services.background_jobs import enqueue_accessibility_run_job
 from app.services.collection_plans import (
+    _processed,
     batch_target_counts,
     build_selection,
     cancel_collection_plan,
@@ -146,20 +147,109 @@ def test_accessibility_plan_freezes_targets_and_creates_native_batches(db_sessio
     assert plan.target_count == 501
 
 
-def test_cancel_plan_cancels_queued_jobs_and_native_runs(db_session) -> None:
+@pytest.mark.parametrize(
+    ("domain", "context", "run_attribute"),
+    [
+        ("performance", {"provider": "pagespeed", "dimension": "mobile"}, "performance_run"),
+        ("accessibility", {"profile": "mobile"}, "accessibility_run"),
+        ("render", {}, "render_run"),
+    ],
+)
+def test_cancel_plan_atomically_cancels_queued_jobs_and_native_runs(
+    db_session, monkeypatch, domain, context, run_attribute
+) -> None:
+    if domain == "performance":
+        from app.config import Settings
+
+        settings = Settings().model_copy(update={"google_api_key": "test-key"})
+        monkeypatch.setattr("app.services.collection_plans.get_settings", lambda: settings)
+        monkeypatch.setattr("app.services.performance_collection.get_settings", lambda: settings)
     site = _site_with_pages(db_session, 2)
     plan = create_collection_plan(
         db_session,
         site.id,
-        CollectionPlanRequest(evidence_domain="accessibility", context={"profile": "mobile"}),
+        CollectionPlanRequest(evidence_domain=domain, context=context),
     )
+    commit_count = 0
+    commit = db_session.commit
+
+    def counted_commit() -> None:
+        nonlocal commit_count
+        commit_count += 1
+        commit()
+
+    monkeypatch.setattr(db_session, "commit", counted_commit)
 
     cancelled = cancel_collection_plan(db_session, plan)
 
+    assert commit_count == 1
     assert plan_status(cancelled) == "cancelled"
     assert cancelled.cancellation_requested_at is not None
     assert all(batch.background_job.status == "cancelled" for batch in cancelled.batches)
-    assert all(batch.accessibility_run.status == "cancelled" for batch in cancelled.batches)
+    assert all(getattr(batch, run_attribute).status == "cancelled" for batch in cancelled.batches)
+    assert all(
+        getattr(batch, run_attribute).finished_at == batch.background_job.finished_at
+        for batch in cancelled.batches
+    )
+
+
+def test_cancel_plan_rolls_back_job_and_native_run_when_final_commit_fails(
+    db_session, monkeypatch
+) -> None:
+    site = _site_with_pages(db_session, 1)
+    plan = create_collection_plan(
+        db_session,
+        site.id,
+        CollectionPlanRequest(evidence_domain="accessibility", context={"profile": "desktop"}),
+    )
+    batch_id = plan.batches[0].id
+
+    def fail_commit() -> None:
+        staged_batch = db_session.get(CollectionPlanBatch, batch_id)
+        assert staged_batch is not None
+        assert staged_batch.background_job is not None
+        assert staged_batch.accessibility_run is not None
+        assert staged_batch.background_job.status == "cancelled"
+        assert staged_batch.accessibility_run.status == "cancelled"
+        raise RuntimeError("simulated crash before commit")
+
+    monkeypatch.setattr(db_session, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        cancel_collection_plan(db_session, plan)
+
+    db_session.expire_all()
+    batch = db_session.get(CollectionPlanBatch, batch_id)
+    assert batch is not None
+    assert batch.background_job is not None
+    assert batch.accessibility_run is not None
+    assert batch.background_job.status == "queued"
+    assert batch.accessibility_run.status == "queued"
+    persisted_plan = db_session.get(CollectionPlan, plan.id)
+    assert persisted_plan is not None
+    assert persisted_plan.cancellation_requested_at is None
+
+
+def test_render_plan_progress_counts_only_terminal_persisted_outcomes(db_session) -> None:
+    site = _site_with_pages(db_session, 10)
+    plan = create_collection_plan(
+        db_session,
+        site.id,
+        CollectionPlanRequest(evidence_domain="render"),
+    )
+    batch = plan.batches[0]
+    assert batch.render_run is not None
+    batch.render_run.attempted_count = 10
+    batch.render_run.completed_count = 6
+    batch.render_run.failed_count = 2
+    batch.render_run.skipped_count = 1
+
+    assert _processed(batch) == 9
+
+    batch.render_run.status = "interrupted"
+    assert _processed(batch) == 9
+
+    batch.render_run.completed_count = 7
+    assert _processed(batch) == 10
 
 
 def test_collection_plan_relationships_use_set_null_for_child_history() -> None:

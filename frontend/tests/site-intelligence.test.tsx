@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -92,7 +92,7 @@ describe("Site Intelligence overview", () => {
     expect(screen.getByRole("link", { name: "Scan 7" })).toHaveAttribute("href", "/scans/7");
   });
 
-  it("polls only while Site work is active", async () => {
+  it("polls quickly while active and uses bounded idle freshness", async () => {
     vi.useFakeTimers();
     try {
       const active = intelligence();
@@ -117,19 +117,57 @@ describe("Site Intelligence overview", () => {
       expect(api.getSiteIntelligence).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(5000);
       expect(api.getSiteIntelligence).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(api.getSiteIntelligence).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
   });
 
+  it("discovers externally started work during bounded idle refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const active = intelligence();
+      active.activity.active_job_count = 1;
+      active.activity.running_count = 1;
+      api.getSiteIntelligence
+        .mockResolvedValueOnce(intelligence())
+        .mockResolvedValueOnce(active)
+        .mockResolvedValue(intelligence());
+
+      renderOverview();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.getSiteIntelligence).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(api.getSiteIntelligence).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(api.getSiteIntelligence).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes stale Site Intelligence when the window regains focus", async () => {
+    renderOverview();
+    await waitFor(() => expect(api.getSiteIntelligence).toHaveBeenCalledTimes(1));
+
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+
+    await waitFor(() => expect(api.getSiteIntelligence).toHaveBeenCalledTimes(2));
+    focusManager.setFocused(undefined);
+  });
+
   it("previews missing Pages and confirms visible batch counts before collection", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    renderOverview();
+    const { client } = renderOverview();
+    const invalidation = vi.spyOn(client, "invalidateQueries");
     fireEvent.click(await screen.findByRole("button", { name: "View missing" }));
     expect(await screen.findByText("https://example.test/missing")).toBeInTheDocument();
     expect(screen.getByText("42")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Collect missing" }));
     await waitFor(() => expect(plans.createCollectionPlan).toHaveBeenCalledTimes(1));
+    expect(invalidation).toHaveBeenCalledWith({ queryKey: ["site-intelligence", "3"] });
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Batch 1: 5"));
     confirm.mockRestore();
   });
@@ -137,5 +175,5 @@ describe("Site Intelligence overview", () => {
 
 function renderOverview() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><MemoryRouter><SiteIntelligenceOverview site={site} /></MemoryRouter></QueryClientProvider>);
+  return { client, ...render(<QueryClientProvider client={client}><MemoryRouter><SiteIntelligenceOverview site={site} /></MemoryRouter></QueryClientProvider>) };
 }

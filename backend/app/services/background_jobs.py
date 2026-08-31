@@ -632,7 +632,11 @@ def fail_job(
 
 
 def request_cancellation(
-    db: Session, job: BackgroundJob, message: str = "Cancellation requested."
+    db: Session,
+    job: BackgroundJob,
+    message: str = "Cancellation requested.",
+    *,
+    commit: bool = True,
 ) -> BackgroundJob:
     if job.status in TERMINAL_JOB_STATUSES:
         return job
@@ -656,8 +660,9 @@ def request_cancellation(
                 error_message="Finding evaluation cancelled before execution.",
             )
         emit_event(db, job.id, "cancelled", "info", "Queued job cancelled.")
-    db.commit()
-    db.refresh(job)
+    if commit:
+        db.commit()
+        db.refresh(job)
     return job
 
 

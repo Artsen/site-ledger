@@ -3,6 +3,7 @@ import { Ban, ExternalLink } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { cancelCollectionPlan, getCollectionPlan, listCollectionPlans } from "../../api/collectionPlans";
+import { invalidateSiteIntelligence } from "../../api/queryKeys";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
@@ -56,7 +57,7 @@ function PlanDetail({ site, planId }: { site: Site; planId: string }) {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["collection-plan", String(site.id), planId] });
       await queryClient.invalidateQueries({ queryKey: ["collection-plans", String(site.id)] });
-      await queryClient.invalidateQueries({ queryKey: ["site-intelligence", String(site.id)] });
+      await invalidateSiteIntelligence(queryClient, site.id);
     },
   });
   if (query.isLoading) return <LoadingBlock label="Loading Collection Plan..." />;

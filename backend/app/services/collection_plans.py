@@ -669,7 +669,12 @@ def _processed(batch: CollectionPlanBatch) -> int:
     if batch.accessibility_run is not None:
         return min(batch.target_count, batch.accessibility_run.completed_count)
     if batch.render_run is not None:
-        return min(batch.target_count, batch.render_run.attempted_count)
+        return min(
+            batch.target_count,
+            batch.render_run.completed_count
+            + batch.render_run.failed_count
+            + batch.render_run.skipped_count,
+        )
     job = batch.background_job
     if job is None:
         return 0
@@ -738,19 +743,27 @@ def list_collection_plans(
 def cancel_collection_plan(db: Session, plan: CollectionPlan) -> CollectionPlan:
     if plan_status(plan) not in {"queued", "running", "cancelling"}:
         return plan
-    plan.cancellation_requested_at = datetime.now(UTC)
-    db.commit()
-    for batch in plan.batches:
-        job = batch.background_job
-        if job is None or job.status in TERMINAL_JOB_STATUSES:
-            continue
-        was_queued = job.status == "queued"
-        request_cancellation(db, job, "Collection Plan cancellation requested.")
-        if was_queued:
-            run = batch.performance_run or batch.accessibility_run or batch.render_run
-            if run is not None and run.status in ACTIVE_RUN_STATUSES:
-                run.status = "cancelled"
-                run.finished_at = datetime.now(UTC)
-                run.error_summary = "Cancelled before execution by Collection Plan."
-                db.commit()
+    try:
+        plan.cancellation_requested_at = datetime.now(UTC)
+        for batch in plan.batches:
+            job = batch.background_job
+            if job is None or job.status in TERMINAL_JOB_STATUSES:
+                continue
+            was_queued = job.status == "queued"
+            request_cancellation(
+                db,
+                job,
+                "Collection Plan cancellation requested.",
+                commit=False,
+            )
+            if was_queued:
+                run = batch.performance_run or batch.accessibility_run or batch.render_run
+                if run is not None and run.status == "queued":
+                    run.status = "cancelled"
+                    run.finished_at = job.finished_at
+                    run.error_summary = "Cancelled before execution by Collection Plan."
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return get_collection_plan(db, plan.website_property_id, plan.id) or plan

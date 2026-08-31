@@ -4,6 +4,11 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { getSiteIntelligence } from "../../api/siteIntelligence";
+import {
+  invalidateSiteIntelligence,
+  siteIntelligenceQueryKey,
+  siteIntelligenceRefetchInterval,
+} from "../../api/queryKeys";
 import { createCollectionPlan, previewCollectionPlan } from "../../api/collectionPlans";
 import { Button } from "../../components/ui/Button";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
@@ -87,7 +92,7 @@ function CollectionCoverageActions({ site, values }: { site: Site; values: Colle
     },
     onSuccess: async (plan) => {
       if (!plan) return;
-      await queryClient.invalidateQueries({ queryKey: ["site-intelligence", String(site.id)] });
+      await invalidateSiteIntelligence(queryClient, site.id);
       await queryClient.invalidateQueries({ queryKey: ["collection-plans", String(site.id)] });
       navigate(`/sites/${site.id}/collection-plans/${plan.id}`);
     },
@@ -105,9 +110,11 @@ function CollectionCoverageActions({ site, values }: { site: Site; values: Colle
 
 export function SiteIntelligenceOverview({ site }: { site: Site }) {
   const query = useQuery({
-    queryKey: ["site-intelligence", String(site.id)],
+    queryKey: siteIntelligenceQueryKey(site.id),
     queryFn: () => getSiteIntelligence(site.id),
-    refetchInterval: (state) => state.state.data?.activity.active_job_count ? 2000 : false,
+    refetchInterval: (state) => siteIntelligenceRefetchInterval(state.state.data),
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
   if (query.isLoading) return <LoadingBlock label="Loading Site intelligence..." />;
   if (query.error) return <ErrorBanner error={query.error} title="Could not load Site intelligence" />;

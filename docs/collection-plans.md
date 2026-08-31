@@ -38,10 +38,20 @@ Creation persists the Plan, frozen targets, native Runs, batches, and queued job
 An equivalent active Plan is rejected. Status and progress are derived from child jobs and Runs, so
 there is no second mutable execution state to reconcile.
 
-Cancellation requests cancellation for remaining child jobs. Native Runs cancelled while still
-queued are terminalized as cancelled; evidence already produced by running children remains valid.
+Cancellation requests cancellation for remaining child jobs. For a queued native child, the
+BackgroundJob and its Performance, Accessibility, or Render Run are terminalized as cancelled in
+one transaction. Running children retain their cooperative, ownership-fenced cancellation path.
+Evidence already produced by completed or running children remains valid; cancellation means that
+remaining work was cancelled, not that completed evidence was rolled back.
 Child Run/job foreign keys use `SET NULL` so Plan provenance remains truthful if separate evidence
 lifecycle actions later remove native history.
 
+Plan progress represents terminal persisted work. In particular, Render progress is the bounded
+sum of completed, failed, and skipped outcomes; an attempted capture still in Chromium is not yet
+reported as processed.
+
 Site Intelligence uses the same selectors as preview and creation and always exposes the fixed
-current contexts, including contexts with zero evidence or an unconfigured provider.
+current contexts, including contexts with zero evidence or an unconfigured provider. Frontend
+evidence mutations invalidate this read model immediately. While mounted, it refreshes quickly
+during active work and at a bounded idle cadence so work initiated in another tab or through the
+API cannot leave coverage stale indefinitely.

@@ -12,6 +12,7 @@ import {
   updateCategoryRule,
   type CategoryRulePayload,
 } from "../api/client";
+import { invalidateSiteIntelligence } from "../api/queryKeys";
 import type { CategoryRule, CategoryRuleCondition, PageCategory } from "../types/scans";
 import { formatDate, formatStatus, plural } from "../utils/format";
 import { Button } from "./ui/Button";
@@ -46,7 +47,10 @@ export function CategoryRulesPanel({ siteId, categories, timeZone }: { siteId: s
   });
   const recalculate = useMutation({
     mutationFn: () => evaluateCategoryRules(siteId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["category-rule-runs", siteId] }),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["category-rule-runs", siteId] }),
+      invalidateSiteIntelligence(queryClient, siteId),
+    ]),
   });
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: ["category-rules", siteId] });

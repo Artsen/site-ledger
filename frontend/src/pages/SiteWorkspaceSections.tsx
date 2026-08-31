@@ -43,6 +43,7 @@ import {
   updatePageWorkspaceState,
   updateSite,
 } from "../api/client";
+import { invalidateSiteIntelligence } from "../api/queryKeys";
 import { NotesPanel } from "../components/NotesPanel";
 import { CategoryRuleHistoryPanel, CategoryRulesPanel } from "../components/CategoryRulesPanel";
 import { ResourceInventoryView } from "../components/ResourceInventoryView";
@@ -300,10 +301,11 @@ export function SitePagesSection({ site }: { site: Site }) {
           : { workflow_status: bulkWorkflow }),
       });
     },
-    onSuccess: async () => {
+    onSuccess: async (_result, action) => {
       await queryClient.invalidateQueries({
         queryKey: ["site-pages", String(site.id)],
       });
+      if (action === "workflow") await invalidateSiteIntelligence(queryClient, site.id);
       setSelected([]);
     },
   });
@@ -482,6 +484,7 @@ export function SitePagesSection({ site }: { site: Site }) {
               action={async () => {
                 await bulkPageWorkspaceState(String(site.id), selectedActivePageIds, "suppressed");
                 await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+                await invalidateSiteIntelligence(queryClient, site.id);
                 setSelected([]);
               }}
             />
@@ -496,6 +499,7 @@ export function SitePagesSection({ site }: { site: Site }) {
               action={async () => {
                 await bulkPageWorkspaceState(String(site.id), selectedRemovedPageIds, "active");
                 await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+                await invalidateSiteIntelligence(queryClient, site.id);
                 setSelected([]);
               }}
             />
@@ -509,6 +513,7 @@ export function SitePagesSection({ site }: { site: Site }) {
             action={async () => {
               await bulkDeletePages(String(site.id), selected);
               await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
+              await invalidateSiteIntelligence(queryClient, site.id);
               setSelected([]);
             }}
           />
@@ -534,6 +539,7 @@ export function SitePagesSection({ site }: { site: Site }) {
           onStateChanged={async (resourceId) => {
             await queryClient.invalidateQueries({ queryKey: ["site-pages", String(site.id)] });
             await queryClient.invalidateQueries({ queryKey: ["site-page", String(site.id), String(resourceId)] });
+            await invalidateSiteIntelligence(queryClient, site.id);
           }}
         />
       ) : !pages.isLoading ? (
@@ -1084,6 +1090,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       await queryClient.invalidateQueries({
         queryKey: ["sources", String(site.id)],
       });
+      await invalidateSiteIntelligence(queryClient, site.id);
     },
   });
   const refresh = useMutation({
@@ -1099,6 +1106,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       await queryClient.invalidateQueries({
         queryKey: ["jobs", "site-sources", String(site.id)],
       });
+      await invalidateSiteIntelligence(queryClient, site.id);
     },
   });
   const bulkRefresh = useMutation({
@@ -1112,6 +1120,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       await queryClient.invalidateQueries({
         queryKey: ["jobs", "site-sources", String(site.id)],
       });
+      await invalidateSiteIntelligence(queryClient, site.id);
     },
   });
   const robots = useMutation({
@@ -1123,6 +1132,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       await queryClient.invalidateQueries({
         queryKey: ["jobs", "site-sources", String(site.id)],
       });
+      await invalidateSiteIntelligence(queryClient, site.id);
     },
   });
   const aiDiscovery = useMutation({
@@ -1152,6 +1162,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       setAiSourceUrl("");
       setSelectedAiCandidates([]);
       await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
+      await invalidateSiteIntelligence(queryClient, site.id);
     },
   });
   const cancelRefresh = useMutation({
@@ -1164,6 +1175,7 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       await queryClient.invalidateQueries({
         queryKey: ["jobs", "site-sources", String(site.id)],
       });
+      await invalidateSiteIntelligence(queryClient, site.id);
     },
   });
   const manual = useMutation({
@@ -1176,13 +1188,16 @@ export function SiteSourcesSection({ site, mode = "sources" }: { site: Site; mod
       await queryClient.invalidateQueries({
         queryKey: ["inventory", String(site.id)],
       });
+      await invalidateSiteIntelligence(queryClient, site.id);
     },
   });
   const remove = useMutation({
     mutationFn: (source: UrlSource) =>
       deleteSource(String(site.id), String(source.id)),
-    onSuccess: async () =>
-      queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["sources", String(site.id)] });
+      await invalidateSiteIntelligence(queryClient, site.id);
+    },
   });
 
   function submitSitemap(event: FormEvent) {

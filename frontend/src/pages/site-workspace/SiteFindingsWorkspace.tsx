@@ -4,6 +4,7 @@ import { FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { createFindingEvaluation, getFinding, listFindingEvaluations, listFindings, setFindingAcknowledged } from "../../api/findings";
+import { invalidateSiteIntelligence } from "../../api/queryKeys";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
@@ -23,7 +24,7 @@ export function SiteFindingsWorkspace({ site }: { site: Site }) {
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["finding-evaluations", String(site.id)] }),
-        queryClient.invalidateQueries({ queryKey: ["site-intelligence", String(site.id)] }),
+        invalidateSiteIntelligence(queryClient, site.id),
       ]);
       setParams({ view: "evaluations" });
     },
@@ -75,7 +76,7 @@ export function SiteFindingDetailPage({ site }: { site: Site }) {
   const { findingId = "" } = useParams();
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ["finding", String(site.id), findingId], queryFn: () => getFinding(site.id, findingId) });
-  const workflow = useMutation({ mutationFn: (acknowledged: boolean) => setFindingAcknowledged(site.id, findingId, acknowledged), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["finding"] }); await queryClient.invalidateQueries({ queryKey: ["findings"] }); } });
+  const workflow = useMutation({ mutationFn: (acknowledged: boolean) => setFindingAcknowledged(site.id, findingId, acknowledged), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["finding"] }); await queryClient.invalidateQueries({ queryKey: ["findings"] }); await invalidateSiteIntelligence(queryClient, site.id); } });
   if (query.isLoading) return <LoadingBlock label="Loading Finding history..."/>;
   if (query.error) return <ErrorBanner error={query.error} title="Could not load Finding"/>;
   const finding = query.data!;

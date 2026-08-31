@@ -9,6 +9,7 @@ import type {
   StructuredContentSection,
   StructuredMarkdown,
 } from "../types/scans";
+import { invalidateSiteIntelligence } from "../api/queryKeys";
 import { formatDate, formatStatus } from "../utils/format";
 import { Button } from "./ui/Button";
 import { CopyButton } from "./ui/CopyButton";
@@ -25,6 +26,7 @@ type StructuredContentViewProps = {
   prepare: () => Promise<StructuredContent>;
   loadDocument: () => Promise<StructuredContentDocument>;
   loadMarkdown: () => Promise<StructuredMarkdown>;
+  siteId?: string | number;
 };
 
 export function StructuredContentView({
@@ -33,6 +35,7 @@ export function StructuredContentView({
   prepare,
   loadDocument,
   loadMarkdown,
+  siteId,
 }: StructuredContentViewProps) {
   const queryClient = useQueryClient();
   const content = useQuery({ queryKey, queryFn: load, retry: false });
@@ -42,6 +45,7 @@ export function StructuredContentView({
       queryClient.setQueryData(queryKey, value);
       void queryClient.invalidateQueries({ queryKey: [...queryKey, "document"] });
       void queryClient.invalidateQueries({ queryKey: [...queryKey, "markdown"] });
+      if (siteId !== undefined) void invalidateSiteIntelligence(queryClient, siteId);
     },
   });
   if (content.isLoading) return <LoadingBlock label="Loading structured content..." />;
