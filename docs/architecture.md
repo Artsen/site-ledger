@@ -69,7 +69,13 @@ Observation where the implementation names would be unnecessarily technical.
   deterministic Markdown independently from comparison document identity. DOM paths are
   provenance and Markdown is not canonical truth.
 - crawler.static_crawler performs breadth-first traversal and persists partial results.
-- storage.content_store stores exact response bytes as gzip-compressed, content-addressed blobs.
+- storage.content_store stores exact response bytes as deterministically gzip-compressed,
+  content-addressed blobs. Sibling temporary files are atomically published, and unique-row races
+  reconcile through nested savepoints to the committed winner.
+
+`WebResource`, `ContentBlob`, and `HtmlParseArtifact` get-or-create operations are safe under
+concurrent Sessions. A losing unique insert rolls back only its savepoint and reloads the winner;
+parse-race results load the winner's persisted child rows.
 
 services.scan_execution owns queued static Scan terminal state and may enqueue an independent
 Render Run after deterministic target selection. Saved-Site Runs are Site-owned; ad-hoc Scan Runs
@@ -101,7 +107,9 @@ Only HTTP and HTTPS are supported. Redirects are followed manually so every dest
 against scope and network-safety rules before another request is sent.
 
 Response bodies are streamed. Content-Length is checked when available and streamed bytes are
-counted, so oversized responses stop before storage and are recorded as response_too_large.
+counted, so oversized responses stop before storage and are recorded as response_too_large. The
+configured static timeout is also one aggregate wall-clock deadline across destination checks,
+redirect hops, response headers, and body streaming; expiration is recorded as `request_timeout`.
 
 Chromium uses separate route interception and observed CDP byte budgets. It independently resolves
 destinations, so its residual DNS TOCTOU is not equivalent to the pinned static boundary. See
@@ -287,11 +295,21 @@ retain independent clocks and provenance. The latest Scan never acts as a global
 Coverage always exposes integer numerator and denominator values, with a null ratio when the
 denominator is zero. Missing evidence never implies a healthy state. The read endpoint does not
 prepare Structured Content, rebuild projections or comparisons, enqueue work, or mutate state.
+Accessibility current-state rows and run provenance use the same detector, integration,
+normalization, ruleset, and profile compatibility identities as Collection Plan selection.
 
 The architectural sequence is: retained evidence, deterministic derivatives, deterministic
 Finding evaluation, persistent Findings, Site Intelligence and workflow, and only then future AI
 interpretation. No health score or Finding
 inference belongs in the composition layer.
+
+## Collection Plans
+
+Collection Plans are implemented orchestration records, not evidence and not a scheduler. They
+freeze a current active-Page universe and compatibility context, select missing evidence, and batch
+the existing Performance, Accessibility, Render, or Structured Content job types. Site Intelligence
+uses the same selectors so overview coverage and plan previews agree about current-compatible
+evidence. See [Collection Plans](collection-plans.md).
 
 ## External Performance Evidence
 
@@ -329,7 +347,7 @@ crawl behavior, or break operator configuration.
 ## Deferred Areas
 
 Resource-body storage, environment comparison,
-findings, performance regression interpretation, analytics integrations, semantic analysis,
+additional Finding detector packs, performance regression interpretation, analytics integrations, semantic analysis,
 investigation workflow, scheduling, notifications, authentication, and multi-user permissions are
 future direction.
 

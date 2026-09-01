@@ -1,10 +1,15 @@
 import gzip
 import hashlib
+import io
+import os
+import tempfile
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.database import materialize_outer_transaction
 from app.models import ContentBlob
 
 
@@ -27,8 +32,8 @@ class LocalContentStore:
         storage_key = f"{sha[:2]}/{sha[2:4]}/{sha}.html.gz"
         path = self.root / storage_key
         path.parent.mkdir(parents=True, exist_ok=True)
-        compressed = gzip.compress(content)
-        path.write_bytes(compressed)
+        compressed = _deterministic_gzip(content)
+        _atomic_publish(path, compressed)
         blob = ContentBlob(
             sha256=sha,
             storage_key=storage_key,
@@ -38,9 +43,17 @@ class LocalContentStore:
             raw_byte_size=len(content),
             stored_byte_size=len(compressed),
         )
-        db.add(blob)
-        db.flush()
-        return blob
+        materialize_outer_transaction(db)
+        try:
+            with db.begin_nested():
+                db.add(blob)
+                db.flush()
+            return blob
+        except IntegrityError:
+            winner = db.scalar(select(ContentBlob).where(ContentBlob.sha256 == sha))
+            if winner is None or winner.storage_key != storage_key:
+                raise
+            return winner
 
     def get(self, blob: ContentBlob) -> bytes:
         path = self.root / blob.storage_key
@@ -64,3 +77,31 @@ class LocalContentStore:
                 break
             current = current.parent
         return True
+
+
+def _deterministic_gzip(content: bytes) -> bytes:
+    output = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as archive:
+        archive.write(content)
+    return output.getvalue()
+
+
+def _atomic_publish(path: Path, content: bytes) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)

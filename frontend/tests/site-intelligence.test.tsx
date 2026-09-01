@@ -30,7 +30,7 @@ function intelligence(): SiteIntelligence {
     structured_content: { extractor_version: "structured-content-v2", extractor_config_version: "canonical-document-v1", markdown_renderer_version: "structured-markdown-v1", active_pages: 10, eligible_retained_html: 8, ready: 5, partial: 1, unavailable: 0, not_prepared: 2, ineligible: 2, coverage: coverage(6, 8), clock: clock("2026-08-24T02:00:00Z") },
     render: { latest_run: { present: true, id: 4, status: "completed", target_count: 2, created_at: "2026-08-25T02:00:00Z", started_at: null, finished_at: "2026-08-25T02:00:00Z" }, retained_coverage: coverage(8, 10), successful: 1, no_content: 1, redirect: 1, http_error: 1, rate_limited: 1, not_attempted_host_throttled: 1, technical_failure: 2, clock: clock("2026-08-25T02:00:00Z") },
     performance: { contexts: [{ provider: "pagespeed", dimension: "mobile", target_kind: "url", provider_adapter_version: "pagespeed-provider-v1", normalization_version: "performance-normalization-v1", ready: 4, unavailable: 1, failed: 0, coverage: coverage(5, 10), clock: clock("2026-08-26T03:00:00Z") }, { provider: "crux", dimension: "PHONE", target_kind: "url", provider_adapter_version: "crux-provider-v1", normalization_version: "performance-normalization-v1", ready: 2, unavailable: 3, failed: 0, coverage: coverage(5, 10), clock: clock("2026-08-26T03:00:00Z") }], latest_run_id: 8, latest_run_status: "completed", clock: clock("2026-08-26T03:00:00Z") },
-    accessibility: { coverage: coverage(4, 10), ready_pages: 3, failed_pages: 1, pages_with_violations: 2, violation_rules: 3, affected_nodes: 6, needs_review_rules: 1, clock: clock("2026-08-27T04:00:00Z") },
+    accessibility: { coverage: coverage(4, 20), ready_pages: 3, failed_pages: 1, pages_with_violations: 2, violation_rules: 3, affected_nodes: 6, needs_review_rules: 1, clock: clock("2026-08-27T04:00:00Z") },
     sources: { active_source_count: 2, inactive_source_count: 1, current_inventory_count: 11, suppressed_inventory_count: 2, latest_refresh_status: "completed", latest_refresh_finished_at: "2026-08-27T05:00:00Z" },
     findings: { detected: 2, unknown: 1, acknowledged_detected: 1, unresolved_total: 3, latest_evaluation_id: 6, latest_evidence_horizon_at: "2026-08-27T05:00:00Z", latest_evaluation_completed_at: "2026-08-27T05:01:00Z" },
     activity: { active_job_count: 0, queued_count: 0, running_count: 0, jobs: [] },
@@ -54,7 +54,10 @@ describe("Site Intelligence overview", () => {
     expect(screen.getByText("pagespeed / mobile", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("crux / PHONE", { exact: false })).toBeInTheDocument();
     expect(screen.getByText(/Latest Run targeted 2 Pages/)).toBeInTheDocument();
-    expect(screen.getByText(/Uncovered Pages are not counted as zero violations/)).toBeInTheDocument();
+    expect(screen.getByText("Accessibility profile coverage")).toBeInTheDocument();
+    expect(screen.getByText("4 of 20")).toBeInTheDocument();
+    expect(screen.getByText(/current Page\/profile audits across desktop and mobile/)).toBeInTheDocument();
+    expect(screen.getByText(/Missing profiles are not counted as zero violations/)).toBeInTheDocument();
     expect(screen.getAllByText(/Observed Aug 24/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Observed Aug 27/).length).toBeGreaterThan(0);
   });

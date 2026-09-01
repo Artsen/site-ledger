@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import sqlite3
 import threading
 import time
@@ -32,6 +33,7 @@ from app.services.category_rules import create_followup_evaluation
 from app.services.job_handlers import (
     CategoryRuleEvaluationJobHandler,
     HandlerResult,
+    JobCancelled,
     JobExecutionContext,
     JobHandlerRegistry,
     ScanComparisonJobHandler,
@@ -46,6 +48,7 @@ from app.services.job_types import (
     JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_STRUCTURED_CONTENT_BUILD,
+    ExecutionOwnershipLost,
 )
 from app.services.scan_comparisons import create_comparison, create_comparison_build
 from app.services.scan_projections import create_projection_build, execute_projection_build
@@ -245,8 +248,23 @@ async def test_comparison_blocking_work_survives_multiple_tiny_lease_periods(
         assert initial_expiry is not None
 
     started = threading.Event()
+    release = threading.Event()
+    renewals_observed = threading.Event()
     recovery_results: list[int] = []
     observed_expiries: list[datetime] = []
+    heartbeat_expiries: list[datetime] = []
+    recovery_errors: list[BaseException] = []
+    original_heartbeat = background_jobs.heartbeat_job
+
+    def observed_heartbeat(db, **kwargs) -> None:
+        original_heartbeat(db, **kwargs)
+        renewed_job = db.get(BackgroundJob, job_id)
+        assert renewed_job is not None and renewed_job.lease_expires_at is not None
+        heartbeat_expiries.append(renewed_job.lease_expires_at)
+        if len(heartbeat_expiries) >= 3:
+            renewals_observed.set()
+
+    monkeypatch.setattr(background_jobs, "heartbeat_job", observed_heartbeat)
 
     def blocking_comparison(db, active_build_id, **kwargs):
         active_build = db.get(ScanComparisonBuild, active_build_id)
@@ -255,7 +273,7 @@ async def test_comparison_blocking_work_survives_multiple_tiny_lease_periods(
         db.commit()
         kwargs["progress"]("pages", 1, 2)
         started.set()
-        time.sleep(0.75)
+        assert release.wait(timeout=10)
         kwargs["progress"]("complete", 2, 2)
         active_build.status = "ready"
         active_build.finished_at = datetime.now(UTC)
@@ -266,13 +284,18 @@ async def test_comparison_blocking_work_survives_multiple_tiny_lease_periods(
     monkeypatch.setattr("app.services.job_handlers.execute_comparison_build", blocking_comparison)
 
     def attempt_recovery() -> None:
-        assert started.wait(timeout=2)
-        time.sleep(0.40)
-        with session_factory() as db:
-            active_job = db.get(BackgroundJob, job_id)
-            assert active_job is not None and active_job.lease_expires_at is not None
-            observed_expiries.append(active_job.lease_expires_at)
-            recovery_results.append(background_jobs.recover_expired_jobs(db))
+        try:
+            assert started.wait(timeout=5)
+            assert renewals_observed.wait(timeout=5)
+            with session_factory() as db:
+                active_job = db.get(BackgroundJob, job_id)
+                assert active_job is not None and active_job.lease_expires_at is not None
+                observed_expiries.append(active_job.lease_expires_at)
+                recovery_results.append(background_jobs.recover_expired_jobs(db))
+        except BaseException as exc:
+            recovery_errors.append(exc)
+        finally:
+            release.set()
 
     recovery_thread = threading.Thread(target=attempt_recovery)
     recovery_thread.start()
@@ -291,12 +314,16 @@ async def test_comparison_blocking_work_survives_multiple_tiny_lease_periods(
     )
     recovery_thread.join(timeout=2)
 
+    assert not recovery_thread.is_alive()
+    assert not recovery_errors
     with session_factory() as db:
         persisted_job = db.get(BackgroundJob, job_id)
         persisted_build = db.get(ScanComparisonBuild, build_id)
         assert persisted_job is not None and persisted_job.status == "completed"
         assert persisted_build is not None and persisted_build.status == "ready"
     assert recovery_results == [0]
+    assert len(heartbeat_expiries) >= 3
+    assert heartbeat_expiries[2] > initial_expiry
     assert observed_expiries[0] > initial_expiry
 
 
@@ -962,6 +989,77 @@ async def test_scan_terminalization_commits_domain_job_and_followups_together(tm
             JOB_TYPE_SCAN_PROJECTION_BUILD,
             JOB_TYPE_CATEGORY_RULE_EVALUATION,
         }
+
+
+@pytest.mark.asyncio
+async def test_unexpected_job_exception_is_logged_with_safe_identifiers(tmp_path, caplog) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    claimed, job_id, _scan_id = _claimed_scan_with_active_rule(session_factory)
+
+    class FailingHandler:
+        async def execute(self, _job, _context):
+            raise RuntimeError("unexpected worker failure")
+
+    target_logger = logging.getLogger("site_ledger.jobs")
+    original_disabled = target_logger.disabled
+    original_propagate = target_logger.propagate
+    target_logger.disabled = False
+    target_logger.propagate = False
+    target_logger.addHandler(caplog.handler)
+    try:
+        caplog.set_level("ERROR", logger="site_ledger.jobs")
+        await run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry({JOB_TYPE_SCAN: FailingHandler()}),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+        target_logger.disabled = original_disabled
+        target_logger.propagate = original_propagate
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "unexpected background job execution failure"
+    ]
+    assert len(records) == 1
+    assert records[0].job_id == job_id
+    assert records[0].job_type == JOB_TYPE_SCAN
+    assert records[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [JobCancelled("cancelled"), ExecutionOwnershipLost()])
+async def test_expected_job_stop_is_not_logged_as_unexpected(tmp_path, caplog, failure) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    claimed, _job_id, _scan_id = _claimed_scan_with_active_rule(session_factory)
+
+    class ExpectedStopHandler:
+        async def execute(self, _job, _context):
+            raise failure
+
+    target_logger = logging.getLogger("site_ledger.jobs")
+    original_disabled = target_logger.disabled
+    original_propagate = target_logger.propagate
+    target_logger.disabled = False
+    target_logger.propagate = False
+    target_logger.addHandler(caplog.handler)
+    try:
+        caplog.set_level("ERROR", logger="site_ledger.jobs")
+        await run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry({JOB_TYPE_SCAN: ExpectedStopHandler()}),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+        target_logger.disabled = original_disabled
+        target_logger.propagate = original_propagate
+
+    assert "unexpected background job execution failure" not in caplog.messages
 
 
 @pytest.mark.asyncio

@@ -6,15 +6,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import httpcore
+import httpx
 import pytest
 
-from app.crawler.safe_fetch import FetchLimits, SafeHttpFetcher
+from app.crawler.safe_fetch import FetchLimits, SafeHttpFetcher, TotalRequestTimeoutError
 from app.crawler.secure_transport import PinnedNetworkBackend
 from app.crawler.security import (
     UnsafeDestinationError,
     resolve_addresses,
     validate_public_destination,
 )
+from app.crawler.static_crawler import TRANSIENT_FETCH_ERRORS
 
 
 def _dns_answer(*addresses: str) -> list[tuple[Any, ...]]:
@@ -98,6 +100,35 @@ async def test_mixed_answers_require_private_network_opt_in(monkeypatch) -> None
 @pytest.mark.asyncio
 @pytest.mark.parametrize("address", ["8.8.8.8", "2606:4700:4700::1111"])
 async def test_clearly_global_addresses_are_accepted(monkeypatch, address: str) -> None:
+    loop = asyncio.get_running_loop()
+
+    async def answer(*_args: Any, **_kwargs: Any) -> list[tuple[Any, ...]]:
+        return _dns_answer(address)
+
+    monkeypatch.setattr(loop, "getaddrinfo", answer)
+    assert await resolve_addresses("example.test", 443) == (address,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "address",
+    ["::ffff:127.0.0.1", "64:ff9b::7f00:1", "64:ff9b::a00:1"],
+)
+async def test_embedded_non_global_ipv4_is_rejected(monkeypatch, address: str) -> None:
+    loop = asyncio.get_running_loop()
+
+    async def answer(*_args: Any, **_kwargs: Any) -> list[tuple[Any, ...]]:
+        return _dns_answer(address)
+
+    monkeypatch.setattr(loop, "getaddrinfo", answer)
+    with pytest.raises(UnsafeDestinationError, match="not globally routable"):
+        await resolve_addresses("example.test", 443)
+    assert await resolve_addresses("example.test", 443, True) == (address,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("address", ["::ffff:8.8.8.8", "64:ff9b::808:808"])
+async def test_embedded_global_ipv4_is_accepted(monkeypatch, address: str) -> None:
     loop = asyncio.get_running_loop()
 
     async def answer(*_args: Any, **_kwargs: Any) -> list[tuple[Any, ...]]:
@@ -201,3 +232,90 @@ async def test_safe_fetch_ignores_ambient_proxy_environment(monkeypatch) -> None
         thread.join(timeout=2)
     assert result.http_status == 200
     assert result.content == b"<html>ok</html>"
+
+
+class _SlowDripStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        for chunk in (b"<html>", b"slow", b"</html>"):
+            await asyncio.sleep(0.04)
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_safe_fetch_enforces_total_wall_clock_deadline_for_slow_body() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            stream=_SlowDripStream(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        fetcher = SafeHttpFetcher(
+            FetchLimits(
+                timeout_seconds=0.07,
+                max_response_bytes=10_000,
+                max_redirects=2,
+                user_agent="SiteLedgerSecurityTest/1",
+            ),
+            client=client,
+            connection_pinning=False,
+            destination_validator=lambda *_args: asyncio.sleep(0),
+        )
+        with pytest.raises(TotalRequestTimeoutError, match="Total request deadline") as caught:
+            await fetcher.get("https://example.test/")
+
+    assert 50 <= caught.value.elapsed_ms < 250
+
+
+@pytest.mark.asyncio
+async def test_safe_fetch_deadline_is_shared_across_redirect_hops() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.04)
+        if request.url.path == "/first":
+            return httpx.Response(302, headers={"location": "/second"}, request=request)
+        return httpx.Response(200, content=b"<html>late</html>", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        fetcher = SafeHttpFetcher(
+            FetchLimits(
+                timeout_seconds=0.07,
+                max_response_bytes=10_000,
+                max_redirects=2,
+                user_agent="SiteLedgerSecurityTest/1",
+            ),
+            client=client,
+            connection_pinning=False,
+            destination_validator=lambda *_args: asyncio.sleep(0),
+        )
+        with pytest.raises(TotalRequestTimeoutError):
+            await fetcher.get("https://example.test/first")
+
+
+def test_total_request_timeout_is_an_explicit_retryable_crawler_outcome() -> None:
+    assert "request_timeout" in TRANSIENT_FETCH_ERRORS
+
+
+@pytest.mark.asyncio
+async def test_successful_fetch_cancels_deadline_and_leaves_caller_usable() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html>ok</html>", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        fetcher = SafeHttpFetcher(
+            FetchLimits(
+                timeout_seconds=0.02,
+                max_response_bytes=10_000,
+                max_redirects=2,
+                user_agent="SiteLedgerSecurityTest/1",
+            ),
+            client=client,
+            connection_pinning=False,
+            destination_validator=lambda *_args: asyncio.sleep(0),
+        )
+        first = await fetcher.get("https://example.test/first")
+        await asyncio.sleep(0.03)
+        second = await fetcher.get("https://example.test/second")
+
+    assert first.http_status == second.http_status == 200

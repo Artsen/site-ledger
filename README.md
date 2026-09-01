@@ -14,7 +14,8 @@ observations from separate scans without erasing the evidence captured by each s
 ## What It Currently Does
 
 - Saves Sites with reusable scope and user-defined classification labels.
-- Runs bounded static HTML scans through durable background jobs.
+- Runs bounded static HTML scans through durable background jobs, with one aggregate wall-clock
+  deadline per static request including redirects and response streaming.
 - Collects bounded Chromium-rendered observations in durable Render Runs, either manually or from
   eligible static Scan snapshots.
 - Accepts sitemap, robots-discovered sitemap, and manual URL Sources.
@@ -35,6 +36,12 @@ observations from separate scans without erasing the evidence captured by each s
 - Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
 - Materializes versioned, rebuildable indexes for fast immutable terminal-Scan reads while keeping
   raw evidence authoritative.
+- Builds deterministic same-Site Scan Comparisons with evidence-linked Page, Resource, and link
+  differences.
+- Composes read-only Site Intelligence with active-Page denominators and independent evidence clocks.
+- Orchestrates missing-current Performance, Accessibility, Render, and Structured Content evidence
+  through durable Collection Plans that reuse native collectors.
+- Evaluates persistent deterministic Findings V1; current detector breadth is intentionally limited.
 - Indexes browser-rendered observations from Site, Page, Render Run, and historical Scan workspaces
 - Deletes retained browser evidence independently with target tombstones, bounded bulk actions,
   reference-safe artifact reclamation, and Site/legacy Scan ownership controls
@@ -76,6 +83,8 @@ See [Performance observations](docs/performance-observations.md) for external pr
 security, collection limits, and workspace semantics.
 See [Automated Accessibility observations](docs/accessibility-observations.md) for detector
 provenance, browser security, evidence semantics, and automated-testing limitations.
+See [Site Intelligence](docs/site-intelligence.md) for current coverage, independent clocks, and
+evidence-compatibility semantics.
 See [URL identity contract](docs/url-identity-contract.md) for persistent WebResource semantics,
 known V1 equivalences, retained-data audit results, and future migration constraints.
 
@@ -206,9 +215,11 @@ directory unless the operator deliberately moves or exports them. Stored HTML is
 escaped source text and is never executed by the dashboard. Graph PNG exports are generated in the
 browser.
 
-Content blobs are addressed by SHA-256 and compressed with gzip. Identical response bodies share a
-blob record, while every scan retains its own Page observation and link provenance. Deletion is
-reference-aware so shared evidence remains available to other scans.
+Content blobs are addressed by SHA-256 and deterministically compressed with gzip. Files are
+published atomically, and concurrent content-addressed database inserts reconcile to the committed
+winner. Identical response bodies share a blob record, while every scan retains its own Page
+observation and link provenance. Deletion is reference-aware so shared evidence remains available
+to other scans.
 
 ## Security Boundaries
 
@@ -217,6 +228,8 @@ The crawler is an SSRF boundary:
 - Only HTTP and HTTPS destinations are accepted.
 - Only complete globally routable DNS answer sets are accepted by default; mixed public/private,
   loopback, link-local, private, and shared/CGNAT destinations are blocked.
+- IPv4-mapped IPv6 and well-known-prefix NAT64 destinations are classified by their embedded IPv4
+  address so encoding a private address in IPv6 cannot bypass the boundary.
 - Static sockets connect to the validated address while preserving HTTP Host, TLS SNI, and
   certificate verification. Ambient proxy environment variables are ignored.
 - Redirect destinations are revalidated before each request.
@@ -300,7 +313,7 @@ GitHub Actions runs independent `Backend`, `Frontend`, `Playwright`, and `Golden
 pull requests to `main` and pushes to `main`. The production npm audit blocks on high or critical findings; the full
 dependency-tree audit is reported without blocking while the remaining Vite/Vitest advisories
 require major upgrades. The two current production advisories are moderate React Router findings.
-Python dependency vulnerability scanning is not yet automated.
+The Backend job exports locked runtime requirements and blocks on `pip-audit` findings.
 
 The regular Playwright workflow uses mocked API responses for fast UI coverage. The separate Golden
 Path runs one deterministic local fixture through the real React, API, SQLite, worker, crawler,

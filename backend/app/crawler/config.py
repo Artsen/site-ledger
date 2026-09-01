@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-CRAWL_POLICY_VERSION = "crawl-policy-v1"
+CRAWL_POLICY_VERSION = "crawl-policy-v2-total-request-deadline"
 STARTING_URL_MAX_LENGTH = 2_048
 
 
@@ -107,6 +107,11 @@ def validate_crawl_config(values: Mapping[str, object]) -> None:
     for name in BOOLEAN_FIELDS:
         if not isinstance(values.get(name), bool):
             raise ScopeConfigValidationError(f"{name} must be a boolean")
+
+    if values.get("respect_robots_txt") is True:
+        raise ScopeConfigValidationError(
+            "respect_robots_txt cannot be enabled because robots.txt enforcement is not implemented"
+        )
 
     initial_delay = cast(int, values["static_retry_initial_delay_ms"])
     maximum_delay = cast(int, values["static_retry_max_delay_ms"])

@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.crawler.html_parser import AnchorData, ParsedHtml, ResourceReferenceData, parse_html
+from app.database import materialize_outer_transaction
 from app.models import (
     ContentBlob,
     HtmlParseAnchor,
@@ -84,7 +86,24 @@ def get_or_create_artifact(
             parsed=True,
         )
 
-    artifact = _create_artifact(db, blob, resolution_base_url, parsed)
+    materialize_outer_transaction(db)
+    try:
+        with db.begin_nested():
+            artifact = _create_artifact(db, blob, resolution_base_url, parsed)
+    except IntegrityError:
+        winner = find_compatible_artifact(
+            db,
+            content_blob_id=blob.id,
+            resolution_base_url=resolution_base_url,
+        )
+        if winner is None:
+            raise
+        return ArtifactResult(
+            artifact=winner,
+            anchors=load_artifact_anchors(db, winner),
+            resource_references=load_artifact_resource_references(db, winner),
+            parsed=True,
+        )
     return ArtifactResult(
         artifact=artifact,
         anchors=parsed.anchors,

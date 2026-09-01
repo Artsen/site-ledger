@@ -20,6 +20,7 @@ from app.crawler.config import (
     STARTING_URL_MAX_LENGTH,
     STRING_LIMITS,
     CollectionLimit,
+    ScopeConfigValidationError,
 )
 from app.crawler.scope import ScopeConfig
 from app.crawler.static_crawler import StaticPageCrawler
@@ -317,6 +318,38 @@ def test_historical_unsafe_scan_remains_readable_and_site_patch_does_not_revalid
     assert updated is not None
     assert updated.description == "Still readable"
     assert updated.scope_config == unsafe
+
+
+def test_new_scope_config_rejects_unimplemented_robots_enforcement() -> None:
+    values = ScopeConfig().to_dict()
+    values["respect_robots_txt"] = True
+
+    with pytest.raises(
+        ScopeConfigValidationError,
+        match="robots.txt enforcement is not implemented",
+    ):
+        ScopeConfig.from_dict(values)
+    with pytest.raises(ValidationError, match="robots.txt enforcement is not implemented"):
+        ScopeConfigPayload(**values)
+
+
+def test_historical_robots_enabled_scan_remains_api_readable(db_session: Session) -> None:
+    historical = ScopeConfig().to_dict()
+    historical["respect_robots_txt"] = True
+    scan = Scan(
+        starting_url="https://historical.example/",
+        status="completed",
+        scope_config=historical,
+    )
+    db_session.add(scan)
+    db_session.commit()
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+
+    with TestClient(_api_app(factory)) as client:
+        response = client.get(f"/api/scans/{scan.id}")
+
+    assert response.status_code == 200
+    assert response.json()["scope_config"]["respect_robots_txt"] is True
 
 
 @pytest.mark.asyncio

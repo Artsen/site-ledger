@@ -51,12 +51,19 @@ from app.schemas.site_intelligence import (
     SourcesIntelligenceRead,
     StructuredContentIntelligenceRead,
 )
-from app.services.collection_plans import Selection, active_page_candidates, build_selection
+from app.services.collection_plans import (
+    Selection,
+    accessibility_compatibility_filters,
+    active_page_candidates,
+    build_selection,
+)
 from app.services.inventory_lifecycle import summarize_current_inventory
 from app.services.rendered_queries import render_outcome_conditions
 from app.services.scan_comparisons import SCAN_COMPARISON_ALGORITHM, SCAN_COMPARISON_VERSION
 from app.services.scan_projections import TERMINAL_SCAN_STATUSES
 from app.services.structured_content import latest_page_content_snapshot_subquery
+
+ACCESSIBILITY_SUPPORTED_PROFILES = ("desktop", "mobile")
 
 
 def _coverage(observed: int, eligible: int) -> CoverageRead:
@@ -581,7 +588,10 @@ def _accessibility_state(
 ) -> AccessibilityIntelligenceRead:
     run = db.scalar(
         select(AccessibilityRun)
-        .where(AccessibilityRun.website_property_id == site_id)
+        .where(
+            AccessibilityRun.website_property_id == site_id,
+            *accessibility_compatibility_filters(AccessibilityRun),
+        )
         .order_by(AccessibilityRun.created_at.desc(), AccessibilityRun.id.desc())
         .limit(1)
     )
@@ -610,13 +620,15 @@ def _accessibility_state(
         .where(
             AccessibilityObservation.website_property_id == site_id,
             AccessibilityObservation.web_resource_id.in_(_active_pages(site_id)),
+            AccessibilityObservation.profile.in_(ACCESSIBILITY_SUPPORTED_PROFILES),
+            *accessibility_compatibility_filters(AccessibilityObservation),
         )
         .subquery()
     )
     current = select(ranked).where(ranked.c.position == 1).subquery()
     values = db.execute(
         select(
-            func.count(func.distinct(current.c.web_resource_id)),
+            func.count(),
             func.count(
                 func.distinct(case((current.c.outcome == "ready", current.c.web_resource_id)))
             ),
@@ -634,7 +646,7 @@ def _accessibility_state(
         ).select_from(current)
     ).one()
     return AccessibilityIntelligenceRead(
-        coverage=_coverage(values[0] or 0, active_total),
+        coverage=_coverage(values[0] or 0, active_total * len(ACCESSIBILITY_SUPPORTED_PROFILES)),
         ready_pages=values[1] or 0,
         failed_pages=values[2] or 0,
         pages_with_violations=values[3] or 0,

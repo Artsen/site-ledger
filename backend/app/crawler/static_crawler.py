@@ -17,6 +17,7 @@ from app.crawler.safe_fetch import (
     RedirectFailureError,
     ResponseTooLargeError,
     SafeHttpFetcher,
+    TotalRequestTimeoutError,
     connect_error_type,
 )
 from app.crawler.scope import ScopeConfig, ScopeEngine
@@ -49,6 +50,7 @@ from app.services.structured_content import get_or_create_structured_artifact
 from app.storage.content_store import LocalContentStore
 
 TRANSIENT_FETCH_ERRORS = {
+    "request_timeout",
     "connection_timeout",
     "read_timeout",
     "connection_error",
@@ -543,6 +545,8 @@ class StaticPageCrawler:
                 [],
                 [],
             )
+        except TotalRequestTimeoutError as exc:
+            return self._record_failure(scan, item, "request_timeout", str(exc)), [], []
         except httpx.ConnectTimeout as exc:
             return self._record_failure(scan, item, "connection_timeout", str(exc)), [], []
         except httpx.ReadTimeout as exc:
