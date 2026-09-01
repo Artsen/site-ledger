@@ -248,8 +248,23 @@ async def test_comparison_blocking_work_survives_multiple_tiny_lease_periods(
         assert initial_expiry is not None
 
     started = threading.Event()
+    release = threading.Event()
+    renewals_observed = threading.Event()
     recovery_results: list[int] = []
     observed_expiries: list[datetime] = []
+    heartbeat_expiries: list[datetime] = []
+    recovery_errors: list[BaseException] = []
+    original_heartbeat = background_jobs.heartbeat_job
+
+    def observed_heartbeat(db, **kwargs) -> None:
+        original_heartbeat(db, **kwargs)
+        renewed_job = db.get(BackgroundJob, job_id)
+        assert renewed_job is not None and renewed_job.lease_expires_at is not None
+        heartbeat_expiries.append(renewed_job.lease_expires_at)
+        if len(heartbeat_expiries) >= 3:
+            renewals_observed.set()
+
+    monkeypatch.setattr(background_jobs, "heartbeat_job", observed_heartbeat)
 
     def blocking_comparison(db, active_build_id, **kwargs):
         active_build = db.get(ScanComparisonBuild, active_build_id)
@@ -258,7 +273,7 @@ async def test_comparison_blocking_work_survives_multiple_tiny_lease_periods(
         db.commit()
         kwargs["progress"]("pages", 1, 2)
         started.set()
-        time.sleep(0.75)
+        assert release.wait(timeout=10)
         kwargs["progress"]("complete", 2, 2)
         active_build.status = "ready"
         active_build.finished_at = datetime.now(UTC)
@@ -269,13 +284,18 @@ async def test_comparison_blocking_work_survives_multiple_tiny_lease_periods(
     monkeypatch.setattr("app.services.job_handlers.execute_comparison_build", blocking_comparison)
 
     def attempt_recovery() -> None:
-        assert started.wait(timeout=2)
-        time.sleep(0.40)
-        with session_factory() as db:
-            active_job = db.get(BackgroundJob, job_id)
-            assert active_job is not None and active_job.lease_expires_at is not None
-            observed_expiries.append(active_job.lease_expires_at)
-            recovery_results.append(background_jobs.recover_expired_jobs(db))
+        try:
+            assert started.wait(timeout=5)
+            assert renewals_observed.wait(timeout=5)
+            with session_factory() as db:
+                active_job = db.get(BackgroundJob, job_id)
+                assert active_job is not None and active_job.lease_expires_at is not None
+                observed_expiries.append(active_job.lease_expires_at)
+                recovery_results.append(background_jobs.recover_expired_jobs(db))
+        except BaseException as exc:
+            recovery_errors.append(exc)
+        finally:
+            release.set()
 
     recovery_thread = threading.Thread(target=attempt_recovery)
     recovery_thread.start()
@@ -294,12 +314,16 @@ async def test_comparison_blocking_work_survives_multiple_tiny_lease_periods(
     )
     recovery_thread.join(timeout=2)
 
+    assert not recovery_thread.is_alive()
+    assert not recovery_errors
     with session_factory() as db:
         persisted_job = db.get(BackgroundJob, job_id)
         persisted_build = db.get(ScanComparisonBuild, build_id)
         assert persisted_job is not None and persisted_job.status == "completed"
         assert persisted_build is not None and persisted_build.status == "ready"
     assert recovery_results == [0]
+    assert len(heartbeat_expiries) >= 3
+    assert heartbeat_expiries[2] > initial_expiry
     assert observed_expiries[0] > initial_expiry
 
 

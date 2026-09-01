@@ -29,6 +29,13 @@ Accessibility Collection Plans:
 Evidence with an older or otherwise incompatible identity remains immutable historical evidence,
 but it is not selected as current merely because its observation or run timestamp is newer.
 
+Aggregate Accessibility profile coverage uses Page/profile slots. Its eligible count is the number
+of active Pages multiplied by the two current supported profiles (`desktop` and `mobile`), and its
+observed count is the number of distinct current-compatible `(Page, profile)` observations. Five
+active Pages with only five desktop observations therefore report 5 of 10 rather than 5 of 5.
+Outcome fields named as Pages, including Pages with violations and failed Pages, remain distinct
+Page counts rather than profile-slot counts.
+
 ## Collection Coverage
 
 Collection Plan previews and Site Intelligence coverage share the deterministic selectors in

@@ -282,8 +282,8 @@ def test_independent_clocks_and_active_page_universe_exclude_suppressed_history(
     assert all(item.coverage.observed == 5 for item in result.performance.contexts)
     assert result.accessibility.coverage.model_dump() == {
         "observed": 5,
-        "eligible": 5,
-        "ratio": 1.0,
+        "eligible": 10,
+        "ratio": 0.5,
     }
     assert result.scan.clock.latest_observed_at == monday
     assert result.render.clock.latest_observed_at == tuesday
@@ -301,6 +301,46 @@ def test_independent_clocks_and_active_page_universe_exclude_suppressed_history(
     assert accessibility_coverage["mobile"].missing == 5
     assert db_session.scalar(select(func.count()).select_from(AccessibilityObservation)) == 8
     assert not hasattr(result, "site_as_of")
+
+    for resource in resources[:5]:
+        db_session.add(
+            AccessibilityObservation(
+                accessibility_run_id=accessibility_run.id,
+                website_property_id=site.id,
+                web_resource_id=resource.id,
+                requested_url=resource.normalized_url,
+                profile="mobile",
+                outcome="ready",
+                observed_at=thursday,
+                axe_core_version=AXE_CORE_VERSION,
+                detector_bundle_sha256=AXE_BUNDLE_SHA256,
+                integration_version=ACCESSIBILITY_INTEGRATION_VERSION,
+                normalization_version=ACCESSIBILITY_NORMALIZATION_VERSION,
+                ruleset_profile=RULESET_PROFILE,
+                ruleset_sha256=RULESET_SHA256,
+                profile_json={},
+            )
+        )
+    db_session.commit()
+
+    complete = get_site_intelligence(db_session, site.id)
+    assert complete is not None
+    assert complete.accessibility.coverage.model_dump() == {
+        "observed": 10,
+        "eligible": 10,
+        "ratio": 1.0,
+    }
+    complete_coverage = {
+        item.context["profile"]: item
+        for item in complete.collection_coverage
+        if item.evidence_domain == "accessibility"
+    }
+    assert complete_coverage["desktop"].covered == 5
+    assert complete_coverage["desktop"].missing == 0
+    assert complete_coverage["mobile"].covered == 5
+    assert complete_coverage["mobile"].missing == 0
+    assert complete.accessibility.violation_rules == 0
+    assert db_session.scalar(select(func.count()).select_from(AccessibilityObservation)) == 13
 
 
 def test_site_intelligence_query_count_is_bounded_for_empty_site(db_session) -> None:
@@ -329,6 +369,11 @@ def test_site_intelligence_query_count_is_bounded_for_empty_site(db_session) -> 
     assert result is not None
     assert statements <= 20
     assert result.activity.active_job_count == 0
+    assert result.accessibility.coverage.model_dump() == {
+        "observed": 0,
+        "eligible": 0,
+        "ratio": None,
+    }
     assert db_session.scalar(select(func.count()).select_from(HtmlStructuredContentArtifact)) == 0
     assert db_session.scalar(select(func.count()).select_from(ScanComparisonBuild)) == 0
 
