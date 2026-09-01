@@ -435,6 +435,7 @@ def reconcile_site(
     *,
     should_cancel: Callable[[], bool] | None = None,
     progress: Callable[[int, int], None] | None = None,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> PageCategoryRuleRun:
     run = db.get(PageCategoryRuleRun, run_id)
     if run is None:
@@ -474,6 +475,7 @@ def reconcile_site(
         or 0
     )
     run.page_count = total_pages
+    _fence(db, fence_domain_mutation)
     db.commit()
     counters: defaultdict[str, int] = defaultdict(int)
     rule_matches: defaultdict[int, int] = defaultdict(int)
@@ -484,6 +486,7 @@ def reconcile_site(
             if run:
                 run.status = "cancelled"
                 run.finished_at = datetime.now(UTC)
+                _fence(db, fence_domain_mutation)
                 db.commit()
             return run  # type: ignore[return-value]
         pages = [
@@ -501,6 +504,7 @@ def reconcile_site(
             )
         ]
         _reconcile_batch(db, rules, compiled, pages, counters, rule_matches, rule_excluded)
+        _fence(db, fence_domain_mutation)
         db.commit()
         if progress:
             progress(min(offset + len(pages), total_pages), total_pages)
@@ -509,6 +513,7 @@ def reconcile_site(
         if run:
             run.status = "cancelled"
             run.finished_at = datetime.now(UTC)
+            _fence(db, fence_domain_mutation)
             db.commit()
         return run  # type: ignore[return-value]
     now = datetime.now(UTC)
@@ -531,8 +536,14 @@ def reconcile_site(
         "unchanged_count",
     ):
         setattr(run, field, counters[field])
+    _fence(db, fence_domain_mutation)
     db.commit()
     return run
+
+
+def _fence(db: Session, callback: Callable[[Session], None] | None) -> None:
+    if callback is not None:
+        callback(db)
 
 
 def _reconcile_batch(

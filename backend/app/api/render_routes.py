@@ -31,10 +31,8 @@ from app.schemas.rendered import (
     RenderRunRerender,
     RenderRunTargetList,
 )
-from app.services.background_jobs import (
-    enqueue_render_run_job,
-    request_cancellation,
-)
+from app.services.background_jobs import enqueue_render_run_job
+from app.services.native_cancellation import request_native_cancellation
 from app.services.render_runs import create_render_run, create_rerender_run
 from app.services.rendered_deletion import (
     delete_render_run,
@@ -388,11 +386,7 @@ def cancel_run(site_id: int, run_id: int, db: DbSession) -> RenderRunRead:
     run = _run(db, site_id, run_id)
     job = db.scalar(select(BackgroundJob).where(BackgroundJob.render_run_id == run.id))
     if job:
-        request_cancellation(db, job, "Rendered capture cancellation requested.")
-        if job.status == "cancelled":
-            run.status = "cancelled"
-            run.finished_at = job.finished_at
-            db.commit()
+        request_native_cancellation(db, job, "Rendered capture cancellation requested.")
     result = get_render_run(db, site_id, run.id, limit=1)
     assert result is not None
     return RenderRunRead(**result.model_dump(exclude={"observations"}))

@@ -60,7 +60,8 @@ from app.services.accessibility_queries import (
     page_accessibility_history,
     page_latest_accessibility,
 )
-from app.services.background_jobs import enqueue_accessibility_run_job, request_cancellation
+from app.services.background_jobs import enqueue_accessibility_run_job
+from app.services.native_cancellation import request_native_cancellation
 from app.services.site_pages import find_site_page
 from app.storage.accessibility_store import (
     AccessibilityPayloadNotFoundError,
@@ -148,11 +149,7 @@ def cancel_run(site_id: int, run_id: int, db: DbSession) -> AccessibilityRunRead
         raise HTTPException(404, "Accessibility run not found")
     job = db.scalar(select(BackgroundJob).where(BackgroundJob.accessibility_run_id == run_id))
     if job:
-        request_cancellation(db, job, "Accessibility audit cancellation requested.")
-        if job.status == "cancelled":
-            run.status = "cancelled"
-            run.finished_at = job.finished_at
-            db.commit()
+        request_native_cancellation(db, job, "Accessibility audit cancellation requested.")
     result = get_accessibility_run(db, site_id, run_id, limit=1, offset=0)
     assert result is not None
     return AccessibilityRunRead(**result.model_dump(exclude={"observations"}))

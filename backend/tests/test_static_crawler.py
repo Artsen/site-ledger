@@ -156,6 +156,33 @@ async def test_later_saved_site_scan_does_not_reactivate_suppressed_page(
 
 
 @pytest.mark.asyncio
+async def test_two_page_scan_fences_once_per_persistence_transaction(db_session, tmp_path) -> None:
+    scan = _scan(
+        db_session,
+        ScopeConfig(
+            allowed_host_patterns=["fixture.test"],
+            allow_private_networks=True,
+            max_pages=2,
+        ),
+    )
+    fence_calls = 0
+
+    def count_fence(_db) -> None:
+        nonlocal fence_calls
+        fence_calls += 1
+
+    await StaticPageCrawler(
+        db_session,
+        LocalContentStore(tmp_path),
+        transport=fixture_transport(),
+        fence_domain_mutation=count_fence,
+    ).run(scan)
+
+    assert scan.fetched_count == 2
+    assert fence_calls == 6
+
+
+@pytest.mark.asyncio
 async def test_transient_failure_is_retried_after_the_crawl(db_session, tmp_path) -> None:
     attempts = 0
 

@@ -25,10 +25,8 @@ from app.schemas.performance import (
     PerformanceRunRead,
     PerformanceSiteDeletePreview,
 )
-from app.services.background_jobs import (
-    enqueue_performance_run_job,
-    request_cancellation,
-)
+from app.services.background_jobs import enqueue_performance_run_job
+from app.services.native_cancellation import request_native_cancellation
 from app.services.performance_collection import create_performance_run
 from app.services.performance_deletion import (
     delete_performance_observation,
@@ -143,11 +141,7 @@ def cancel_run(site_id: int, run_id: int, db: DbSession) -> PerformanceRunRead:
         raise HTTPException(404, "Performance run not found")
     job = db.scalar(select(BackgroundJob).where(BackgroundJob.performance_run_id == run_id))
     if job is not None:
-        request_cancellation(db, job, "Performance collection cancellation requested.")
-        if job.status == "cancelled":
-            run.status = "cancelled"
-            run.finished_at = job.finished_at
-            db.commit()
+        request_native_cancellation(db, job, "Performance collection cancellation requested.")
     result = get_performance_run(db, site_id, run_id, limit=1, offset=0)
     assert result is not None
     return PerformanceRunRead(**result.model_dump(exclude={"observations"}))

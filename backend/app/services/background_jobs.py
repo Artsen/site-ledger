@@ -924,6 +924,12 @@ def recover_expired_jobs(
                 if refresh.url_source:
                     refresh.url_source.last_refresh_status = "interrupted"
                     refresh.url_source.last_refresh_finished_at = now
+                if (
+                    refresh.ai_document_refresh
+                    and refresh.ai_document_refresh.status not in TERMINAL_JOB_STATUSES
+                ):
+                    refresh.ai_document_refresh.status = "interrupted"
+                    refresh.ai_document_refresh.stop_reason = "worker_lease_expired"
         emit_event(db, job.id, "lease_expired", "warning", "Worker lease expired.")
         emit_event(db, job.id, "interrupted", "warning", "Job interrupted by recovery.")
         recovered += 1
@@ -993,6 +999,9 @@ def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
         return False
     if job.status in TERMINAL_JOB_STATUSES:
         return False
+    from app.services.job_followups import ensure_required_followups
+
+    ensure_required_followups(db, job)
     ensure_transition(job.status, domain_status)
     job.status = domain_status
     job.finished_at = datetime.now(UTC)

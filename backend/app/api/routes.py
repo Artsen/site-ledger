@@ -115,7 +115,6 @@ from app.services.background_jobs import (
     enqueue_scan_projection_job,
     enqueue_source_refresh_job,
     presentation_status,
-    request_cancellation,
     worker_health,
 )
 from app.services.graph_config import GRAPH_CONFIG
@@ -134,6 +133,7 @@ from app.services.inventory_lifecycle import (
     delete_inventory_suppression,
     remove_manual_source_entry,
 )
+from app.services.native_cancellation import request_native_cancellation
 from app.services.notes import (
     create_note,
     delete_note,
@@ -703,12 +703,7 @@ def cancel_source_refresh(refresh_id: int, db: DbSession) -> SourceRefreshRead:
         raise HTTPException(404, "Source refresh not found")
     job = active_job_for_source_refresh(db, refresh_id)
     if job:
-        request_cancellation(db, job)
-        if job.status == "cancelled":
-            refresh.status = "cancelled"
-            refresh.error_type = "cancelled"
-            refresh.error_message = "Refresh cancelled by user."
-            db.commit()
+        request_native_cancellation(db, job)
     db.refresh(refresh)
     return SourceRefreshRead.model_validate(refresh, from_attributes=True)
 
@@ -1259,11 +1254,7 @@ def cancel_scan(scan_id: int, db: DbSession) -> Scan:
         raise HTTPException(404, "Scan not found")
     job = active_job_for_scan(db, scan_id)
     if job:
-        request_cancellation(db, job)
-        if job.status == "cancelled":
-            scan.status = "cancelled"
-            scan.stop_reason = "cancelled_by_user"
-            db.commit()
+        request_native_cancellation(db, job)
     db.refresh(scan)
     return scan
 

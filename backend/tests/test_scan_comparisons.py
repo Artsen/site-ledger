@@ -20,12 +20,14 @@ from app.models import (
     WebResource,
     WebsiteProperty,
 )
+from app.services import scan_comparisons
 from app.services.comparison_queries import (
     link_occurrence_diff,
     list_comparison_pages,
     page_change_history,
     page_source_diff,
 )
+from app.services.job_types import ExecutionOwnershipLost
 from app.services.render_runs import create_scan_render_run
 from app.services.rendered_capture import create_observation
 from app.services.scan_comparisons import (
@@ -45,6 +47,74 @@ from app.services.scan_comparisons import (
 from app.services.scan_projections import create_projection_build, execute_projection_build
 from app.services.structured_content import get_or_create_structured_artifact
 from app.storage.content_store import LocalContentStore
+
+
+def test_comparison_ownership_loss_keeps_prior_batch_and_rejects_next(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site, baseline, target, _ = _fixture(db_session)
+    _prepare(db_session, baseline, target)
+    comparison = create_comparison(db_session, site.id, baseline.id, target.id)
+    build = create_comparison_build(db_session, comparison.id)
+    db_session.commit()
+    monkeypatch.setattr(
+        scan_comparisons,
+        "_chunks",
+        lambda items, size=1: (items[index : index + 1] for index in range(0, len(items), 1)),
+    )
+    fence_calls = 0
+
+    def lose_before_second_page_batch(_db: Session) -> None:
+        nonlocal fence_calls
+        fence_calls += 1
+        if fence_calls == 4:
+            raise ExecutionOwnershipLost("forced comparison batch ownership loss")
+
+    with pytest.raises(ExecutionOwnershipLost, match="forced comparison batch"):
+        execute_comparison_build(
+            db_session,
+            build.id,
+            fence_domain_mutation=lose_before_second_page_batch,
+        )
+
+    db_session.expire_all()
+    persisted = db_session.get(ScanComparisonBuild, build.id)
+    assert persisted is not None and persisted.status == "building"
+    assert comparison.current_build_id is None
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(ScanComparisonPageResult)
+            .where(ScanComparisonPageResult.comparison_build_id == build.id)
+        )
+        == 1
+    )
+
+
+def test_comparison_ownership_loss_rejects_final_activation(db_session) -> None:
+    site, baseline, target, _ = _fixture(db_session)
+    _prepare(db_session, baseline, target)
+    comparison = create_comparison(db_session, site.id, baseline.id, target.id)
+    build = create_comparison_build(db_session, comparison.id)
+    db_session.commit()
+
+    def reject_ready_build(db: Session) -> None:
+        active = db.get(ScanComparisonBuild, build.id)
+        if active is not None and active.status == "ready":
+            raise ExecutionOwnershipLost("forced comparison activation ownership loss")
+
+    with pytest.raises(ExecutionOwnershipLost, match="forced comparison activation"):
+        execute_comparison_build(
+            db_session,
+            build.id,
+            fence_domain_mutation=reject_ready_build,
+        )
+
+    db_session.expire_all()
+    persisted = db_session.get(ScanComparisonBuild, build.id)
+    current = db_session.get(ScanComparison, comparison.id)
+    assert persisted is not None and persisted.status == "building"
+    assert current is not None and current.current_build_id is None
 
 
 def test_comparison_eligibility_is_same_site_terminal_and_directional(db_session) -> None:

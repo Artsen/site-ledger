@@ -173,6 +173,7 @@ def execute_comparison_build(
     should_cancel: Callable[[], bool] | None = None,
     progress: Callable[[str, int, int], None] | None = None,
     store: LocalContentStore | None = None,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> ScanComparisonBuild:
     build = db.get(ScanComparisonBuild, build_id)
     if build is None:
@@ -190,6 +191,7 @@ def execute_comparison_build(
     target_projection = current_projection_build(db, target.id)
     if baseline_projection is None or target_projection is None:
         build.status = "waiting_for_projections"
+        _fence(db, fence_domain_mutation)
         db.commit()
         raise ComparisonProjectionUnavailable(
             "Compatible prepared results are required for both Scans."
@@ -199,6 +201,7 @@ def execute_comparison_build(
     build.started_at = datetime.now(UTC)
     build.error_type = build.error_message = None
     _pin_projection_provenance(build, baseline_projection, target_projection)
+    _fence(db, fence_domain_mutation)
     db.commit()
     try:
         _clear_staged_rows(db, build.id)
@@ -210,6 +213,7 @@ def execute_comparison_build(
         build.target_seed_fingerprint = coverage["target_seed_fingerprint"]
         build.coverage_state = coverage["coverage_state"]
         build.warnings_json = coverage["warnings"]
+        _fence(db, fence_domain_mutation)
         db.commit()
         _report(progress, "analyzing_coverage", 1, 1)
 
@@ -224,6 +228,7 @@ def execute_comparison_build(
             "comparing_pages",
             progress,
             should_cancel,
+            fence_domain_mutation,
         )
         resource_rows = _resource_rows(db, baseline_projection, target_projection)
         _insert_batches(
@@ -234,6 +239,7 @@ def execute_comparison_build(
             "comparing_resources",
             progress,
             should_cancel,
+            fence_domain_mutation,
         )
         link_rows = _link_rows(db, baseline_projection, target_projection)
         _insert_batches(
@@ -244,9 +250,10 @@ def execute_comparison_build(
             "comparing_links",
             progress,
             should_cancel,
+            fence_domain_mutation,
         )
         _populate_page_topology(page_rows, link_rows)
-        _replace_page_rows(db, build.id, page_rows)
+        _replace_page_rows(db, build.id, page_rows, fence_domain_mutation)
         _report(progress, "calculating_page_topology", len(page_rows), len(page_rows))
         summary = _summary_row(
             db,
@@ -258,6 +265,7 @@ def execute_comparison_build(
             link_rows,
         )
         db.execute(insert(ScanComparisonSummary), [summary])
+        _fence(db, fence_domain_mutation)
         db.commit()
         _report(progress, "calculating_summary", 1, 1)
         validation = _validate_build(db, build.id, page_rows, resource_rows, link_rows)
@@ -282,12 +290,20 @@ def execute_comparison_build(
             prior = db.get(ScanComparisonBuild, prior_id)
             if prior is not None:
                 prior.status = "superseded"
+        _fence(db, fence_domain_mutation)
         db.commit()
         _report(progress, "activating", 1, 1)
         db.refresh(build)
         return build
     except ComparisonBuildCancelled:
-        _finish_failed_build(db, build, "cancelled", "cancelled", "Build cancelled by user.")
+        _finish_failed_build(
+            db,
+            build,
+            "cancelled",
+            "cancelled",
+            "Build cancelled by user.",
+            fence_domain_mutation=fence_domain_mutation,
+        )
         raise
     except ComparisonProjectionUnavailable:
         raise
@@ -295,7 +311,14 @@ def execute_comparison_build(
         db.rollback()
         raise
     except Exception as exc:
-        _finish_failed_build(db, build, "failed", type(exc).__name__, str(exc))
+        _finish_failed_build(
+            db,
+            build,
+            "failed",
+            type(exc).__name__,
+            str(exc),
+            fence_domain_mutation=fence_domain_mutation,
+        )
         raise
 
 
@@ -1239,7 +1262,12 @@ def _delta(before: Any, after: Any, field: str) -> int | None:
     return right - left if left is not None and right is not None else None
 
 
-def _replace_page_rows(db: Session, build_id: int, rows: list[dict[str, Any]]) -> None:
+def _replace_page_rows(
+    db: Session,
+    build_id: int,
+    rows: list[dict[str, Any]],
+    fence_domain_mutation: Callable[[Session], None] | None = None,
+) -> None:
     db.execute(
         delete(ScanComparisonPageResult).where(
             ScanComparisonPageResult.comparison_build_id == build_id
@@ -1250,6 +1278,7 @@ def _replace_page_rows(db: Session, build_id: int, rows: list[dict[str, Any]]) -
             insert(ScanComparisonPageResult),
             [{"comparison_build_id": build_id, **row} for row in chunk],
         )
+    _fence(db, fence_domain_mutation)
     db.commit()
 
 
@@ -1261,11 +1290,13 @@ def _insert_batches(
     phase: str,
     progress: Callable[[str, int, int], None] | None,
     should_cancel: Callable[[], bool] | None,
+    fence_domain_mutation: Callable[[Session], None] | None,
 ) -> None:
     total = len(rows)
     for number, chunk in enumerate(_chunks(rows), start=1):
         _check_cancelled(should_cancel)
         db.execute(insert(model), [{"comparison_build_id": build_id, **row} for row in chunk])
+        _fence(db, fence_domain_mutation)
         db.commit()
         _report(progress, phase, min(number * COMPARISON_BATCH_SIZE, total), total)
 
@@ -1407,6 +1438,7 @@ def _finish_failed_build(
     error_message: str,
     *,
     commit: bool = True,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> None:
     build.status = status
     build.active_key = None
@@ -1414,7 +1446,13 @@ def _finish_failed_build(
     build.error_type = error_type
     build.error_message = error_message
     if commit:
+        _fence(db, fence_domain_mutation)
         db.commit()
+
+
+def _fence(db: Session, callback: Callable[[Session], None] | None) -> None:
+    if callback is not None:
+        callback(db)
 
 
 def _model_dict(model: Any) -> dict[str, Any]:

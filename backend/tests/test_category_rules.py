@@ -10,6 +10,7 @@ from app.models import (
     PageCategoryAssignment,
     PageCategoryAssignmentSupport,
     PageCategoryAutomaticExclusion,
+    PageCategoryRule,
     PageCategoryRuleRun,
     SitePage,
     WebResource,
@@ -24,6 +25,7 @@ from app.schemas.category_rules import (
 )
 from app.schemas.page_workspaces import PageCategoryCreate, PageMetadataUpdate
 from app.schemas.sites import WebsitePropertyUpdate
+from app.services import category_rules
 from app.services.background_jobs import recover_expired_jobs
 from app.services.category_rule_evaluator import compile_conditions, resource_matches
 from app.services.category_rules import (
@@ -36,6 +38,7 @@ from app.services.category_rules import (
     remove_automatic_exclusion,
     set_automatic_exclusion,
 )
+from app.services.job_types import ExecutionOwnershipLost
 from app.services.page_categories import create_category
 from app.services.site_pages import update_page_metadata
 
@@ -261,6 +264,83 @@ def test_reconciliation_query_count_is_batch_oriented(db_session: Session) -> No
         event.remove(engine, "before_cursor_execute", count_statement)
     assert statements < 30
     assert db_session.query(PageCategoryAssignment).count() == 100
+
+
+def test_rule_ownership_loss_keeps_prior_batch_and_rejects_next(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site, pages = _site_with_pages(db_session, ["/docs/a", "/docs/b"])
+    category = create_category(db_session, site.id, PageCategoryCreate(name="Docs"))
+    assert category is not None
+    create_rule(
+        db_session,
+        site.id,
+        CategoryRuleCreate(
+            name="Docs",
+            category_id=category.id,
+            conditions=[
+                CategoryRuleConditionPayload(target="path", operator="starts_with", value="/docs/")
+            ],
+        ),
+    )
+    run = db_session.query(PageCategoryRuleRun).one()
+    monkeypatch.setattr(category_rules, "PAGE_BATCH_SIZE", 1)
+    fence_calls = 0
+
+    def lose_before_second_batch(_db: Session) -> None:
+        nonlocal fence_calls
+        fence_calls += 1
+        if fence_calls == 3:
+            raise ExecutionOwnershipLost("forced rule batch ownership loss")
+
+    with pytest.raises(ExecutionOwnershipLost, match="forced rule batch"):
+        reconcile_site(
+            db_session,
+            run.id,
+            fence_domain_mutation=lose_before_second_batch,
+        )
+
+    db_session.rollback()
+    db_session.expire_all()
+    assignments = list(db_session.scalars(select(PageCategoryAssignment)))
+    assert [item.site_page_id for item in assignments] == [pages[0].id]
+    persisted = db_session.get(PageCategoryRuleRun, run.id)
+    assert persisted is not None and persisted.status == "running"
+
+
+def test_rule_ownership_loss_rejects_final_counters(db_session: Session) -> None:
+    site, _ = _site_with_pages(db_session, ["/docs/a"])
+    category = create_category(db_session, site.id, PageCategoryCreate(name="Docs"))
+    assert category is not None
+    created = create_rule(
+        db_session,
+        site.id,
+        CategoryRuleCreate(
+            name="Docs",
+            category_id=category.id,
+            conditions=[
+                CategoryRuleConditionPayload(target="path", operator="starts_with", value="/docs/")
+            ],
+        ),
+    )
+    assert created is not None
+    run = db_session.query(PageCategoryRuleRun).one()
+
+    def reject_completion(db: Session) -> None:
+        active = db.get(PageCategoryRuleRun, run.id)
+        if active is not None and active.status == "completed":
+            raise ExecutionOwnershipLost("forced rule finalization ownership loss")
+
+    with pytest.raises(ExecutionOwnershipLost, match="forced rule finalization"):
+        reconcile_site(db_session, run.id, fence_domain_mutation=reject_completion)
+
+    db_session.rollback()
+    db_session.expire_all()
+    persisted = db_session.get(PageCategoryRuleRun, run.id)
+    rule = db_session.scalar(select(PageCategoryRule).where(PageCategoryRule.id == created.id))
+    assert persisted is not None and persisted.status == "running"
+    assert rule is not None and rule.current_match_count == 0
+    assert rule.last_evaluated_at is None
 
 
 def test_expired_rule_job_marks_run_interrupted(db_session: Session) -> None:

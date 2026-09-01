@@ -122,6 +122,7 @@ async def execute_source_refresh(
     should_cancel: Callable[[], bool] | None = None,
     progress_callback: Callable[[SourceRefresh], None] | None = None,
     ai_document_store: LocalAiDocumentStore | None = None,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> SourceRefresh | None:
     refresh = db.get(SourceRefresh, refresh_id)
     if refresh is None:
@@ -129,6 +130,7 @@ async def execute_source_refresh(
     source = refresh.url_source
     limits = _limits_from_site(source.website_property)
     _start_existing_refresh(source, refresh)
+    _fence(db, fence_domain_mutation)
     db.commit()
     try:
         _raise_if_cancelled(should_cancel)
@@ -167,6 +169,7 @@ async def execute_source_refresh(
                 should_cancel=should_cancel,
                 progress_callback=progress_callback,
                 store=ai_document_store,
+                fence_domain_mutation=fence_domain_mutation,
             )
         else:
             raise ValueError(f"Unsupported source type: {source.source_type}")
@@ -184,6 +187,7 @@ async def execute_source_refresh(
         refresh.error_message = str(exc)
         refresh.finished_at = datetime.now(UTC)
     _finish_source(source, refresh)
+    _fence(db, fence_domain_mutation)
     db.commit()
     db.refresh(refresh)
     return refresh
@@ -508,6 +512,11 @@ def _progress(
 ) -> None:
     if progress_callback:
         progress_callback(refresh)
+
+
+def _fence(db: Session, callback: Callable[[Session], None] | None) -> None:
+    if callback is not None:
+        callback(db)
 
 
 def _start_refresh(db: Session, source: UrlSource, status: str = "running") -> SourceRefresh:

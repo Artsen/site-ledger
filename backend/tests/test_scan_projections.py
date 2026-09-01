@@ -5,7 +5,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, event, func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.routes import router
 from app.crawler.scope import ScopeConfig
@@ -31,10 +31,11 @@ from app.models import (
     WebResource,
     WebsiteProperty,
 )
+from app.services import scan_projections
 from app.services.graph_filters import GraphFilters
 from app.services.graph_queries import get_scan_graph, get_scan_graph_dynamic
 from app.services.job_handlers import _enqueue_projection_for_terminal_scan
-from app.services.job_types import JOB_TYPE_SCAN_PROJECTION_BUILD
+from app.services.job_types import JOB_TYPE_SCAN_PROJECTION_BUILD, ExecutionOwnershipLost
 from app.services.parse_artifacts import HTML_PARSER_VERSION, get_or_create_artifact
 from app.services.render_runs import create_scan_render_run
 from app.services.rendered_capture import create_observation
@@ -65,6 +66,71 @@ from app.storage.content_store import LocalContentStore
 LEGACY_V3_PROJECTION_ALGORITHM = (
     "scan-projection-v1:html-parser-v3-resource-references:resource-classifier-v1:link-role-v1"
 )
+
+
+def test_projection_ownership_loss_keeps_prior_batch_and_rejects_next(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan = _fixture(db_session, "completed")
+    build = create_projection_build(db_session, scan.id)
+    db_session.commit()
+    monkeypatch.setattr(
+        scan_projections,
+        "_chunks",
+        lambda items, size=1: (items[index : index + 1] for index in range(0, len(items), 1)),
+    )
+    fence_calls = 0
+
+    def lose_before_second_page_batch(_db: Session) -> None:
+        nonlocal fence_calls
+        fence_calls += 1
+        if fence_calls == 4:
+            raise ExecutionOwnershipLost("forced batch ownership loss")
+
+    with pytest.raises(ExecutionOwnershipLost, match="forced batch"):
+        execute_projection_build(
+            db_session,
+            build.id,
+            fence_domain_mutation=lose_before_second_page_batch,
+        )
+
+    db_session.expire_all()
+    persisted = db_session.get(ScanProjectionBuild, build.id)
+    assert persisted is not None and persisted.status == "building"
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(ScanPageProjection)
+            .where(ScanPageProjection.projection_build_id == build.id)
+        )
+        == 1
+    )
+    state = db_session.get(ScanProjectionState, scan.id)
+    assert state is not None and state.current_build_id is None
+
+
+def test_projection_ownership_loss_rejects_final_activation(db_session) -> None:
+    scan = _fixture(db_session, "completed")
+    build = create_projection_build(db_session, scan.id)
+    db_session.commit()
+
+    def reject_ready_build(db: Session) -> None:
+        active = db.get(ScanProjectionBuild, build.id)
+        if active is not None and active.status == "ready":
+            raise ExecutionOwnershipLost("forced activation ownership loss")
+
+    with pytest.raises(ExecutionOwnershipLost, match="forced activation"):
+        execute_projection_build(
+            db_session,
+            build.id,
+            fence_domain_mutation=reject_ready_build,
+        )
+
+    db_session.expire_all()
+    persisted = db_session.get(ScanProjectionBuild, build.id)
+    state = db_session.get(ScanProjectionState, scan.id)
+    assert persisted is not None and persisted.status == "building"
+    assert state is not None and state.current_build_id is None
 
 
 def test_projection_build_activates_equivalent_page_resource_and_graph_reads(db_session) -> None:
