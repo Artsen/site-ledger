@@ -999,6 +999,9 @@ def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
         return False
     if job.status in TERMINAL_JOB_STATUSES:
         return False
+    from app.services.job_followups import ensure_required_followups
+
+    ensure_required_followups(db, job)
     ensure_transition(job.status, domain_status)
     job.status = domain_status
     job.finished_at = datetime.now(UTC)

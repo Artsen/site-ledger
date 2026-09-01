@@ -77,9 +77,10 @@ and stages domain and BackgroundJob terminal state in one transaction, so recove
 between ownership validation and domain mutation. Heartbeats remain mutable operational state and
 do not create permanent `JobEvent` rows.
 
-Cancellation is cooperative. A queued job can move directly to `cancelled`. A running job stores
-`cancellation_requested_at`; handlers check that flag between fetches or source parsing steps, save
-partial results, and finish as `cancelled`.
+Cancellation is cooperative. Direct cancellation stages a queued job and its native Scan, Source
+Refresh, Performance, Accessibility, Render, or Comparison build terminal state in one transaction.
+A running job stores `cancellation_requested_at`; handlers check that flag between fetches or source
+parsing steps, save partial results, and finish as `cancelled`.
 
 `scan_projection_build` starts only after Scan evidence reaches a terminal state. It is
 lease-guarded, cancellation-aware, batch-progress-reporting, and deduplicated per build. A failed or
@@ -144,8 +145,11 @@ cancelled, or interrupted rebuilds preserve the prior current result. See
 [Deterministic Scan comparisons](scan-comparisons.md).
 
 If a worker exits or the process is killed, expired running jobs are reconciled on worker startup.
-When the domain record already reached a terminal state, the job follows that terminal state.
-Otherwise the job and domain record move to `interrupted`.
+When the domain record already reached a terminal state, recovery first idempotently ensures required
+Scan projection/category work, ready-Projection comparison work, or a requested Category rerun, then
+reconciles the job in the same transaction. This recoverable boundary covers process death after the
+domain commit but before normal follow-up persistence. Otherwise the job and domain record move to
+`interrupted`.
 
 Increasing the configured lease duration is not a substitute for keeping the scheduler responsive.
 The configured graceful-shutdown duration is not currently an enforced deadline: WorkerService

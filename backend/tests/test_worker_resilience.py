@@ -722,12 +722,13 @@ async def test_category_rule_ownership_loss_rejects_stale_followup_evaluation(
         return active
 
     def blocked_followup(db, site_id, trigger_type, trigger_rule_id=None):
-        followup_started.set()
-        assert release_followup.wait(timeout=5)
+        if not followup_started.is_set():
+            followup_started.set()
+            assert release_followup.wait(timeout=5)
         return create_followup_evaluation(db, site_id, trigger_type, trigger_rule_id)
 
     monkeypatch.setattr("app.services.job_handlers.reconcile_site", completed_reconcile)
-    monkeypatch.setattr("app.services.job_handlers.create_followup_evaluation", blocked_followup)
+    monkeypatch.setattr("app.services.category_rules.create_followup_evaluation", blocked_followup)
     monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
     task = asyncio.create_task(
         run_claimed_job(
@@ -753,8 +754,8 @@ async def test_category_rule_ownership_loss_rejects_stale_followup_evaluation(
         persisted_run = db.get(PageCategoryRuleRun, run_id)
         assert persisted_job is not None and persisted_job.status == "completed"
         assert persisted_run is not None and persisted_run.status == "completed"
-        assert db.query(PageCategoryRuleRun).count() == 1
-        assert db.query(BackgroundJob).count() == 1
+        assert db.query(PageCategoryRuleRun).count() == 2
+        assert db.query(BackgroundJob).count() == 2
 
 
 @pytest.mark.asyncio
@@ -809,8 +810,9 @@ async def test_projection_ownership_loss_rejects_stale_comparison_enqueue(
     original_queue_waiting = scan_comparisons.queue_waiting_comparisons_for_scan
 
     def blocked_queue_waiting(db, scan_id):
-        enqueue_started.set()
-        assert release_enqueue.wait(timeout=5)
+        if not enqueue_started.is_set():
+            enqueue_started.set()
+            assert release_enqueue.wait(timeout=5)
         return original_queue_waiting(db, scan_id)
 
     monkeypatch.setattr(
@@ -837,10 +839,10 @@ async def test_projection_ownership_loss_rejects_stale_comparison_enqueue(
         persisted_build = db.get(ScanComparisonBuild, comparison_build_id)
         persisted_comparison = db.get(ScanComparison, comparison_id)
         assert persisted_job is not None and persisted_job.status == "completed"
-        assert persisted_build is not None and persisted_build.status == "waiting_for_projections"
+        assert persisted_build is not None and persisted_build.status == "queued"
         assert persisted_comparison is not None and persisted_comparison.current_build_id is None
         assert (
-            db.query(BackgroundJob).filter_by(job_type=JOB_TYPE_SCAN_COMPARISON_BUILD).count() == 0
+            db.query(BackgroundJob).filter_by(job_type=JOB_TYPE_SCAN_COMPARISON_BUILD).count() == 1
         )
 
 

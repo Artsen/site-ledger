@@ -503,6 +503,9 @@ Do not disable checks or weaken tests to force passing results.
   Scan Comparison, Category Rule, Structured Content, Performance, Accessibility, and Render
   persistence fence each job-owned transaction. Finding evaluation uses its equivalent guarded
   single-transaction ownership check. New durable job handlers must preserve one of these patterns.
+- Queued native cancellation must commit BackgroundJob and native terminal state together. Required
+  post-success work may use an idempotent recovery protocol when its domain terminal commit is an
+  earlier transaction; recovery must ensure that work before reconciling the BackgroundJob.
 - Do not compensate for event-loop starvation by merely increasing job lease timeout defaults.
 - Avoid unrelated refactors and dependency upgrades.
 - Do not create fake data, placeholder APIs, or controls that do nothing.

@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -18,7 +17,6 @@ from app.database import is_transient_database_lock
 from app.models import (
     AccessibilityRun,
     BackgroundJob,
-    PageCategoryRule,
     PageCategoryRuleRun,
     PerformanceRun,
     RenderRun,
@@ -30,8 +28,9 @@ from app.services.accessibility_collection import (
     execute_accessibility_run,
     mark_accessibility_run_failed,
 )
-from app.services.category_rules import create_followup_evaluation, reconcile_site
+from app.services.category_rules import reconcile_site
 from app.services.finding_evaluations import execute_evaluation, mark_evaluation_terminal
+from app.services.job_followups import ensure_required_followups, ensure_terminal_scan_followups
 from app.services.job_types import (
     JOB_STATUS_CANCELLED,
     JOB_STATUS_COMPLETED,
@@ -59,7 +58,6 @@ from app.services.scan_comparisons import (
 from app.services.scan_execution import ScanExecutionCoordinator
 from app.services.scan_projections import (
     ProjectionBuildCancelled,
-    create_projection_build,
     execute_projection_build,
     mark_projection_build_terminal,
 )
@@ -73,6 +71,10 @@ logger = logging.getLogger("site_ledger.jobs")
 
 
 class JobCancelled(RuntimeError):
+    pass
+
+
+class RequiredFollowupPersistenceError(RuntimeError):
     pass
 
 
@@ -223,8 +225,6 @@ class ScanJobHandler:
             )
             await coordinator.execute(scan)
             db.refresh(scan)
-            context.fence_domain_mutation(db)
-            _enqueue_projection_for_terminal_scan(db, scan)
             if scan.status == JOB_STATUS_CANCELLED:
                 return HandlerResult(status=JOB_STATUS_CANCELLED, result_json=_scan_result(scan))
             if scan.status == JOB_STATUS_COMPLETED_WITH_ERRORS:
@@ -312,15 +312,6 @@ class ScanProjectionJobHandler:
                     ),
                     fence_domain_mutation=context.fence_domain_mutation,
                 )
-                from app.services.scan_comparisons import (
-                    queue_adjacent_comparison_for_scan,
-                    queue_waiting_comparisons_for_scan,
-                )
-
-                queue_waiting_comparisons_for_scan(db, build.scan_id)
-                queue_adjacent_comparison_for_scan(db, build.scan_id)
-                context.fence_domain_mutation(db)
-                db.commit()
                 return HandlerResult(
                     result_json={
                         "scan_id": build.scan_id,
@@ -381,11 +372,9 @@ class CategoryRuleEvaluationJobHandler:
         run_id = int(job.payload_json.get("run_id", 0))
         if not run_id:
             raise ValueError("Category Rule job is missing run_id.")
-        return await asyncio.to_thread(self._execute_blocking, job.id, run_id, context)
+        return await asyncio.to_thread(self._execute_blocking, run_id, context)
 
-    def _execute_blocking(
-        self, job_id: int, run_id: int, context: JobExecutionContext
-    ) -> HandlerResult:
+    def _execute_blocking(self, run_id: int, context: JobExecutionContext) -> HandlerResult:
         try:
             with self.session_factory() as db:
                 run = reconcile_site(
@@ -424,19 +413,6 @@ class CategoryRuleEvaluationJobHandler:
                     context.fence_domain_mutation(db)
                     db.commit()
             raise
-        with self.session_factory() as db:
-            current = db.get(BackgroundJob, job_id)
-            if current and current.payload_json.get("rerun_requested"):
-                if current.website_property_id is None:
-                    raise ValueError("Category Rule job is missing site_id.")
-                create_followup_evaluation(
-                    db,
-                    current.website_property_id,
-                    str(current.payload_json.get("latest_trigger_type", "manual_recalculate")),
-                    current.payload_json.get("latest_trigger_rule_id"),
-                )
-                context.fence_domain_mutation(db)
-                db.commit()
         return HandlerResult(result_json=result)
 
 
@@ -742,6 +718,11 @@ async def run_claimed_job(
     except ExecutionOwnershipLost:
         context.mark_lease_lost()
         _log_lease_loss(context)
+    except RequiredFollowupPersistenceError:
+        logger.exception(
+            "required follow-up persistence failed; lease recovery will retry",
+            extra={"job_id": context.job_id},
+        )
     except Exception as exc:
         try:
             await asyncio.to_thread(
@@ -810,6 +791,15 @@ def _persist_handler_result(
     result: HandlerResult,
 ) -> None:
     with session_factory() as db:
+        current = db.get(BackgroundJob, claimed_job.job.id)
+        if current is None:
+            raise ValueError("Background job not found.")
+        try:
+            ensure_required_followups(db, current)
+        except Exception as exc:
+            raise RequiredFollowupPersistenceError(
+                "Required follow-up work could not be persisted."
+            ) from exc
         if result.status == JOB_STATUS_FAILED:
             result_json = result.result_json or {}
             background_jobs.fail_job(
@@ -1142,27 +1132,6 @@ def _mark_domain_failed(
 
 
 def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan, *, commit: bool = True) -> None:
-    if scan.status not in {
-        "completed",
-        "completed_with_errors",
-        "failed",
-        "cancelled",
-        "interrupted",
-    }:
-        return
-    build = create_projection_build(db, scan.id)
-    if build.status == "queued":
-        background_jobs.enqueue_scan_projection_job(db, build.id, scan)
-    if scan.website_property_id is not None and db.scalar(
-        select(PageCategoryRule.id)
-        .where(
-            PageCategoryRule.website_property_id == scan.website_property_id,
-            PageCategoryRule.is_active.is_(True),
-        )
-        .limit(1)
-    ):
-        from app.services.category_rules import queue_evaluation
-
-        queue_evaluation(db, scan.website_property_id, "scan_completed")
+    ensure_terminal_scan_followups(db, scan)
     if commit:
         db.commit()

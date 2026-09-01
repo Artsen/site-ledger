@@ -26,7 +26,6 @@ from app.services.background_jobs import (
     active_job_for_comparison,
     enqueue_scan_comparison_job,
     enqueue_scan_projection_job,
-    request_cancellation,
 )
 from app.services.comparison_queries import (
     get_comparison_link,
@@ -41,6 +40,7 @@ from app.services.comparison_queries import (
     page_change_history,
     page_source_diff,
 )
+from app.services.native_cancellation import request_native_cancellation
 from app.services.scan_comparisons import (
     SCAN_COMPARISON_VERSION,
     ComparisonEligibilityError,
@@ -142,7 +142,7 @@ def cancel_comparison(site_id: int, comparison_id: int, db: DbSession) -> ScanCo
     _comparison_or_404(db, site_id, comparison_id)
     job = active_job_for_comparison(db, comparison_id)
     if job:
-        request_cancellation(db, job, "Comparison cancellation requested.")
+        request_native_cancellation(db, job, "Comparison cancellation requested.")
     result = get_comparison_overview(db, site_id, comparison_id)
     assert result is not None
     return result
