@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import sqlite3
 import threading
 import time
@@ -32,6 +33,7 @@ from app.services.category_rules import create_followup_evaluation
 from app.services.job_handlers import (
     CategoryRuleEvaluationJobHandler,
     HandlerResult,
+    JobCancelled,
     JobExecutionContext,
     JobHandlerRegistry,
     ScanComparisonJobHandler,
@@ -46,6 +48,7 @@ from app.services.job_types import (
     JOB_TYPE_SCAN_COMPARISON_BUILD,
     JOB_TYPE_SCAN_PROJECTION_BUILD,
     JOB_TYPE_STRUCTURED_CONTENT_BUILD,
+    ExecutionOwnershipLost,
 )
 from app.services.scan_comparisons import create_comparison, create_comparison_build
 from app.services.scan_projections import create_projection_build, execute_projection_build
@@ -962,6 +965,77 @@ async def test_scan_terminalization_commits_domain_job_and_followups_together(tm
             JOB_TYPE_SCAN_PROJECTION_BUILD,
             JOB_TYPE_CATEGORY_RULE_EVALUATION,
         }
+
+
+@pytest.mark.asyncio
+async def test_unexpected_job_exception_is_logged_with_safe_identifiers(tmp_path, caplog) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    claimed, job_id, _scan_id = _claimed_scan_with_active_rule(session_factory)
+
+    class FailingHandler:
+        async def execute(self, _job, _context):
+            raise RuntimeError("unexpected worker failure")
+
+    target_logger = logging.getLogger("site_ledger.jobs")
+    original_disabled = target_logger.disabled
+    original_propagate = target_logger.propagate
+    target_logger.disabled = False
+    target_logger.propagate = False
+    target_logger.addHandler(caplog.handler)
+    try:
+        caplog.set_level("ERROR", logger="site_ledger.jobs")
+        await run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry({JOB_TYPE_SCAN: FailingHandler()}),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+        target_logger.disabled = original_disabled
+        target_logger.propagate = original_propagate
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "unexpected background job execution failure"
+    ]
+    assert len(records) == 1
+    assert records[0].job_id == job_id
+    assert records[0].job_type == JOB_TYPE_SCAN
+    assert records[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [JobCancelled("cancelled"), ExecutionOwnershipLost()])
+async def test_expected_job_stop_is_not_logged_as_unexpected(tmp_path, caplog, failure) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    claimed, _job_id, _scan_id = _claimed_scan_with_active_rule(session_factory)
+
+    class ExpectedStopHandler:
+        async def execute(self, _job, _context):
+            raise failure
+
+    target_logger = logging.getLogger("site_ledger.jobs")
+    original_disabled = target_logger.disabled
+    original_propagate = target_logger.propagate
+    target_logger.disabled = False
+    target_logger.propagate = False
+    target_logger.addHandler(caplog.handler)
+    try:
+        caplog.set_level("ERROR", logger="site_ledger.jobs")
+        await run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry({JOB_TYPE_SCAN: ExpectedStopHandler()}),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+        target_logger.disabled = original_disabled
+        target_logger.propagate = original_propagate
+
+    assert "unexpected background job execution failure" not in caplog.messages
 
 
 @pytest.mark.asyncio

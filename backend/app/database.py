@@ -75,6 +75,18 @@ def is_transient_database_lock(error: OperationalError) -> bool:
     return "database is locked" in message or "database table is locked" in message
 
 
+def materialize_outer_transaction(db: Session) -> None:
+    """Prevent a first SQLite SAVEPOINT from becoming an independently committed transaction."""
+    connection = db.connection()
+    if connection.dialect.name != "sqlite":
+        return
+    driver_connection = connection.connection.driver_connection
+    if driver_connection is None:
+        raise RuntimeError("SQLite driver connection is unavailable.")
+    if not driver_connection.in_transaction:
+        connection.exec_driver_sql("BEGIN")
+
+
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:

@@ -51,7 +51,12 @@ from app.schemas.site_intelligence import (
     SourcesIntelligenceRead,
     StructuredContentIntelligenceRead,
 )
-from app.services.collection_plans import Selection, active_page_candidates, build_selection
+from app.services.collection_plans import (
+    Selection,
+    accessibility_compatibility_filters,
+    active_page_candidates,
+    build_selection,
+)
 from app.services.inventory_lifecycle import summarize_current_inventory
 from app.services.rendered_queries import render_outcome_conditions
 from app.services.scan_comparisons import SCAN_COMPARISON_ALGORITHM, SCAN_COMPARISON_VERSION
@@ -581,7 +586,10 @@ def _accessibility_state(
 ) -> AccessibilityIntelligenceRead:
     run = db.scalar(
         select(AccessibilityRun)
-        .where(AccessibilityRun.website_property_id == site_id)
+        .where(
+            AccessibilityRun.website_property_id == site_id,
+            *accessibility_compatibility_filters(AccessibilityRun),
+        )
         .order_by(AccessibilityRun.created_at.desc(), AccessibilityRun.id.desc())
         .limit(1)
     )
@@ -610,6 +618,7 @@ def _accessibility_state(
         .where(
             AccessibilityObservation.website_property_id == site_id,
             AccessibilityObservation.web_resource_id.in_(_active_pages(site_id)),
+            *accessibility_compatibility_filters(AccessibilityObservation),
         )
         .subquery()
     )

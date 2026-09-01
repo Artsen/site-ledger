@@ -25,6 +25,9 @@ class ResolvedDestination:
     allow_private_networks: bool
 
 
+NAT64_WELL_KNOWN_NETWORK = ipaddress.ip_network("64:ff9b::/96")
+
+
 async def resolve_addresses(
     host: str, port: int, allow_private_networks: bool = False
 ) -> tuple[str, ...]:
@@ -38,12 +41,7 @@ async def resolve_addresses(
     if not addresses:
         raise DestinationResolutionError(f"Destination could not be resolved: {host}")
 
-    public = tuple(
-        address
-        for address in addresses
-        if ipaddress.ip_address(address).is_global
-        and not ipaddress.ip_address(address).is_multicast
-    )
+    public = tuple(address for address in addresses if _is_public_address(address))
     private = tuple(address for address in addresses if address not in public)
     if public and private and not allow_private_networks:
         raise UnsafeDestinationError(
@@ -52,6 +50,17 @@ async def resolve_addresses(
     if private and not allow_private_networks:
         raise UnsafeDestinationError(f"Destination IP is not globally routable: {private[0]}")
     return addresses
+
+
+def _is_public_address(address: str) -> bool:
+    parsed = ipaddress.ip_address(address)
+    embedded: ipaddress.IPv4Address | None = None
+    if isinstance(parsed, ipaddress.IPv6Address):
+        embedded = parsed.ipv4_mapped
+        if embedded is None and parsed in NAT64_WELL_KNOWN_NETWORK:
+            embedded = ipaddress.IPv4Address(int(parsed) & 0xFFFFFFFF)
+    candidate = embedded or parsed
+    return candidate.is_global and not candidate.is_multicast
 
 
 async def validate_public_destination(

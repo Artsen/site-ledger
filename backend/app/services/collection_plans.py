@@ -73,6 +73,28 @@ from app.services.render_collection_profile import (
 from app.services.render_runs import create_render_run
 from app.services.structured_content import latest_page_content_snapshot_subquery
 
+
+def accessibility_compatibility_filters(
+    model: Any, context: dict[str, Any] | None = None
+) -> tuple[Any, ...]:
+    identity = context or {
+        "axe_core_version": AXE_CORE_VERSION,
+        "detector_bundle_sha256": AXE_BUNDLE_SHA256,
+        "integration_version": ACCESSIBILITY_INTEGRATION_VERSION,
+        "normalization_version": ACCESSIBILITY_NORMALIZATION_VERSION,
+        "ruleset_profile": RULESET_PROFILE,
+        "ruleset_sha256": RULESET_SHA256,
+    }
+    return (
+        model.axe_core_version == identity["axe_core_version"],
+        model.detector_bundle_sha256 == identity["detector_bundle_sha256"],
+        model.integration_version == identity["integration_version"],
+        model.normalization_version == identity["normalization_version"],
+        model.ruleset_profile == identity["ruleset_profile"],
+        model.ruleset_sha256 == identity["ruleset_sha256"],
+    )
+
+
 COLLECTION_PLANNER_VERSION = "collection-planner-v1"
 STRUCTURED_CONTENT_BATCH_SIZE = 250
 RENDER_BATCH_SIZE = 1_000
@@ -259,13 +281,7 @@ def _accessibility_state(
             .where(
                 AccessibilityObservation.website_property_id == site_id,
                 AccessibilityObservation.profile == context["profile"],
-                AccessibilityObservation.axe_core_version == context["axe_core_version"],
-                AccessibilityObservation.detector_bundle_sha256
-                == context["detector_bundle_sha256"],
-                AccessibilityObservation.integration_version == context["integration_version"],
-                AccessibilityObservation.normalization_version == context["normalization_version"],
-                AccessibilityObservation.ruleset_profile == context["ruleset_profile"],
-                AccessibilityObservation.ruleset_sha256 == context["ruleset_sha256"],
+                *accessibility_compatibility_filters(AccessibilityObservation, context),
                 AccessibilityObservation.outcome.in_(("ready", "failed")),
             )
             .distinct()

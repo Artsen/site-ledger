@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
@@ -85,34 +86,42 @@ class SafeHttpFetcher:
         started = monotonic()
         request_headers = {"User-Agent": self.limits.user_agent}
         request_headers.update(_validated_request_headers(headers or {}))
-        if self.client is not None:
-            (
-                response,
-                content,
-                chain,
-                transferred,
-                body_state,
-                prefix_count,
-            ) = await self._get_with_validated_redirects(self.client, url, request_headers)
-        else:
-            async with httpx.AsyncClient(
-                follow_redirects=False,
-                max_redirects=self.limits.max_redirects,
-                timeout=self.limits.timeout_seconds,
-                transport=self.transport
-                or PinnedAsyncHTTPTransport(
-                    allow_private_networks=self.limits.allow_private_networks
-                ),
-                trust_env=False,
-            ) as client:
-                (
-                    response,
-                    content,
-                    chain,
-                    transferred,
-                    body_state,
-                    prefix_count,
-                ) = await self._get_with_validated_redirects(client, url, request_headers)
+        try:
+            async with asyncio.timeout(self.limits.timeout_seconds):
+                if self.client is not None:
+                    (
+                        response,
+                        content,
+                        chain,
+                        transferred,
+                        body_state,
+                        prefix_count,
+                    ) = await self._get_with_validated_redirects(self.client, url, request_headers)
+                else:
+                    async with httpx.AsyncClient(
+                        follow_redirects=False,
+                        max_redirects=self.limits.max_redirects,
+                        timeout=self.limits.timeout_seconds,
+                        transport=self.transport
+                        or PinnedAsyncHTTPTransport(
+                            allow_private_networks=self.limits.allow_private_networks
+                        ),
+                        trust_env=False,
+                    ) as client:
+                        (
+                            response,
+                            content,
+                            chain,
+                            transferred,
+                            body_state,
+                            prefix_count,
+                        ) = await self._get_with_validated_redirects(client, url, request_headers)
+        except TimeoutError as exc:
+            elapsed_ms = int((monotonic() - started) * 1000)
+            raise TotalRequestTimeoutError(
+                f"Total request deadline of {self.limits.timeout_seconds:g} seconds exceeded",
+                elapsed_ms=elapsed_ms,
+            ) from exc
         return SafeFetchResult(
             requested_url=url,
             final_url=str(response.url),
@@ -378,6 +387,12 @@ class ResponseTooLargeError(Exception):
     def __init__(self, message: str, redirect_chain: list[dict[str, Any]]):
         super().__init__(message)
         self.redirect_chain = redirect_chain
+
+
+class TotalRequestTimeoutError(httpx.TimeoutException):
+    def __init__(self, message: str, *, elapsed_ms: int):
+        super().__init__(message)
+        self.elapsed_ms = elapsed_ms
 
 
 def _validated_request_headers(headers: dict[str, str]) -> dict[str, str]:

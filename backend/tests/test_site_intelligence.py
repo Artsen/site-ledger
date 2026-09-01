@@ -2,6 +2,14 @@ from datetime import UTC, datetime
 
 from sqlalchemy import event, func, select
 
+from app.accessibility.engine import (
+    ACCESSIBILITY_INTEGRATION_VERSION,
+    ACCESSIBILITY_NORMALIZATION_VERSION,
+    AXE_BUNDLE_SHA256,
+    AXE_CORE_VERSION,
+    RULESET_PROFILE,
+    RULESET_SHA256,
+)
 from app.crawler.canonical_document import (
     STRUCTURED_CONTENT_CONFIG_VERSION,
     STRUCTURED_CONTENT_EXTRACTOR_VERSION,
@@ -110,13 +118,13 @@ def test_independent_clocks_and_active_page_universe_exclude_suppressed_history(
         configuration_json={},
         target_count=7,
         observation_count=7,
-        axe_core_version="4.12.1",
-        detector_bundle_sha256="a" * 64,
-        integration_version="accessibility-engine-v1",
-        normalization_version="accessibility-normalization-v1",
-        ruleset_profile="wcag22-aa-v1",
+        axe_core_version=AXE_CORE_VERSION,
+        detector_bundle_sha256=AXE_BUNDLE_SHA256,
+        integration_version=ACCESSIBILITY_INTEGRATION_VERSION,
+        normalization_version=ACCESSIBILITY_NORMALIZATION_VERSION,
+        ruleset_profile=RULESET_PROFILE,
         ruleset_rule_count=1,
-        ruleset_sha256="b" * 64,
+        ruleset_sha256=RULESET_SHA256,
         finished_at=thursday,
     )
     db_session.add_all([scan, render_run, performance_run, accessibility_run])
@@ -201,15 +209,53 @@ def test_independent_clocks_and_active_page_universe_exclude_suppressed_history(
                 profile="desktop",
                 outcome="ready",
                 observed_at=thursday,
-                axe_core_version="4.12.1",
-                detector_bundle_sha256="a" * 64,
-                integration_version="accessibility-engine-v1",
-                normalization_version="accessibility-normalization-v1",
-                ruleset_profile="wcag22-aa-v1",
-                ruleset_sha256="b" * 64,
+                axe_core_version=AXE_CORE_VERSION,
+                detector_bundle_sha256=AXE_BUNDLE_SHA256,
+                integration_version=ACCESSIBILITY_INTEGRATION_VERSION,
+                normalization_version=ACCESSIBILITY_NORMALIZATION_VERSION,
+                ruleset_profile=RULESET_PROFILE,
+                ruleset_sha256=RULESET_SHA256,
                 profile_json={},
             )
         )
+    incompatible_run = AccessibilityRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=1,
+        observation_count=1,
+        axe_core_version=AXE_CORE_VERSION,
+        detector_bundle_sha256="f" * 64,
+        integration_version=ACCESSIBILITY_INTEGRATION_VERSION,
+        normalization_version=ACCESSIBILITY_NORMALIZATION_VERSION,
+        ruleset_profile=RULESET_PROFILE,
+        ruleset_rule_count=1,
+        ruleset_sha256=RULESET_SHA256,
+        finished_at=datetime(2026, 8, 28, 5, tzinfo=UTC),
+    )
+    db_session.add(incompatible_run)
+    db_session.flush()
+    db_session.add(
+        AccessibilityObservation(
+            accessibility_run_id=incompatible_run.id,
+            website_property_id=site.id,
+            web_resource_id=resources[0].id,
+            requested_url=resources[0].normalized_url,
+            profile="desktop",
+            outcome="ready",
+            observed_at=datetime(2026, 8, 28, 5, tzinfo=UTC),
+            axe_core_version=AXE_CORE_VERSION,
+            detector_bundle_sha256="f" * 64,
+            integration_version=ACCESSIBILITY_INTEGRATION_VERSION,
+            normalization_version=ACCESSIBILITY_NORMALIZATION_VERSION,
+            ruleset_profile=RULESET_PROFILE,
+            ruleset_sha256=RULESET_SHA256,
+            violation_rule_count=99,
+            violation_node_count=99,
+            profile_json={},
+        )
+    )
     db_session.commit()
 
     result = get_site_intelligence(db_session, site.id)
@@ -243,6 +289,17 @@ def test_independent_clocks_and_active_page_universe_exclude_suppressed_history(
     assert result.render.clock.latest_observed_at == tuesday
     assert result.performance.clock.latest_observed_at == wednesday
     assert result.accessibility.clock.latest_observed_at == thursday
+    assert result.accessibility.violation_rules == 0
+    accessibility_coverage = {
+        item.context["profile"]: item
+        for item in result.collection_coverage
+        if item.evidence_domain == "accessibility"
+    }
+    assert accessibility_coverage["desktop"].covered == 5
+    assert accessibility_coverage["desktop"].missing == 0
+    assert accessibility_coverage["mobile"].covered == 0
+    assert accessibility_coverage["mobile"].missing == 5
+    assert db_session.scalar(select(func.count()).select_from(AccessibilityObservation)) == 8
     assert not hasattr(result, "site_as_of")
 
 

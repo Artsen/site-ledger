@@ -29,6 +29,7 @@ Site routes use `/sites/:siteId` as their stable root. The sidebar is generated 
 | --- | --- |
 | Overview | `/sites/:siteId` |
 | Scans | `/sites/:siteId/scans` |
+| Collection Plans | `/sites/:siteId/collection-plans` |
 | Pages | `/sites/:siteId/pages` |
 | Resources | `/sites/:siteId/resources` |
 | Sources | `/sites/:siteId/sources` |
@@ -39,9 +40,11 @@ Site routes use `/sites/:siteId` as their stable root. The sidebar is generated 
 
 | Area | Route |
 | --- | --- |
+| Findings | `/sites/:siteId/findings` |
 | Comparisons | `/sites/:siteId/comparisons` |
 | Performance | `/sites/:siteId/performance` |
 | Accessibility | `/sites/:siteId/accessibility` |
+| Rendered | `/sites/:siteId/rendered` |
 | Graph | `/sites/:siteId/graph` |
 
 ### Manage
@@ -54,6 +57,10 @@ Site routes use `/sites/:siteId` as their stable root. The sidebar is generated 
 | Site Settings | `/sites/:siteId/settings` |
 
 Only implemented product areas appear in navigation. Detail routes remain under their owning area, including persistent Pages, Resources, comparison evidence, AI Document Sources, and saved AI Document evidence.
+
+Overview is a read-only Site Intelligence composition. Its Accessibility coverage and clock include
+only evidence compatible with the current Collection Plan detector identity; newer incompatible
+historical evidence remains available in Accessibility history but does not masquerade as current.
 
 ## Active Routes
 

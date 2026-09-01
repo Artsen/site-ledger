@@ -17,6 +17,9 @@ The current application implements:
 
 - Saved Sites with reusable scope and open-ended group, platform, and ownership labels.
 - Scoped static HTML scans executed as durable background jobs.
+- Aggregate static-request deadlines spanning redirects and streamed response bodies.
+- Standalone durable Render Runs over frozen persistent Page targets, plus optional Scan-triggered
+  rendering.
 - Sitemap, robots-discovered sitemap, and manual URL Sources.
 - AI Document Sources with nested indexes, retained text evidence, and refresh history.
 - Current URL Inventory with source and scan-seed provenance.
@@ -33,8 +36,11 @@ The current application implements:
 - Inbound and outgoing link occurrence provenance.
 - Scan-specific 2D and 3D topology graphs.
 - Versioned prepared results for immutable terminal Scans, with raw evidence fallback and rebuilds.
+- Deterministic same-Site Scan Comparison and Page Change History.
 - Immutable PageSpeed lab and CrUX field observations collected independently of Scans.
 - Immutable automated Accessibility observations with pinned detector and browser provenance.
+- Read-only Site Intelligence with independent evidence clocks and explicit coverage denominators.
+- Current-evidence Collection Plans that batch existing native collectors without becoming evidence.
 - Scan, source, Site, and Activity lifecycle management.
 - Persistent deterministic Findings with evidence-linked lifecycle and acknowledgement workflow.
 
@@ -47,8 +53,9 @@ internal model name.
 
 ### Page
 
-A successful HTML representation of a persistent normalized URL identity represented by
-WebResource. A Page is not tied to one scan.
+A Site-scoped persistent web Page identity that can accumulate successful and failed observations
+over time. `WebResource` owns the normalized URL identity and `SitePage` owns mutable Site workspace
+membership; a Page is not tied to one Scan or contingent on its latest fetch succeeding.
 
 ### Resource
 
@@ -125,6 +132,10 @@ Evidence is a first-class product concern:
 
 Site Ledger should continue to distinguish recorded facts from later conclusions.
 
+Content-addressed resource, HTML blob, and parse-artifact identities are concurrency contracts.
+Concurrent producers reconcile to one committed row without rolling back unrelated work, while
+local HTML files are deterministically compressed and atomically published.
+
 ## Local-First Operation
 
 The application defaults to SQLite and local content storage. API, worker, frontend, database, and
@@ -187,7 +198,8 @@ and workflow. Interpretation must remain traceable to the observations that supp
 - Resource-body storage and analysis, broad Finding detector packs, analytics, semantic embeddings,
   and AI summaries are not implemented. HTTP-error Findings and Automated Accessibility and
   Performance evidence collection are current.
-- Authenticated and private-network crawling are not supported.
+- Authenticated crawling is not supported. Private-network crawling is blocked by default and is
+  available only through the explicit trusted `allow_private_networks=true` scope setting.
 - Robots.txt enforcement and within-crawl concurrency remain deferred.
 - Graph views are bounded and scan-specific, not persistent site-wide knowledge graphs.
 - SQLite and local files are the current storage implementations.

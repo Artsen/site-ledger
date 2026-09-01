@@ -157,6 +157,9 @@ behavior. Keep storage behind the existing content-store abstraction.
   preview, reconciliation, and evaluation history.
 - crawler.link_roles owns pure deterministic link-role classification.
 - services.cache_policy and services.parse_artifacts own conservative reuse.
+- Content-addressed and globally unique get-or-create paths must isolate insert races in nested
+  savepoints, reload the committed winner, and never roll back unrelated caller work. Local blob
+  files must be deterministically encoded, atomically published, and leave no temporary files.
 - services.graph_config owns graph capabilities and limits.
 - services.graph_queries owns scan-specific topology queries and aggregation.
 - app.api.routes exposes typed APIs.
@@ -509,6 +512,12 @@ Do not disable checks or weaken tests to force passing results.
 - Do not compensate for event-loop starvation by merely increasing job lease timeout defaults.
 - Avoid unrelated refactors and dependency upgrades.
 - Do not create fake data, placeholder APIs, or controls that do nothing.
+- Configuration surfaces must distinguish enforced controls from compatibility-only or inactive
+  settings. New work must reject a requested safety behavior when the runtime cannot enforce it.
+- Static request timeout means one aggregate wall-clock budget across redirects and body streaming,
+  not a fresh timeout for each network operation.
+- Never silently truncate parser anchors or resource-reference evidence. A future fanout bound
+  requires explicit persisted truncation state and counts before it may drop occurrences.
 - Preserve database and local-data compatibility.
 - Keep `WebResource` as normalized URL identity; representation kind belongs to Scan evidence.
 - Do not treat successful non-HTML responses as crawl failures or store their response bodies.

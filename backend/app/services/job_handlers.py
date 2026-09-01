@@ -724,6 +724,13 @@ async def run_claimed_job(
             extra={"job_id": context.job_id},
         )
     except Exception as exc:
+        logger.exception(
+            "unexpected background job execution failure",
+            extra={
+                "job_id": context.job_id,
+                "job_type": claimed_job.job.job_type,
+            },
+        )
         try:
             await asyncio.to_thread(
                 _terminalize_failed_job,
