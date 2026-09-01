@@ -267,6 +267,7 @@ def execute_projection_build(
     *,
     should_cancel: Callable[[], bool] | None = None,
     progress: Callable[[str, int, int], None] | None = None,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> ScanProjectionBuild:
     build = db.get(ScanProjectionBuild, build_id)
     if build is None:
@@ -278,12 +279,22 @@ def execute_projection_build(
     build.status = "building"
     build.started_at = datetime.now(UTC)
     build.error_type = build.error_message = None
+    _fence(db, fence_domain_mutation)
     db.commit()
     try:
-        _clear_staged_rows(db, build.id)
+        _clear_staged_rows(db, build.id, fence_domain_mutation=fence_domain_mutation)
         pages = _page_rows(db, scan)
         _check_cancelled(should_cancel)
-        _insert_batches(db, ScanPageProjection, pages, build.id, progress, "pages", should_cancel)
+        _insert_batches(
+            db,
+            ScanPageProjection,
+            pages,
+            build.id,
+            progress,
+            "pages",
+            should_cancel,
+            fence_domain_mutation,
+        )
         resources, resource_summary = _resource_rows(db, scan.id)
         _check_cancelled(should_cancel)
         _insert_batches(
@@ -294,10 +305,20 @@ def execute_projection_build(
             progress,
             "resources",
             should_cancel,
+            fence_domain_mutation,
         )
         links = _link_rows(db, scan.id, pages)
         _check_cancelled(should_cancel)
-        _insert_batches(db, ScanLinkProjection, links, build.id, progress, "links", should_cancel)
+        _insert_batches(
+            db,
+            ScanLinkProjection,
+            links,
+            build.id,
+            progress,
+            "links",
+            should_cancel,
+            fence_domain_mutation,
+        )
         summary = _summary_row(db, scan, build.id, pages, resources, links, resource_summary)
         db.execute(insert(ScanSummaryProjection), [summary])
         db.flush()
@@ -328,17 +349,32 @@ def execute_projection_build(
             prior = db.get(ScanProjectionBuild, prior_id)
             if prior is not None:
                 prior.status = "superseded"
+        _fence(db, fence_domain_mutation)
         db.commit()
         db.refresh(build)
         return build
     except ProjectionBuildCancelled:
-        _finish_failed_build(db, build, "cancelled", "cancelled", "Build cancelled by user.")
+        _finish_failed_build(
+            db,
+            build,
+            "cancelled",
+            "cancelled",
+            "Build cancelled by user.",
+            fence_domain_mutation=fence_domain_mutation,
+        )
         raise
     except ExecutionOwnershipLost:
         db.rollback()
         raise
     except Exception as exc:
-        _finish_failed_build(db, build, "failed", type(exc).__name__, str(exc))
+        _finish_failed_build(
+            db,
+            build,
+            "failed",
+            type(exc).__name__,
+            str(exc),
+            fence_domain_mutation=fence_domain_mutation,
+        )
         raise
 
 
@@ -797,6 +833,7 @@ def _insert_batches(
     progress: Callable[[str, int, int], None] | None,
     phase: str,
     should_cancel: Callable[[], bool] | None,
+    fence_domain_mutation: Callable[[Session], None] | None,
 ) -> None:
     total = len(rows)
     for batch_number, batch in enumerate(_chunks(rows), 1):
@@ -804,12 +841,19 @@ def _insert_batches(
         for row in batch:
             row["projection_build_id"] = build_id
         db.execute(insert(model), batch)
+        _fence(db, fence_domain_mutation)
         db.commit()
         if progress:
             progress(phase, min(batch_number * PROJECTION_BATCH_SIZE, total), total)
 
 
-def _clear_staged_rows(db: Session, build_id: int, *, commit: bool = True) -> None:
+def _clear_staged_rows(
+    db: Session,
+    build_id: int,
+    *,
+    commit: bool = True,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
+) -> None:
     for model in (
         ScanSummaryProjection,
         ScanLinkProjection,
@@ -818,6 +862,7 @@ def _clear_staged_rows(db: Session, build_id: int, *, commit: bool = True) -> No
     ):
         db.execute(delete(model).where(model.projection_build_id == build_id))
     if commit:
+        _fence(db, fence_domain_mutation)
         db.commit()
 
 
@@ -829,11 +874,17 @@ def _finish_failed_build(
     error_message: str,
     *,
     commit: bool = True,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> None:
     if commit:
         db.rollback()
     build = db.get(ScanProjectionBuild, build.id) or build
-    _clear_staged_rows(db, build.id, commit=commit)
+    _clear_staged_rows(
+        db,
+        build.id,
+        commit=commit,
+        fence_domain_mutation=fence_domain_mutation,
+    )
     build.status = status
     build.active_key = None
     build.failed_at = datetime.now(UTC)
@@ -841,7 +892,13 @@ def _finish_failed_build(
     build.error_type = error_type
     build.error_message = error_message[:2000]
     if commit:
+        _fence(db, fence_domain_mutation)
         db.commit()
+
+
+def _fence(db: Session, callback: Callable[[Session], None] | None) -> None:
+    if callback is not None:
+        callback(db)
 
 
 def _check_cancelled(callback: Callable[[], bool] | None) -> None:

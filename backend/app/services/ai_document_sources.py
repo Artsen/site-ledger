@@ -330,6 +330,7 @@ async def execute_ai_document_refresh(
     progress_callback: Callable[[SourceRefresh], None] | None = None,
     store: LocalAiDocumentStore | None = None,
     performance_metrics: dict[str, float | int] | None = None,
+    fence_domain_mutation: Callable[[Session], None] | None = None,
 ) -> AiDocumentRefresh:
     refresh_started = perf_counter()
     source = source_refresh.url_source
@@ -355,7 +356,11 @@ async def execute_ai_document_refresh(
         root_candidate_count=1,
     )
     db.add(evidence)
+    if fence_domain_mutation is not None:
+        fence_domain_mutation(db)
     db.flush()
+    if fence_domain_mutation is not None:
+        db.commit()
     queue = deque(
         [_QueuedDocument(source.normalized_source_url, 0, "root_index", "llms-txt", frozenset())]
     )

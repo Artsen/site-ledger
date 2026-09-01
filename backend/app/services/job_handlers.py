@@ -223,6 +223,7 @@ class ScanJobHandler:
             )
             await coordinator.execute(scan)
             db.refresh(scan)
+            context.fence_domain_mutation(db)
             _enqueue_projection_for_terminal_scan(db, scan)
             if scan.status == JOB_STATUS_CANCELLED:
                 return HandlerResult(status=JOB_STATUS_CANCELLED, result_json=_scan_result(scan))
@@ -263,6 +264,7 @@ class SourceRefreshJobHandler:
                     },
                 ),
                 ai_document_store=LocalAiDocumentStore(get_settings().ai_document_storage_root),
+                fence_domain_mutation=context.fence_domain_mutation,
             )
             if refresh is None:
                 raise ValueError("Source refresh not found.")
@@ -308,6 +310,7 @@ class ScanProjectionJobHandler:
                         total=total,
                         unit="rows",
                     ),
+                    fence_domain_mutation=context.fence_domain_mutation,
                 )
                 from app.services.scan_comparisons import (
                     queue_adjacent_comparison_for_scan,
@@ -316,6 +319,7 @@ class ScanProjectionJobHandler:
 
                 queue_waiting_comparisons_for_scan(db, build.scan_id)
                 queue_adjacent_comparison_for_scan(db, build.scan_id)
+                context.fence_domain_mutation(db)
                 db.commit()
                 return HandlerResult(
                     result_json={
@@ -355,6 +359,7 @@ class ScanComparisonJobHandler:
                         total=total,
                         unit="rows",
                     ),
+                    fence_domain_mutation=context.fence_domain_mutation,
                 )
                 return HandlerResult(
                     result_json={
@@ -394,6 +399,7 @@ class CategoryRuleEvaluationJobHandler:
                         total=total,
                         unit="Pages",
                     ),
+                    fence_domain_mutation=context.fence_domain_mutation,
                 )
                 result = {
                     "run_id": run.id,
@@ -415,6 +421,7 @@ class CategoryRuleEvaluationJobHandler:
                     failed_run.finished_at = datetime.now(UTC)
                     failed_run.error_type = type(exc).__name__
                     failed_run.error_message = str(exc)
+                    context.fence_domain_mutation(db)
                     db.commit()
             raise
         with self.session_factory() as db:
@@ -428,6 +435,7 @@ class CategoryRuleEvaluationJobHandler:
                     str(current.payload_json.get("latest_trigger_type", "manual_recalculate")),
                     current.payload_json.get("latest_trigger_rule_id"),
                 )
+                context.fence_domain_mutation(db)
                 db.commit()
         return HandlerResult(result_json=result)
 

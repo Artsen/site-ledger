@@ -18,6 +18,7 @@ from app.models import (
     PageCategoryRule,
     PageCategoryRuleRun,
     Scan,
+    ScanComparison,
     ScanComparisonBuild,
     ScanProjectionBuild,
     ScanProjectionState,
@@ -26,7 +27,8 @@ from app.models import (
 )
 from app.schemas.scans import ScopeConfigPayload
 from app.schemas.sites import WebsitePropertyCreate
-from app.services import background_jobs
+from app.services import background_jobs, scan_comparisons
+from app.services.category_rules import create_followup_evaluation
 from app.services.job_handlers import (
     CategoryRuleEvaluationJobHandler,
     HandlerResult,
@@ -46,7 +48,7 @@ from app.services.job_types import (
     JOB_TYPE_STRUCTURED_CONTENT_BUILD,
 )
 from app.services.scan_comparisons import create_comparison, create_comparison_build
-from app.services.scan_projections import create_projection_build
+from app.services.scan_projections import create_projection_build, execute_projection_build
 from app.services.site_management import create_site
 from app.storage.content_store import LocalContentStore
 from app.worker import WorkerService
@@ -441,11 +443,12 @@ async def test_recovery_prevents_stale_projection_activation(tmp_path, monkeypat
         active_build = db.get(ScanProjectionBuild, active_build_id)
         assert active_build is not None
         active_build.status = "building"
+        kwargs["fence_domain_mutation"](db)
         db.commit()
         started.set()
         assert resume.wait(timeout=5)
-        kwargs["progress"]("pages", 1, 1)
         active_build.status = "ready"
+        kwargs["fence_domain_mutation"](db)
         db.commit()
         return active_build
 
@@ -522,11 +525,12 @@ async def test_recovery_prevents_stale_comparison_readiness(tmp_path, monkeypatc
         active_build = db.get(ScanComparisonBuild, active_build_id)
         assert active_build is not None
         active_build.status = "building"
+        kwargs["fence_domain_mutation"](db)
         db.commit()
         started.set()
         assert resume.wait(timeout=5)
-        kwargs["progress"]("pages", 1, 1)
         active_build.status = "ready"
+        kwargs["fence_domain_mutation"](db)
         db.commit()
         return active_build
 
@@ -606,11 +610,12 @@ async def test_lease_loss_stops_subsequent_blocking_domain_work(
             assert active_run is not None
             active_run.status = "running"
             active_run.match_count = 1
+            kwargs["fence_domain_mutation"](db)
             db.commit()
             started.set()
             assert resume.wait(timeout=5)
-            kwargs["progress"](1, 2)
             active_run.match_count = 2
+            kwargs["fence_domain_mutation"](db)
             db.commit()
             return active_run
 
@@ -664,6 +669,179 @@ async def test_lease_loss_stops_subsequent_blocking_domain_work(
         else:
             persisted_site = db.get(WebsiteProperty, site_id)
             assert persisted_site is not None and persisted_site.description == "first batch"
+
+
+@pytest.mark.asyncio
+async def test_category_rule_ownership_loss_rejects_stale_followup_evaluation(
+    tmp_path, monkeypatch
+) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    with session_factory() as db:
+        site = create_site(
+            db,
+            WebsitePropertyCreate(
+                name="Category followup race",
+                base_url="https://category-followup.example/",
+                scope_config=ScopeConfigPayload(),
+            ),
+        )
+        run = PageCategoryRuleRun(
+            website_property_id=site.id,
+            trigger_type="manual_recalculate",
+            status="queued",
+            configuration_json={},
+            evaluator_version="test-v1",
+        )
+        db.add(run)
+        db.flush()
+        job = background_jobs.enqueue_category_rule_job(db, run.id, site.id)
+        payload = dict(job.payload_json)
+        payload.update(
+            rerun_requested=True,
+            latest_trigger_type="rule_updated",
+            latest_trigger_rule_id=None,
+        )
+        job.payload_json = payload
+        db.commit()
+        claimed = background_jobs.claim_next_job(
+            db, worker_id="category-followup-race", lease_seconds=30
+        )
+        assert claimed is not None
+        job_id, run_id = job.id, run.id
+
+    followup_started = threading.Event()
+    release_followup = threading.Event()
+
+    def completed_reconcile(db, active_run_id, **kwargs):
+        active = db.get(PageCategoryRuleRun, active_run_id)
+        assert active is not None
+        active.status = "completed"
+        active.finished_at = datetime.now(UTC)
+        kwargs["fence_domain_mutation"](db)
+        db.commit()
+        return active
+
+    def blocked_followup(db, site_id, trigger_type, trigger_rule_id=None):
+        followup_started.set()
+        assert release_followup.wait(timeout=5)
+        return create_followup_evaluation(db, site_id, trigger_type, trigger_rule_id)
+
+    monkeypatch.setattr("app.services.job_handlers.reconcile_site", completed_reconcile)
+    monkeypatch.setattr("app.services.job_handlers.create_followup_evaluation", blocked_followup)
+    monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
+    task = asyncio.create_task(
+        run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry(
+                {
+                    JOB_TYPE_CATEGORY_RULE_EVALUATION: CategoryRuleEvaluationJobHandler(
+                        session_factory
+                    )
+                }
+            ),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    )
+    assert await asyncio.to_thread(followup_started.wait, 5)
+    assert _force_recovery(session_factory, job_id) == 1
+    release_followup.set()
+    await task
+
+    with session_factory() as db:
+        persisted_job = db.get(BackgroundJob, job_id)
+        persisted_run = db.get(PageCategoryRuleRun, run_id)
+        assert persisted_job is not None and persisted_job.status == "completed"
+        assert persisted_run is not None and persisted_run.status == "completed"
+        assert db.query(PageCategoryRuleRun).count() == 1
+        assert db.query(BackgroundJob).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_projection_ownership_loss_rejects_stale_comparison_enqueue(
+    tmp_path, monkeypatch
+) -> None:
+    session_factory = _initialized_session_factory(tmp_path)
+    with session_factory() as db:
+        site = create_site(
+            db,
+            WebsitePropertyCreate(
+                name="Projection followup race",
+                base_url="https://projection-followup.example/",
+                scope_config=ScopeConfigPayload(),
+            ),
+        )
+        baseline = Scan(
+            website_property_id=site.id,
+            starting_url=site.base_url,
+            status="completed",
+            scope_config=ScopeConfigPayload().model_dump(),
+        )
+        target = Scan(
+            website_property_id=site.id,
+            starting_url=site.base_url,
+            status="completed",
+            scope_config=ScopeConfigPayload().model_dump(),
+        )
+        db.add_all([baseline, target])
+        db.flush()
+        baseline_build = create_projection_build(db, baseline.id)
+        db.commit()
+        execute_projection_build(db, baseline_build.id)
+        target_build = create_projection_build(db, target.id)
+        comparison = create_comparison(db, site.id, baseline.id, target.id)
+        comparison_build = create_comparison_build(db, comparison.id)
+        assert comparison_build.status == "waiting_for_projections"
+        job = background_jobs.enqueue_scan_projection_job(db, target_build.id, target)
+        db.commit()
+        claimed = background_jobs.claim_next_job(
+            db, worker_id="projection-followup-race", lease_seconds=30
+        )
+        assert claimed is not None
+        job_id, comparison_id, comparison_build_id = (
+            job.id,
+            comparison.id,
+            comparison_build.id,
+        )
+
+    enqueue_started = threading.Event()
+    release_enqueue = threading.Event()
+    original_queue_waiting = scan_comparisons.queue_waiting_comparisons_for_scan
+
+    def blocked_queue_waiting(db, scan_id):
+        enqueue_started.set()
+        assert release_enqueue.wait(timeout=5)
+        return original_queue_waiting(db, scan_id)
+
+    monkeypatch.setattr(
+        scan_comparisons, "queue_waiting_comparisons_for_scan", blocked_queue_waiting
+    )
+    monkeypatch.setattr(background_jobs, "heartbeat_job", lambda *_args, **_kwargs: None)
+    task = asyncio.create_task(
+        run_claimed_job(
+            session_factory=session_factory,
+            registry=JobHandlerRegistry(
+                {JOB_TYPE_SCAN_PROJECTION_BUILD: ScanProjectionJobHandler(session_factory)}
+            ),
+            claimed_job=claimed,
+            lease_seconds=30,
+        )
+    )
+    assert await asyncio.to_thread(enqueue_started.wait, 5)
+    assert _force_recovery(session_factory, job_id) == 1
+    release_enqueue.set()
+    await task
+
+    with session_factory() as db:
+        persisted_job = db.get(BackgroundJob, job_id)
+        persisted_build = db.get(ScanComparisonBuild, comparison_build_id)
+        persisted_comparison = db.get(ScanComparison, comparison_id)
+        assert persisted_job is not None and persisted_job.status == "completed"
+        assert persisted_build is not None and persisted_build.status == "waiting_for_projections"
+        assert persisted_comparison is not None and persisted_comparison.current_build_id is None
+        assert (
+            db.query(BackgroundJob).filter_by(job_type=JOB_TYPE_SCAN_COMPARISON_BUILD).count() == 0
+        )
 
 
 @pytest.mark.asyncio

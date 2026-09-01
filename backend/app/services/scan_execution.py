@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -51,6 +52,9 @@ class ScanExecutionCoordinator:
         self.content_store = content_store
         self.artifact_store = artifact_store
         self.context = context
+        self.fence_domain_mutation: Callable[[Session], None] | None = getattr(
+            context, "fence_domain_mutation", None
+        )
 
     async def execute(self, scan: Scan) -> ScanExecutionSummary:
         try:
@@ -62,7 +66,7 @@ class ScanExecutionCoordinator:
         self.context.progress(phase="preparing", current_operation="Preparing scan")
         scan.status = "running"
         scan.started_at = datetime.now(UTC)
-        self.db.commit()
+        self._commit()
         crawler = StaticPageCrawler(
             self.db,
             self.content_store,
@@ -88,6 +92,7 @@ class ScanExecutionCoordinator:
                 total=total,
                 unit="pages",
             ),
+            fence_domain_mutation=self.fence_domain_mutation,
         )
         static = await crawler.collect(scan)
         if static.fatal_error:
@@ -123,7 +128,7 @@ class ScanExecutionCoordinator:
         self.context.progress(phase="finalizing", current_operation="Finalizing scan")
         scan.stop_reason = reason
         scan.finished_at = datetime.now(UTC)
-        self.db.commit()
+        self._commit()
         return ScanExecutionSummary(scan.status, static_errors, rendered_failures)
 
     def _fail_invalid_config(self, scan: Scan, exc: ValueError) -> ScanExecutionSummary:
@@ -131,5 +136,10 @@ class ScanExecutionCoordinator:
         scan.stop_reason = "invalid_scope_config"
         scan.fatal_error_message = f"Invalid Scan configuration: {exc}"
         scan.finished_at = datetime.now(UTC)
-        self.db.commit()
+        self._commit()
         return ScanExecutionSummary(scan.status, False, 0)
+
+    def _commit(self) -> None:
+        if self.fence_domain_mutation is not None:
+            self.fence_domain_mutation(self.db)
+        self.db.commit()

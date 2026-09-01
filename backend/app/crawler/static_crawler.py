@@ -101,6 +101,7 @@ class StaticPageCrawler:
         should_cancel: Callable[[], bool] | None = None,
         progress_callback: Callable[[Scan], None] | None = None,
         retry_progress_callback: Callable[[int, int], None] | None = None,
+        fence_domain_mutation: Callable[[Session], None] | None = None,
     ):
         self.db = db
         self.store = store
@@ -108,6 +109,7 @@ class StaticPageCrawler:
         self.should_cancel = should_cancel
         self.progress_callback = progress_callback
         self.retry_progress_callback = retry_progress_callback
+        self.fence_domain_mutation = fence_domain_mutation
         self._resource_cache: dict[str, WebResource] = {}
         self._discovered_resource_ids: set[int] = set()
         self._resource_reference_occurrence_count = 0
@@ -133,7 +135,7 @@ class StaticPageCrawler:
                 scan.status = "failed"
                 scan.fatal_error_message = message
                 scan.finished_at = datetime.now(UTC)
-            self.db.commit()
+            self._commit()
             return StaticCrawlResult(False, False, "invalid_starting_url", message)
 
         if finalize:
@@ -145,7 +147,7 @@ class StaticPageCrawler:
         fetched: set[str] = set()
         had_errors = False
         self._update_counts(scan, len(seen), len(fetched), len(queue))
-        self.db.commit()
+        self._commit()
 
         connection_limits = httpx.Limits(
             max_connections=config.concurrent_requests_per_host,
@@ -177,7 +179,7 @@ class StaticPageCrawler:
                 item = retry_work.item if retry_work else queue.popleft()
                 attempt_number = retry_work.attempt_number if retry_work else 1
                 scan.queued_count = len(queue) + len(retry_queue)
-                self.db.commit()
+                self._commit()
                 if item.depth > config.max_depth:
                     scan.skipped_count += 1
                     continue
@@ -261,7 +263,7 @@ class StaticPageCrawler:
                         )
 
                 self._update_counts(scan, len(seen), len(fetched), len(queue) + len(retry_queue))
-                self.db.commit()
+                self._commit()
                 if retry_work and self.retry_progress_callback:
                     self.retry_progress_callback(
                         scan.static_retry_request_count,
@@ -288,7 +290,7 @@ class StaticPageCrawler:
                 scan.status = "completed_with_errors" if had_errors else "completed"
             scan.finished_at = datetime.now(UTC)
         scan.queued_count = len(queue) + len(retry_queue)
-        self.db.commit()
+        self._commit()
         self._progress(scan)
         return StaticCrawlResult(had_errors, cancelled, stop_reason)
 
@@ -859,6 +861,11 @@ class StaticPageCrawler:
 
     def _cancel_requested(self) -> bool:
         return bool(self.should_cancel and self.should_cancel())
+
+    def _commit(self) -> None:
+        if self.fence_domain_mutation is not None:
+            self.fence_domain_mutation(self.db)
+        self.db.commit()
 
     def _progress(self, scan: Scan) -> None:
         if self.progress_callback:

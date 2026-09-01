@@ -90,6 +90,13 @@ the current ready projection. See [Scan projections](scan-projections.md).
 queued triggers coalesce and changes during an active lease request one follow-up run. Evaluation
 and Scan projection jobs are independent and report progress in bounded Page batches.
 
+Transactional ownership fencing covers Scan crawl commits and follow-up enqueue, Source Refresh
+including recursive sitemap and AI Document writes, Projection and Comparison batches and
+activation, Category Rule batches and reruns, Structured Content, Performance, Accessibility, and
+Render collection. Finding evaluation retains its equivalent guarded single transaction. Optional
+fence callbacks keep these domain services usable by non-worker rebuild and test callers; every
+BackgroundJob handler supplies the fence for job-owned execution.
+
 `structured_content_build` is a Site-scoped historical preparation job. It selects retained HTML
 ContentBlobs missing the current structured identity, commits bounded per-blob results, reports
 progress, cooperates with cancellation, and continues after individual blob failures. See
