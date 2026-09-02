@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from app.crawler.url_normalizer import (
@@ -12,7 +12,7 @@ from app.crawler.url_normalizer import (
     UrlNormalizationError,
     normalize_url_for_version,
 )
-from app.models import ResourceSnapshot, Scan
+from app.models import ResourceOccurrence, ResourceSnapshot, Scan
 
 FindingOutcome = Literal["detected", "clear", "unknown"]
 FindingSeverity = Literal["medium", "high"]
@@ -44,6 +44,13 @@ PAGE_MULTIPLE_CANONICALS_DETECTOR_IDENTITY = "page-multiple-canonicals-v1"
 PAGE_NON_HTML_REPRESENTATION_TYPE = "page_non_html_representation"
 PAGE_NON_HTML_REPRESENTATION_KEY_VERSION = "page-non-html-representation-key-v1"
 PAGE_NON_HTML_REPRESENTATION_DETECTOR_IDENTITY = "page-non-html-representation-v1"
+PAGE_BROKEN_INTERNAL_LINKS_TYPE = "page_broken_internal_links"
+PAGE_BROKEN_INTERNAL_LINKS_KEY_VERSION = "page-broken-internal-links-key-v1"
+PAGE_BROKEN_INTERNAL_LINKS_DETECTOR_IDENTITY = "page-broken-internal-links-v1"
+PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE = "page_internal_links_to_redirects"
+PAGE_INTERNAL_LINKS_TO_REDIRECTS_KEY_VERSION = "page-internal-links-to-redirects-key-v1"
+PAGE_INTERNAL_LINKS_TO_REDIRECTS_DETECTOR_IDENTITY = "page-internal-links-to-redirects-v1"
+TOPOLOGY_EVIDENCE_SAMPLE_LIMIT = 20
 
 FINDING_TYPE_LABELS = {
     PAGE_HTTP_ERROR_TYPE: "Page HTTP error",
@@ -55,6 +62,8 @@ FINDING_TYPE_LABELS = {
     PAGE_INVALID_CANONICAL_TYPE: "Invalid canonical URL",
     PAGE_MULTIPLE_CANONICALS_TYPE: "Multiple canonical declarations",
     PAGE_NON_HTML_REPRESENTATION_TYPE: "Page returns a non-HTML representation",
+    PAGE_BROKEN_INTERNAL_LINKS_TYPE: "Broken internal links",
+    PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE: "Internal links to redirects",
 }
 
 STATIC_FETCH_FAILURE_ERROR_TYPES = frozenset(
@@ -80,7 +89,8 @@ STATIC_FETCH_FAILURE_ERROR_TYPES = frozenset(
 @dataclass(frozen=True)
 class DetectorEvidence:
     role: str
-    snapshot: ResourceSnapshot
+    snapshot: ResourceSnapshot | None = None
+    occurrence: ResourceOccurrence | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +107,9 @@ class DetectorContext:
     scan: Scan
     snapshots_by_resource_id: Mapping[int, ResourceSnapshot]
     snapshots_by_normalized_url: Mapping[str, ResourceSnapshot]
+    occurrences_by_source_resource_id: Mapping[int, tuple[ResourceOccurrence, ...]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -420,6 +433,260 @@ def _non_html_representation(
     return DetectorResult("clear", None, details, _primary(snapshot))
 
 
+def _broken_internal_links(
+    snapshot: ResourceSnapshot | None, context: DetectorContext
+) -> DetectorResult:
+    occurrences = _eligible_internal_occurrences(snapshot, context)
+    details: dict[str, Any] = {
+        "broken_target_count": 0,
+        "broken_occurrence_count": 0,
+        "broken_4xx_target_count": 0,
+        "broken_5xx_target_count": 0,
+        "unknown_target_count": 0,
+        "evidence_sample_count": 0,
+        "evidence_truncated": False,
+        "target_samples": [],
+    }
+    if not _usable_static(snapshot):
+        return DetectorResult(
+            "unknown", None, details, _primary(snapshot), _unusable_reason(snapshot)
+        )
+    assert snapshot is not None
+    if not occurrences:
+        return DetectorResult(
+            "clear", None, details, _primary(snapshot), "no_eligible_internal_occurrences"
+        )
+
+    broken: list[tuple[ResourceOccurrence, ResourceSnapshot]] = []
+    broken_targets: dict[int, ResourceSnapshot] = {}
+    unknown_targets: set[int] = set()
+    for occurrence in occurrences:
+        assert occurrence.target_resource_id is not None
+        target = context.snapshots_by_resource_id.get(occurrence.target_resource_id)
+        if not _usable_static(target):
+            unknown_targets.add(occurrence.target_resource_id)
+            continue
+        assert target is not None and target.http_status is not None
+        if 400 <= target.http_status <= 599:
+            broken.append((occurrence, target))
+            broken_targets[target.resource_id] = target
+
+    details["unknown_target_count"] = len(unknown_targets)
+    if not broken:
+        if unknown_targets:
+            reason = (
+                "target_not_observed"
+                if any(
+                    resource_id not in context.snapshots_by_resource_id
+                    for resource_id in unknown_targets
+                )
+                else "target_fetch_unusable"
+            )
+            return DetectorResult("unknown", None, details, _primary(snapshot), reason)
+        return DetectorResult("clear", None, details, _primary(snapshot))
+
+    status_by_target = {
+        resource_id: target.http_status for resource_id, target in broken_targets.items()
+    }
+    details.update(
+        {
+            "broken_target_count": len(broken_targets),
+            "broken_occurrence_count": len(broken),
+            "broken_4xx_target_count": sum(
+                1
+                for status in status_by_target.values()
+                if status is not None and 400 <= status <= 499
+            ),
+            "broken_5xx_target_count": sum(
+                1
+                for status in status_by_target.values()
+                if status is not None and 500 <= status <= 599
+            ),
+        }
+    )
+    sampled = broken[:TOPOLOGY_EVIDENCE_SAMPLE_LIMIT]
+    details["evidence_sample_count"] = len(sampled)
+    details["evidence_truncated"] = len(broken) > len(sampled)
+    details["target_samples"] = _broken_target_samples(sampled)
+    return DetectorResult(
+        "detected",
+        "high" if details["broken_5xx_target_count"] else "medium",
+        details,
+        _topology_evidence(snapshot, sampled, "broken"),
+    )
+
+
+def _internal_links_to_redirects(
+    snapshot: ResourceSnapshot | None, context: DetectorContext
+) -> DetectorResult:
+    occurrences = _eligible_internal_occurrences(snapshot, context)
+    details: dict[str, Any] = {
+        "redirect_target_count": 0,
+        "redirect_occurrence_count": 0,
+        "unknown_target_count": 0,
+        "evidence_sample_count": 0,
+        "evidence_truncated": False,
+        "target_samples": [],
+    }
+    if not _usable_static(snapshot):
+        return DetectorResult(
+            "unknown", None, details, _primary(snapshot), _unusable_reason(snapshot)
+        )
+    assert snapshot is not None
+    if not occurrences:
+        return DetectorResult(
+            "clear", None, details, _primary(snapshot), "no_eligible_internal_occurrences"
+        )
+
+    redirects: list[tuple[ResourceOccurrence, ResourceSnapshot]] = []
+    redirect_targets: set[int] = set()
+    unknown_targets: set[int] = set()
+    for occurrence in occurrences:
+        assert occurrence.target_resource_id is not None
+        target = context.snapshots_by_resource_id.get(occurrence.target_resource_id)
+        if not _usable_static(target):
+            unknown_targets.add(occurrence.target_resource_id)
+            continue
+        assert target is not None
+        redirect_state = _redirect_target_state(occurrence, target, context)
+        if redirect_state == "unknown":
+            unknown_targets.add(occurrence.target_resource_id)
+        elif redirect_state == "redirect":
+            redirects.append((occurrence, target))
+            redirect_targets.add(target.resource_id)
+
+    details["unknown_target_count"] = len(unknown_targets)
+    if not redirects:
+        if unknown_targets:
+            reason = (
+                "target_not_observed"
+                if any(
+                    resource_id not in context.snapshots_by_resource_id
+                    for resource_id in unknown_targets
+                )
+                else "target_fetch_unusable"
+            )
+            return DetectorResult("unknown", None, details, _primary(snapshot), reason)
+        return DetectorResult("clear", None, details, _primary(snapshot))
+
+    sampled = redirects[:TOPOLOGY_EVIDENCE_SAMPLE_LIMIT]
+    details.update(
+        {
+            "redirect_target_count": len(redirect_targets),
+            "redirect_occurrence_count": len(redirects),
+            "evidence_sample_count": len(sampled),
+            "evidence_truncated": len(redirects) > len(sampled),
+            "target_samples": _redirect_target_samples(sampled, context),
+        }
+    )
+    return DetectorResult(
+        "detected",
+        "medium",
+        details,
+        _topology_evidence(snapshot, sampled, "redirect"),
+    )
+
+
+def _eligible_internal_occurrences(
+    snapshot: ResourceSnapshot | None, context: DetectorContext
+) -> tuple[ResourceOccurrence, ...]:
+    if snapshot is None:
+        return ()
+    return tuple(
+        sorted(
+            (
+                item
+                for item in context.occurrences_by_source_resource_id.get(snapshot.resource_id, ())
+                if item.relation_type == "page_link"
+                and item.target_resource_id is not None
+                and item.scope_decision in {"crawlable", "already_seen"}
+                and item.link_role not in {"email", "telephone", "download"}
+            ),
+            key=lambda item: (item.normalized_target_url or "", item.id or 0),
+        )
+    )
+
+
+def _redirect_target_state(
+    occurrence: ResourceOccurrence, target: ResourceSnapshot, context: DetectorContext
+) -> str:
+    if not target.redirect_chain:
+        return "direct"
+    if not occurrence.normalized_target_url or not target.final_url:
+        return "unknown"
+    try:
+        final = normalize_url_for_version(
+            target.final_url,
+            normalization_version=context.scan.url_normalization_version,
+            drop_query_params=context.scan.scope_config.get("drop_query_parameters", []),
+        )
+    except (UrlNormalizationError, ValueError):
+        return "unknown"
+    return "redirect" if final.normalized_url != occurrence.normalized_target_url else "direct"
+
+
+def _topology_evidence(
+    source: ResourceSnapshot,
+    pairs: Sequence[tuple[ResourceOccurrence, ResourceSnapshot]],
+    prefix: str,
+) -> tuple[DetectorEvidence, ...]:
+    evidence = [DetectorEvidence("primary", snapshot=source)]
+    for occurrence, target in pairs:
+        evidence.extend(
+            (
+                DetectorEvidence(f"{prefix}_occurrence", occurrence=occurrence),
+                DetectorEvidence(f"{prefix}_target", snapshot=target),
+            )
+        )
+    return tuple(evidence)
+
+
+def _broken_target_samples(
+    pairs: Sequence[tuple[ResourceOccurrence, ResourceSnapshot]],
+) -> list[dict[str, Any]]:
+    grouped: dict[int, dict[str, Any]] = {}
+    for occurrence, target in pairs:
+        item = grouped.setdefault(
+            target.resource_id,
+            {
+                "target_resource_id": target.resource_id,
+                "requested_url": occurrence.normalized_target_url or target.requested_url,
+                "http_status": target.http_status,
+                "occurrence_count": 0,
+            },
+        )
+        item["occurrence_count"] += 1
+    return list(grouped.values())[:TOPOLOGY_EVIDENCE_SAMPLE_LIMIT]
+
+
+def _redirect_target_samples(
+    pairs: Sequence[tuple[ResourceOccurrence, ResourceSnapshot]], context: DetectorContext
+) -> list[dict[str, Any]]:
+    grouped: dict[int, dict[str, Any]] = {}
+    for occurrence, target in pairs:
+        final_url: str | None
+        try:
+            final_url = normalize_url_for_version(
+                target.final_url or "",
+                normalization_version=context.scan.url_normalization_version,
+                drop_query_params=context.scan.scope_config.get("drop_query_parameters", []),
+            ).normalized_url
+        except (UrlNormalizationError, ValueError):
+            final_url = target.final_url
+        item = grouped.setdefault(
+            target.resource_id,
+            {
+                "target_resource_id": target.resource_id,
+                "requested_url": occurrence.normalized_target_url or target.requested_url,
+                "final_url": final_url,
+                "redirect_hop_count": len(target.redirect_chain or []),
+                "occurrence_count": 0,
+            },
+        )
+        item["occurrence_count"] += 1
+    return list(grouped.values())[:TOPOLOGY_EVIDENCE_SAMPLE_LIMIT]
+
+
 def build_snapshot_url_index(
     scan: Scan, snapshots: Mapping[int, ResourceSnapshot]
 ) -> dict[str, ResourceSnapshot]:
@@ -513,6 +780,22 @@ CURRENT_FINDING_DETECTORS = (
         FINDING_TYPE_LABELS[PAGE_NON_HTML_REPRESENTATION_TYPE],
         "web_resource",
         _non_html_representation,
+    ),
+    FindingDetector(
+        PAGE_BROKEN_INTERNAL_LINKS_DETECTOR_IDENTITY,
+        PAGE_BROKEN_INTERNAL_LINKS_TYPE,
+        PAGE_BROKEN_INTERNAL_LINKS_KEY_VERSION,
+        FINDING_TYPE_LABELS[PAGE_BROKEN_INTERNAL_LINKS_TYPE],
+        "web_resource",
+        _broken_internal_links,
+    ),
+    FindingDetector(
+        PAGE_INTERNAL_LINKS_TO_REDIRECTS_DETECTOR_IDENTITY,
+        PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE,
+        PAGE_INTERNAL_LINKS_TO_REDIRECTS_KEY_VERSION,
+        FINDING_TYPE_LABELS[PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE],
+        "web_resource",
+        _internal_links_to_redirects,
     ),
 )
 

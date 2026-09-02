@@ -10,14 +10,16 @@ from app.crawler.url_normalizer import (
     URL_NORMALIZATION_V1_VERSION,
     URL_NORMALIZATION_V2_VERSION,
 )
-from app.models import ResourceSnapshot, Scan
+from app.models import ResourceOccurrence, ResourceSnapshot, Scan
 from app.services.finding_detectors import (
     CURRENT_FINDING_DETECTOR_MANIFEST,
     CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
     CURRENT_FINDING_DETECTORS,
+    PAGE_BROKEN_INTERNAL_LINKS_TYPE,
     PAGE_CANONICAL_TARGET_HTTP_ERROR_TYPE,
     PAGE_HTTP_ERROR_TYPE,
     PAGE_INDEXABILITY_CONFLICT_TYPE,
+    PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE,
     PAGE_NOINDEX_TYPE,
     DetectorContext,
     build_snapshot_url_index,
@@ -45,13 +47,15 @@ def _snapshot(
     representation_kind: str | None = "html_page",
     error_type: str | None = None,
     error_message: str | None = None,
+    final_url: str | None = None,
+    redirect_chain: list[dict[str, object]] | None = None,
 ) -> ResourceSnapshot:
     return ResourceSnapshot(
         id=snapshot_id,
         scan_id=1,
         resource_id=resource_id,
         requested_url=requested_url,
-        final_url=requested_url,
+        final_url=final_url or requested_url,
         http_status=status,
         crawl_depth=0,
         fetch_state=fetch_state,
@@ -63,6 +67,27 @@ def _snapshot(
         representation_kind=representation_kind,
         error_type=error_type,
         error_message=error_message,
+        redirect_chain=redirect_chain,
+    )
+
+
+def _occurrence(
+    occurrence_id: int,
+    source: ResourceSnapshot,
+    target: ResourceSnapshot,
+    *,
+    decision: str = "already_seen",
+    role: str = "main_content",
+) -> ResourceOccurrence:
+    return ResourceOccurrence(
+        id=occurrence_id,
+        source_snapshot_id=source.id,
+        relation_type="page_link",
+        normalized_target_url=target.requested_url,
+        target_resource_id=target.resource_id,
+        scope_decision=decision,
+        in_scope=decision == "crawlable",
+        link_role=role,
     )
 
 
@@ -71,6 +96,7 @@ def _context(
     *,
     version: str = URL_NORMALIZATION_V2_VERSION,
     drop_query_parameters: list[str] | None = None,
+    occurrences: list[ResourceOccurrence] | None = None,
 ) -> DetectorContext:
     scan = Scan(
         id=1,
@@ -80,7 +106,17 @@ def _context(
         url_normalization_version=version,
     )
     by_resource = {item.resource_id: item for item in snapshots}
-    return DetectorContext(scan, by_resource, build_snapshot_url_index(scan, by_resource))
+    by_source: dict[int, list[ResourceOccurrence]] = {}
+    resources_by_snapshot = {item.id: item.resource_id for item in snapshots}
+    for occurrence in occurrences or []:
+        source_resource_id = resources_by_snapshot[occurrence.source_snapshot_id]
+        by_source.setdefault(source_resource_id, []).append(occurrence)
+    return DetectorContext(
+        scan,
+        by_resource,
+        build_snapshot_url_index(scan, by_resource),
+        {resource_id: tuple(items) for resource_id, items in by_source.items()},
+    )
 
 
 @pytest.mark.parametrize(
@@ -259,6 +295,133 @@ def test_canonical_target_observed_only_outside_source_scan_is_unknown() -> None
     assert result.details["resolution_error"] == "same_scan_target_not_observed"
 
 
+def test_broken_internal_links_preserve_duplicates_and_aggregate_target_severity() -> None:
+    source = _snapshot()
+    gone = _snapshot(
+        snapshot_id=2,
+        resource_id=2,
+        requested_url="https://example.test/gone",
+        status=404,
+    )
+    server_error = _snapshot(
+        snapshot_id=3,
+        resource_id=3,
+        requested_url="https://example.test/server-error",
+        status=500,
+    )
+    ok = _snapshot(
+        snapshot_id=4,
+        resource_id=4,
+        requested_url="https://example.test/ok",
+    )
+    occurrences = [
+        _occurrence(2, source, gone),
+        _occurrence(1, source, gone),
+        _occurrence(3, source, server_error),
+        _occurrence(4, source, ok),
+    ]
+    result = _detector(PAGE_BROKEN_INTERNAL_LINKS_TYPE).evaluate(
+        source, _context([source, gone, server_error, ok], occurrences=occurrences)
+    )
+    assert (result.outcome, result.severity) == ("detected", "high")
+    assert result.details["broken_target_count"] == 2
+    assert result.details["broken_occurrence_count"] == 3
+    assert result.details["broken_4xx_target_count"] == 1
+    assert result.details["broken_5xx_target_count"] == 1
+    assert [item.occurrence.id for item in result.evidence if item.occurrence] == [1, 2, 3]
+
+
+def test_topology_uses_only_eligible_internal_page_link_occurrences() -> None:
+    source = _snapshot()
+    gone = _snapshot(
+        snapshot_id=2,
+        resource_id=2,
+        requested_url="https://example.test/gone",
+        status=404,
+    )
+    occurrences = [
+        _occurrence(1, source, gone, decision="external"),
+        _occurrence(2, source, gone, role="download"),
+    ]
+    occurrences[0].in_scope = False
+    occurrences[1].relation_type = "resource_reference"
+    context = _context([source, gone], occurrences=occurrences)
+    for finding_type in (
+        PAGE_BROKEN_INTERNAL_LINKS_TYPE,
+        PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE,
+    ):
+        result = _detector(finding_type).evaluate(source, context)
+        assert result.outcome == "clear"
+        assert result.reason_code == "no_eligible_internal_occurrences"
+
+
+def test_topology_never_substitutes_target_evidence_from_another_scan() -> None:
+    source = _snapshot()
+    historical_gone = _snapshot(
+        snapshot_id=2,
+        resource_id=2,
+        requested_url="https://example.test/gone",
+        status=404,
+    )
+    occurrence = _occurrence(1, source, historical_gone)
+    result = _detector(PAGE_BROKEN_INTERNAL_LINKS_TYPE).evaluate(
+        source, _context([source], occurrences=[occurrence])
+    )
+    assert result.outcome == "unknown"
+    assert result.reason_code == "target_not_observed"
+    assert result.details["unknown_target_count"] == 1
+
+
+def test_internal_redirect_requires_actual_redirect_to_distinct_normalized_url() -> None:
+    source = _snapshot()
+    redirected = _snapshot(
+        snapshot_id=2,
+        resource_id=2,
+        requested_url="https://example.test/old",
+        final_url="https://example.test/new",
+        redirect_chain=[{"status_code": 301, "url": "https://example.test/old"}],
+    )
+    result = _detector(PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE).evaluate(
+        source, _context([source, redirected], occurrences=[_occurrence(1, source, redirected)])
+    )
+    assert (result.outcome, result.severity) == ("detected", "medium")
+    assert result.details["redirect_target_count"] == 1
+    assert result.details["redirect_occurrence_count"] == 1
+    assert result.details["target_samples"][0]["final_url"] == "https://example.test/new"
+
+    spelling_only = _snapshot(
+        snapshot_id=3,
+        resource_id=3,
+        requested_url="https://example.test/same",
+        final_url="https://EXAMPLE.test:443/same",
+        redirect_chain=[{"status_code": 301, "url": "https://example.test/same"}],
+    )
+    spelling_result = _detector(PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE).evaluate(
+        source,
+        _context([source, spelling_only], occurrences=[_occurrence(2, source, spelling_only)]),
+    )
+    assert spelling_result.outcome == "clear"
+
+
+def test_topology_evidence_sample_is_deterministically_bounded() -> None:
+    source = _snapshot()
+    gone = _snapshot(
+        snapshot_id=2,
+        resource_id=2,
+        requested_url="https://example.test/gone",
+        status=404,
+    )
+    occurrences = [_occurrence(index, source, gone) for index in range(25, 0, -1)]
+    result = _detector(PAGE_BROKEN_INTERNAL_LINKS_TYPE).evaluate(
+        source, _context([source, gone], occurrences=occurrences)
+    )
+    assert result.details["broken_occurrence_count"] == 25
+    assert result.details["evidence_sample_count"] == 20
+    assert result.details["evidence_truncated"] is True
+    assert len(result.evidence) == 41
+    assert [item.occurrence.id for item in result.evidence if item.occurrence] == list(range(1, 21))
+
+
 def test_general_fingerprint_preserves_exact_v1_http_identity() -> None:
     legacy_payload = {
         "finding_type": "page_http_error",
@@ -282,7 +445,7 @@ def test_general_fingerprint_preserves_exact_v1_http_identity() -> None:
 
 
 def test_detector_manifest_is_deterministic_and_covers_registry_contract() -> None:
-    assert len(CURRENT_FINDING_DETECTOR_MANIFEST) == len(CURRENT_FINDING_DETECTORS) == 9
+    assert len(CURRENT_FINDING_DETECTOR_MANIFEST) == len(CURRENT_FINDING_DETECTORS) == 11
     assert CURRENT_FINDING_DETECTOR_MANIFEST[0] == {
         "finding_type": "page_http_error",
         "detector_identity": "page-http-error-v1",
@@ -297,13 +460,18 @@ def test_detector_manifest_is_deterministic_and_covers_registry_contract() -> No
     ).encode()
     assert (
         CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
-        == "8d413eb1d494beb84be11c682d058c9a6ee474beabd4e77fa78be084414b99db"
+        == "bc8459b5780ae48740a13e9b2b3a153143518a13e20edd9d31b545d325993948"
     )
     assert hashlib.sha256(payload).hexdigest() == CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
     assert (
         finding_detector_manifest_sha256(CURRENT_FINDING_DETECTORS)
         == CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
     )
+    v3_manifest_sha256 = finding_detector_manifest_sha256(CURRENT_FINDING_DETECTORS[:-2])
+    assert v3_manifest_sha256 == (
+        "8d413eb1d494beb84be11c682d058c9a6ee474beabd4e77fa78be084414b99db"
+    )
+    assert v3_manifest_sha256 != CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
 
 
 def test_detector_manifest_changes_with_membership_order_or_semantic_identity() -> None:

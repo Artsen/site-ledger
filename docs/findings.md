@@ -8,9 +8,9 @@ Evidence -> deterministic derivatives -> deterministic Finding evaluation
          -> persistent Findings -> Site Intelligence and workflow -> future AI interpretation
 ```
 
-## V3 Detector Bundle Contract
+## V4 Detector Bundle Contract
 
-`finding-evaluator-v2` runs the fixed `finding-detectors-v3` bundle over one frozen ordered
+`finding-evaluator-v2` runs the fixed `finding-detectors-v4` bundle over one frozen ordered
 universe of active Site Page resource IDs and one server-selected terminal static Scan. It contains
 exactly these production detectors:
 
@@ -50,11 +50,20 @@ exactly these production detectors:
   `page-non-html-representation-key-v1`): an active Page whose current same-Scan usable snapshot is
   classified as a non-HTML representation is detected at medium severity. Failed or unclassified
   representation evidence is unknown.
+- `page-broken-internal-links-v1` (`page_broken_internal_links`,
+  `page-broken-internal-links-key-v1`): a source Page with an eligible internal anchor occurrence
+  whose same-Scan target has usable HTTP 4xx/5xx evidence is detected. Any 5xx target makes severity
+  high; an exclusively 4xx set is medium. Duplicate occurrences are counted while target counts are
+  distinct.
+- `page-internal-links-to-redirects-v1` (`page_internal_links_to_redirects`,
+  `page-internal-links-to-redirects-key-v1`): a source Page with an eligible internal anchor whose
+  same-Scan target has an actual retained redirect chain ending at a different normalized URL is
+  detected at medium severity. Normalization-equivalent spelling changes alone are clear.
 
-All detectors use only retained `ResourceSnapshot` and `Scan` evidence. Render, Performance,
-Accessibility, Structured Content, Sources, analytics, and Comparison are not first-class Finding
-evidence in this contract. That boundary is deliberate and requires a later typed evidence-contract
-evolution rather than hidden provenance in assessment JSON.
+All detectors use only retained `ResourceSnapshot`, `ResourceOccurrence`, and `Scan` evidence.
+Render, Performance, Accessibility, Structured Content, Sources, analytics, and Comparison are not
+first-class Finding evidence in this contract. That boundary is deliberate and requires a later
+typed evidence-contract evolution rather than hidden provenance in assessment JSON.
 
 ## Identity And Evaluation
 
@@ -63,10 +72,10 @@ WebResource ID. Scan, snapshot, status, severity, timestamps, and database Findi
 The V1 HTTP payload is preserved byte-for-byte, so V2 continues an existing HTTP Finding rather
 than duplicating it.
 
-The current evaluation input fingerprint includes `finding-evaluator-v2`, `finding-detectors-v3`,
+The current evaluation input fingerprint includes `finding-evaluator-v2`, `finding-detectors-v4`,
 the deterministic detector-manifest checksum, Site, source Scan, and the frozen
-active-Page-universe checksum. A V3 bundle evaluation can therefore evaluate a Scan that previously
-received a V1 or V2 bundle evaluation. Historical terminal evaluations remain readable;
+active-Page-universe checksum. A V4 bundle evaluation can therefore evaluate a Scan that previously
+received a V1, V2, or V3 bundle evaluation. Historical terminal evaluations remain readable;
 nonterminal historical evaluations do not execute through newer detector code. Within one bundle,
 an older evidence horizon fails closed after a newer completed evaluation.
 
@@ -82,7 +91,7 @@ new `detector_bundle_identity`. Evaluator execution-contract changes require a n
 `evaluator_version`. Reusing any of these semantic identities after changing its contract is a
 compatibility bug, even when implementation code alone changed.
 
-Counts cover detector-subject outcomes. Nine detectors over 100 active Pages produce 900 outcomes,
+Counts cover detector-subject outcomes. Eleven detectors over 100 active Pages produce 1,100 outcomes,
 while `active_page_count` remains 100. The evaluation checksum hashes the complete deterministic
 outcome set, including clean and unknown outcomes, plus the persisted per-detector summary.
 
@@ -93,6 +102,25 @@ Finding rows. Historical evaluations remain readable with an empty summary and a
 Persistence remains sparse. A newly detected condition creates a Finding and assessment. An
 existing Finding receives detected, clear, or unknown assessments. Clean or unknown outcomes with
 no logical Finding create no Finding or assessment rows.
+
+## Internal-Link Topology
+
+Topology detectors consume immutable duplicate-preserving `ResourceOccurrence` evidence from the
+evaluation's source Scan. An eligible edge has `relation_type=page_link`, a retained
+`target_resource_id`, an internal scope decision of `crawlable` or `already_seen`, and is not an
+email, telephone, or download role. External, unsupported, targetless, and embedded-resource
+references are excluded. The evaluator batch-loads occurrences for source snapshots and target
+snapshots once; detectors perform no HTTP requests and never substitute evidence from another Scan.
+
+A usable source Page with no eligible internal occurrences is clear. Existing eligible links whose
+same-Scan target is absent or unusable are unknown, not broken. Unknown evidence never resolves an
+existing Finding.
+
+Each topology assessment always references its primary source snapshot and evaluation-horizon Scan.
+Detected assessments additionally retain at most 20 deterministically ordered occurrence/target
+snapshot pairs. `evidence_sample_count`, total occurrence counts, and `evidence_truncated` make the
+fixed bound explicit. Deleting the owning Scan may remove snapshots and occurrences; Finding and
+assessment history survives with those typed references reported as no longer retained.
 
 ## Lifecycle And Time
 

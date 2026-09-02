@@ -374,6 +374,13 @@ semantics. Unchanged identities after a semantic change are a compatibility bug.
 detector manifest checksum is a second safety boundary included in evaluation input identity; it
 does not replace explicit bundle versioning and must never be derived from source-code hashes.
 
+Finding topology uses immutable, duplicate-preserving `ResourceOccurrence` anchor evidence and
+same-Scan target snapshots. Eligibility must preserve frozen scope decisions and link roles;
+detectors must not fetch, infer redirect-mediated edges, substitute historical targets, or include
+external and embedded-resource references. Persist only a fixed deterministic occurrence/target
+sample, with explicit total counts and truncation metadata. Scan deletion tombstones typed evidence
+reads without deleting Finding or assessment history.
+
 ## Graph Rules
 
 The Graph is read-only and scan-specific. Nodes represent observations, with optional distinct

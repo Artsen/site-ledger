@@ -12,6 +12,7 @@ from app.models import (
     FindingAssessment,
     FindingEvaluation,
     FindingEvidenceReference,
+    ResourceOccurrence,
     ResourceSnapshot,
     Scan,
     SitePage,
@@ -165,6 +166,26 @@ def get_finding(db: Session, site_id: int, finding_id: int) -> FindingDetail | N
         if snapshot_ids
         else {}
     )
+    occurrence_ids = {
+        reference.evidence_id
+        for reference in references
+        if reference.evidence_kind == "resource_occurrence"
+    }
+    occurrence_links = (
+        {
+            occurrence_id: (scan_id, source_snapshot_id)
+            for occurrence_id, scan_id, source_snapshot_id in db.execute(
+                select(ResourceOccurrence.id, ResourceSnapshot.scan_id, ResourceSnapshot.id)
+                .join(
+                    ResourceSnapshot,
+                    ResourceSnapshot.id == ResourceOccurrence.source_snapshot_id,
+                )
+                .where(ResourceOccurrence.id.in_(occurrence_ids))
+            )
+        }
+        if occurrence_ids
+        else {}
+    )
     scan_ids = {
         reference.evidence_id for reference in references if reference.evidence_kind == "scan"
     }
@@ -199,7 +220,13 @@ def get_finding(db: Session, site_id: int, finding_id: int) -> FindingDetail | N
                     evaluation_job_ids.get(item.finding_evaluation_id),
                 ),
                 evidence_references=[
-                    _reference_read(ref, site_id, snapshot_links, retained_scans)
+                    _reference_read(
+                        ref,
+                        site_id,
+                        snapshot_links,
+                        occurrence_links,
+                        retained_scans,
+                    )
                     for ref in refs_by_assessment.get(item.id, [])
                 ],
             )
@@ -320,6 +347,7 @@ def _reference_read(
     item: FindingEvidenceReference,
     site_id: int,
     snapshot_links: dict[int, tuple[int, int]],
+    occurrence_links: dict[int, tuple[int, int]],
     retained_scans: dict[int, int],
 ) -> FindingEvidenceReferenceRead:
     retained = False
@@ -330,6 +358,12 @@ def _reference_read(
         if snapshot is not None:
             scan_id, _resource_id = snapshot
             href = f"/scans/{scan_id}/pages/{item.evidence_id}"
+    elif item.evidence_kind == "resource_occurrence":
+        occurrence = occurrence_links.get(item.evidence_id)
+        retained = occurrence is not None
+        if occurrence is not None:
+            scan_id, source_snapshot_id = occurrence
+            href = f"/scans/{scan_id}/pages/{source_snapshot_id}"
     elif item.evidence_kind == "scan":
         retained = retained_scans.get(item.evidence_id) == site_id
         if retained:

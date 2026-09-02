@@ -160,7 +160,7 @@ class FindingEvidenceReference(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "evidence_kind IN ('resource_snapshot', 'scan')",
+            "evidence_kind IN ('resource_snapshot', 'resource_occurrence', 'scan')",
             name="ck_finding_evidence_kind",
         ),
         UniqueConstraint("finding_assessment_id", "position", name="uq_finding_evidence_position"),

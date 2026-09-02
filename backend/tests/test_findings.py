@@ -16,6 +16,7 @@ from app.models import (
     FindingAssessment,
     FindingEvaluation,
     FindingEvidenceReference,
+    ResourceOccurrence,
     ResourceSnapshot,
     Scan,
     SitePage,
@@ -149,6 +150,78 @@ def _universe_hash(resource_ids: list[int]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _resource(db, path: str) -> WebResource:
+    resource = WebResource(
+        resource_type="page",
+        normalized_url=f"https://example.test{path}",
+        scheme="https",
+        host="example.test",
+        path=path,
+        query="",
+    )
+    db.add(resource)
+    db.flush()
+    return resource
+
+
+def _target_snapshot(
+    db,
+    scan: Scan,
+    resource: WebResource,
+    moment: datetime,
+    status: int | None,
+    *,
+    fetch_state: str = "fetched",
+    final_url: str | None = None,
+    redirect_chain: list[dict[str, object]] | None = None,
+) -> ResourceSnapshot:
+    snapshot = ResourceSnapshot(
+        scan_id=scan.id,
+        resource_id=resource.id,
+        requested_url=resource.normalized_url,
+        final_url=final_url or resource.normalized_url,
+        http_status=status,
+        crawl_depth=1,
+        fetched_at=moment - timedelta(minutes=4),
+        fetch_state=fetch_state,
+        representation_kind="html_page",
+        page_title="Target page",
+        parsed_head_json={"links": []},
+        redirect_chain=redirect_chain,
+    )
+    db.add(snapshot)
+    db.flush()
+    return snapshot
+
+
+def _link(
+    db,
+    source: ResourceSnapshot,
+    target: WebResource,
+    *,
+    count: int = 1,
+) -> list[ResourceOccurrence]:
+    occurrences = [
+        ResourceOccurrence(
+            source_snapshot_id=source.id,
+            relation_type="page_link",
+            raw_href=target.path,
+            resolved_url=target.normalized_url,
+            normalized_target_url=target.normalized_url,
+            target_resource_id=target.id,
+            anchor_text=f"Link to {target.path}",
+            in_scope=index == 0,
+            scope_decision="crawlable" if index == 0 else "already_seen",
+            link_role="main_content",
+            link_role_rule="ancestor_main",
+        )
+        for index in range(count)
+    ]
+    db.add_all(occurrences)
+    db.flush()
+    return occurrences
+
+
 def test_http_finding_lifecycle_uses_one_identity_and_evidence_time(db_session) -> None:
     site, resource, _page = _site_page(db_session)
     start = datetime(2026, 8, 24, 9, tzinfo=UTC)
@@ -228,7 +301,7 @@ def test_multi_detector_counts_identity_and_sparse_persistence(db_session) -> No
         "page_noindex",
     ]
     assert len({item.fingerprint_sha256 for item in findings}) == 3
-    assert (result.detected, result.clear, result.unknown) == (3, 6, 0)
+    assert (result.detected, result.clear, result.unknown) == (3, 8, 0)
     assert evaluation.active_page_count == 1
     assert evaluation.assessment_count == 3
     assert evaluation.detector_summary_json["page_http_error"] == {
@@ -238,7 +311,7 @@ def test_multi_detector_counts_identity_and_sparse_persistence(db_session) -> No
         "unknown": 0,
         "reason_counts": {},
     }
-    assert len(evaluation.detector_summary_json) == 9
+    assert len(evaluation.detector_summary_json) == 11
     assert db_session.query(FindingAssessment).count() == 3
 
 
@@ -342,7 +415,7 @@ def test_v3_continues_http_identity_but_will_not_execute_historical_v1(db_sessio
     assert finding.condition_state == "detected"
 
 
-def test_v3_reevaluates_same_retained_scan_and_preserves_v2_finding_continuity(
+def test_v4_reevaluates_same_retained_scan_and_preserves_v3_finding_continuity(
     db_session,
 ) -> None:
     site, resource, _page = _site_page(db_session)
@@ -355,11 +428,11 @@ def test_v3_reevaluates_same_retained_scan_and_preserves_v2_finding_continuity(
         page_title=None,
     )
     universe_hash = _universe_hash([resource.id])
-    historical_v2 = FindingEvaluation(
+    historical_v3 = FindingEvaluation(
         website_property_id=site.id,
         source_scan_id=scan.id,
         evaluator_version="finding-evaluator-v2",
-        detector_bundle_identity="finding-detectors-v2",
+        detector_bundle_identity="finding-detectors-v3",
         input_fingerprint_sha256="2" * 64,
         evidence_horizon_at=scan.finished_at,
         active_page_count=1,
@@ -382,11 +455,11 @@ def test_v3_reevaluates_same_retained_scan_and_preserves_v2_finding_continuity(
         last_detected_at=observed_at,
         last_evaluated_evidence_at=observed_at,
     )
-    db_session.add_all([historical_v2, http_finding])
+    db_session.add_all([historical_v3, http_finding])
     db_session.flush()
     historical_assessment = FindingAssessment(
         finding_id=http_finding.id,
-        finding_evaluation_id=historical_v2.id,
+        finding_evaluation_id=historical_v3.id,
         outcome="detected",
         severity="medium",
         evidence_observed_at=observed_at,
@@ -398,16 +471,16 @@ def test_v3_reevaluates_same_retained_scan_and_preserves_v2_finding_continuity(
     http_finding.current_assessment_id = historical_assessment.id
     db_session.commit()
 
-    current_v3, created = create_evaluation(db_session, site.id)
+    current_v4, created = create_evaluation(db_session, site.id)
     assert created is True
-    assert current_v3.source_scan_id == historical_v2.source_scan_id == scan.id
-    assert current_v3.active_page_universe_sha256 == historical_v2.active_page_universe_sha256
-    assert current_v3.evaluator_version == "finding-evaluator-v2"
-    assert current_v3.detector_bundle_identity == "finding-detectors-v3"
+    assert current_v4.source_scan_id == historical_v3.source_scan_id == scan.id
+    assert current_v4.active_page_universe_sha256 == historical_v3.active_page_universe_sha256
+    assert current_v4.evaluator_version == "finding-evaluator-v2"
+    assert current_v4.detector_bundle_identity == "finding-detectors-v4"
     expected_fingerprint_payload = json.dumps(
         {
             "active_page_universe_sha256": universe_hash,
-            "detector_bundle_identity": "finding-detectors-v3",
+            "detector_bundle_identity": "finding-detectors-v4",
             "detector_bundle_manifest_sha256": CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
             "evaluator_version": "finding-evaluator-v2",
             "site_id": site.id,
@@ -418,10 +491,10 @@ def test_v3_reevaluates_same_retained_scan_and_preserves_v2_finding_continuity(
         ensure_ascii=True,
     ).encode()
     assert (
-        current_v3.input_fingerprint_sha256
+        current_v4.input_fingerprint_sha256
         == hashlib.sha256(expected_fingerprint_payload).hexdigest()
     )
-    execute_evaluation(db_session, current_v3.id)
+    execute_evaluation(db_session, current_v4.id)
     db_session.commit()
 
     http_rows = list(
@@ -441,26 +514,26 @@ def test_v3_reevaluates_same_retained_scan_and_preserves_v2_finding_continuity(
     assert missing_title is not None
     assert missing_title.id != http_finding.id
 
-    repeated_v3, repeated_created = create_evaluation(db_session, site.id)
+    repeated_v4, repeated_created = create_evaluation(db_session, site.id)
     assert repeated_created is False
-    assert repeated_v3.id == current_v3.id
+    assert repeated_v4.id == current_v4.id
     history = list_evaluations(db_session, site.id, 10, 0)
     assert history is not None
     assert [item.detector_bundle_identity for item in history.items] == [
+        "finding-detectors-v4",
         "finding-detectors-v3",
-        "finding-detectors-v2",
     ]
 
 
-def test_v3_chronology_ignores_v2_but_blocks_older_pending_v3(db_session) -> None:
+def test_v4_chronology_ignores_v3_but_blocks_older_pending_v4(db_session) -> None:
     site, resource, _page = _site_page(db_session)
     scan_a, _snapshot = _scan(db_session, site, resource, datetime(2026, 9, 2, 1, tzinfo=UTC), 404)
     universe_hash = _universe_hash([resource.id])
-    historical_v2 = FindingEvaluation(
+    historical_v3 = FindingEvaluation(
         website_property_id=site.id,
         source_scan_id=scan_a.id,
         evaluator_version="finding-evaluator-v2",
-        detector_bundle_identity="finding-detectors-v2",
+        detector_bundle_identity="finding-detectors-v3",
         input_fingerprint_sha256="4" * 64,
         evidence_horizon_at=scan_a.finished_at,
         active_page_count=1,
@@ -468,23 +541,23 @@ def test_v3_chronology_ignores_v2_but_blocks_older_pending_v3(db_session) -> Non
         active_page_resource_ids_json=[resource.id],
         status="completed",
     )
-    db_session.add(historical_v2)
+    db_session.add(historical_v3)
     db_session.flush()
-    pending_v3_a, created = create_evaluation(db_session, site.id)
-    assert created and pending_v3_a.source_scan_id == scan_a.id
+    pending_v4_a, created = create_evaluation(db_session, site.id)
+    assert created and pending_v4_a.source_scan_id == scan_a.id
 
     scan_b, _snapshot = _scan(db_session, site, resource, datetime(2026, 9, 2, 2, tzinfo=UTC), 200)
-    v3_b, created = create_evaluation(db_session, site.id)
-    assert created and v3_b.source_scan_id == scan_b.id
-    execute_evaluation(db_session, v3_b.id)
+    v4_b, created = create_evaluation(db_session, site.id)
+    assert created and v4_b.source_scan_id == scan_b.id
+    execute_evaluation(db_session, v4_b.id)
     db_session.commit()
 
     with pytest.raises(FindingEvaluationChronologyError):
-        execute_evaluation(db_session, pending_v3_a.id)
+        execute_evaluation(db_session, pending_v4_a.id)
     db_session.rollback()
-    assert historical_v2.status == "completed"
-    assert historical_v2.detector_bundle_identity == "finding-detectors-v2"
-    assert FINDING_DETECTOR_BUNDLE_IDENTITY == "finding-detectors-v3"
+    assert historical_v3.status == "completed"
+    assert historical_v3.detector_bundle_identity == "finding-detectors-v3"
+    assert FINDING_DETECTOR_BUNDLE_IDENTITY == "finding-detectors-v4"
 
 
 def test_suppression_and_evidence_deletion_do_not_resolve_or_delete_history(db_session) -> None:
@@ -664,7 +737,94 @@ def test_findings_api_queues_lists_details_and_keeps_acknowledgement_separate(
         assert unacknowledged["acknowledged_at"] is None
 
 
-def test_api_runs_v3_against_same_scan_after_completed_v2_without_recrawl(db_session) -> None:
+def test_topology_findings_run_through_api_worker_database_and_detail(db_session) -> None:
+    site, source_a, _page = _site_page(db_session)
+    source_b = _resource(db_session, "/source-b")
+    db_session.add(SitePage(website_property_id=site.id, resource_id=source_b.id))
+    gone = _resource(db_session, "/gone")
+    server_error = _resource(db_session, "/server-error")
+    ok = _resource(db_session, "/ok")
+    old = _resource(db_session, "/old")
+    moment = datetime(2026, 9, 2, 12, tzinfo=UTC)
+    scan, source_a_snapshot = _scan(db_session, site, source_a, moment, 200)
+    source_b_snapshot = _target_snapshot(db_session, scan, source_b, moment, 200)
+    _target_snapshot(db_session, scan, gone, moment, 404)
+    _target_snapshot(db_session, scan, server_error, moment, 500)
+    _target_snapshot(db_session, scan, ok, moment, 200)
+    _target_snapshot(
+        db_session,
+        scan,
+        old,
+        moment,
+        200,
+        final_url="https://example.test/new",
+        redirect_chain=[{"status_code": 301, "url": old.normalized_url}],
+    )
+    _link(db_session, source_a_snapshot, gone, count=2)
+    _link(db_session, source_a_snapshot, server_error)
+    _link(db_session, source_a_snapshot, ok)
+    _link(db_session, source_b_snapshot, old)
+    db_session.commit()
+
+    with _findings_client(db_session) as client:
+        queued = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert queued.status_code == 202
+        evaluation_id = queued.json()["id"]
+        claimed = background_jobs.claim_next_job(
+            db_session, worker_id="topology-worker", lease_seconds=30
+        )
+        assert claimed is not None
+        factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+        FindingEvaluationJobHandler(factory)._execute_blocking(
+            claimed.job,
+            evaluation_id,
+            _job_context(factory, claimed.job, claimed.lease_token),
+        )
+        db_session.expire_all()
+
+        listing = client.get(f"/api/sites/{site.id}/findings?limit=50").json()
+        topology = {
+            item["finding_type"]: item
+            for item in listing["items"]
+            if item["finding_type"]
+            in {"page_broken_internal_links", "page_internal_links_to_redirects"}
+        }
+        assert set(topology) == {
+            "page_broken_internal_links",
+            "page_internal_links_to_redirects",
+        }
+        broken = topology["page_broken_internal_links"]
+        assert broken["current_severity"] == "high"
+        assert broken["current_evidence_summary"]["broken_target_count"] == 2
+        assert broken["current_evidence_summary"]["broken_occurrence_count"] == 3
+        redirect = topology["page_internal_links_to_redirects"]
+        assert redirect["current_evidence_summary"]["redirect_target_count"] == 1
+
+        detail = client.get(f"/api/sites/{site.id}/findings/{broken['id']}").json()
+        references = detail["assessments"][0]["evidence_references"]
+        assert [item["evidence_kind"] for item in references] == [
+            "resource_snapshot",
+            "resource_occurrence",
+            "resource_snapshot",
+            "resource_occurrence",
+            "resource_snapshot",
+            "resource_occurrence",
+            "resource_snapshot",
+            "scan",
+        ]
+        assert all(item["retained"] for item in references)
+
+    broken_finding_id = broken["id"]
+    db_session.execute(delete(ResourceSnapshot).where(ResourceSnapshot.scan_id == scan.id))
+    db_session.execute(delete(Scan).where(Scan.id == scan.id))
+    db_session.commit()
+    surviving = get_finding(db_session, site.id, broken_finding_id)
+    assert surviving is not None
+    assert surviving.assessments
+    assert all(not item.retained for item in surviving.assessments[0].evidence_references)
+
+
+def test_api_runs_v4_against_same_scan_after_completed_v3_without_recrawl(db_session) -> None:
     site, resource, _page = _site_page(db_session)
     scan, _snapshot = _scan(
         db_session,
@@ -674,11 +834,11 @@ def test_api_runs_v3_against_same_scan_after_completed_v2_without_recrawl(db_ses
         200,
         page_title=None,
     )
-    historical_v2 = FindingEvaluation(
+    historical_v3 = FindingEvaluation(
         website_property_id=site.id,
         source_scan_id=scan.id,
         evaluator_version="finding-evaluator-v2",
-        detector_bundle_identity="finding-detectors-v2",
+        detector_bundle_identity="finding-detectors-v3",
         input_fingerprint_sha256="5" * 64,
         evidence_horizon_at=scan.finished_at,
         active_page_count=1,
@@ -686,21 +846,21 @@ def test_api_runs_v3_against_same_scan_after_completed_v2_without_recrawl(db_ses
         active_page_resource_ids_json=[resource.id],
         status="completed",
     )
-    db_session.add(historical_v2)
+    db_session.add(historical_v3)
     db_session.commit()
 
     with _findings_client(db_session) as client:
         queued = client.post(f"/api/sites/{site.id}/findings/evaluations")
         assert queued.status_code == 202
         payload = queued.json()
-        assert payload["id"] != historical_v2.id
-        assert payload["source_scan_id"] == historical_v2.source_scan_id == scan.id
-        assert payload["active_page_universe_sha256"] == (historical_v2.active_page_universe_sha256)
+        assert payload["id"] != historical_v3.id
+        assert payload["source_scan_id"] == historical_v3.source_scan_id == scan.id
+        assert payload["active_page_universe_sha256"] == (historical_v3.active_page_universe_sha256)
         assert payload["evaluator_version"] == "finding-evaluator-v2"
-        assert payload["detector_bundle_identity"] == "finding-detectors-v3"
+        assert payload["detector_bundle_identity"] == "finding-detectors-v4"
 
         claimed = background_jobs.claim_next_job(
-            db_session, worker_id="v3-same-scan-worker", lease_seconds=30
+            db_session, worker_id="v4-same-scan-worker", lease_seconds=30
         )
         assert claimed is not None
         factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
@@ -863,8 +1023,8 @@ def test_manual_product_fixture_exposes_distinct_static_pack_rows_through_worker
             evaluation_payload["detected_count"],
             evaluation_payload["clear_count"],
             evaluation_payload["unknown_count"],
-        ) == (7, 46, 10)
-        assert len(evaluation_payload["detector_summary_json"]) == 9
+        ) == (7, 58, 12)
+        assert len(evaluation_payload["detector_summary_json"]) == 11
 
 
 def test_static_fetch_failure_clears_after_successful_fetch(db_session) -> None:
@@ -970,11 +1130,84 @@ def test_non_html_representation_clears_when_page_returns_html_again(db_session)
     assert finding.condition_state == "resolved"
 
 
+def test_broken_internal_link_lifecycle_resolves_reopens_and_keeps_unknown(
+    db_session,
+) -> None:
+    site, source, _page = _site_page(db_session)
+    target = _resource(db_session, "/target")
+    start = datetime(2026, 9, 2, 9, tzinfo=UTC)
+
+    scan, source_snapshot = _scan(db_session, site, source, start, 200)
+    _target_snapshot(db_session, scan, target, start, 404)
+    _link(db_session, source_snapshot, target)
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "page_broken_internal_links")
+    )
+    assert finding is not None
+    assert (finding.condition_state, finding.current_severity) == ("detected", "medium")
+
+    scan, source_snapshot = _scan(db_session, site, source, start + timedelta(hours=1), 200)
+    _target_snapshot(db_session, scan, target, start + timedelta(hours=1), 200)
+    _link(db_session, source_snapshot, target)
+    _evaluate(db_session, site)
+    db_session.refresh(finding)
+    assert finding.condition_state == "resolved"
+
+    scan, source_snapshot = _scan(db_session, site, source, start + timedelta(hours=2), 200)
+    _target_snapshot(db_session, scan, target, start + timedelta(hours=2), 500)
+    _link(db_session, source_snapshot, target)
+    _evaluate(db_session, site)
+    db_session.refresh(finding)
+    assert (finding.condition_state, finding.current_severity) == ("detected", "high")
+    assert finding.reopened_at is not None
+
+    _scan_missing_target, missing_source = _scan(
+        db_session, site, source, start + timedelta(hours=3), 200
+    )
+    _link(db_session, missing_source, target)
+    _evaluate(db_session, site)
+    db_session.refresh(finding)
+    assert finding.condition_state == "unknown"
+    assert finding.resolved_at < finding.reopened_at
+    current = db_session.get(FindingAssessment, finding.current_assessment_id)
+    assert current is not None and current.details_json["unknown_target_count"] == 1
+
+
+def test_internal_redirect_link_resolves_when_target_becomes_direct(db_session) -> None:
+    site, source, _page = _site_page(db_session)
+    target = _resource(db_session, "/old")
+    start = datetime(2026, 9, 2, 9, tzinfo=UTC)
+    scan, source_snapshot = _scan(db_session, site, source, start, 200)
+    _target_snapshot(
+        db_session,
+        scan,
+        target,
+        start,
+        200,
+        final_url="https://example.test/new",
+        redirect_chain=[{"status_code": 301, "url": target.normalized_url}],
+    )
+    _link(db_session, source_snapshot, target)
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "page_internal_links_to_redirects")
+    )
+    assert finding is not None and finding.condition_state == "detected"
+
+    scan, source_snapshot = _scan(db_session, site, source, start + timedelta(hours=1), 200)
+    _target_snapshot(db_session, scan, target, start + timedelta(hours=1), 200)
+    _link(db_session, source_snapshot, target)
+    _evaluate(db_session, site)
+    db_session.refresh(finding)
+    assert finding.condition_state == "resolved"
+
+
 def test_job_completion_and_finding_lifecycle_share_one_transaction(
     db_session, monkeypatch
 ) -> None:
     site, resource, _page = _site_page(db_session)
-    _scan(
+    scan, source_snapshot = _scan(
         db_session,
         site,
         resource,
@@ -982,6 +1215,9 @@ def test_job_completion_and_finding_lifecycle_share_one_transaction(
         404,
         meta_robots="noindex",
     )
+    target = _resource(db_session, "/broken")
+    _target_snapshot(db_session, scan, target, datetime(2026, 8, 24, tzinfo=UTC), 404)
+    _link(db_session, source_snapshot, target)
     evaluation, _ = create_evaluation(db_session, site.id)
     job = background_jobs.enqueue_finding_evaluation_job(db_session, evaluation.id, site.id)
     job.status = "running"
@@ -1008,6 +1244,7 @@ def test_job_completion_and_finding_lifecycle_share_one_transaction(
     db_session.expire_all()
     assert db_session.get(FindingEvaluation, evaluation.id).status == "queued"
     assert db_session.query(Finding).count() == 0
+    assert db_session.query(FindingEvidenceReference).count() == 0
     assert db_session.get(BackgroundJob, job.id).status == "running"
 
     monkeypatch.setattr(background_jobs, "complete_job", real_complete)
@@ -1015,8 +1252,14 @@ def test_job_completion_and_finding_lifecycle_share_one_transaction(
     db_session.expire_all()
     assert db_session.get(FindingEvaluation, evaluation.id).status == "completed"
     assert db_session.get(BackgroundJob, job.id).status == "completed"
-    assert db_session.query(Finding).count() == 2
-    assert db_session.query(FindingAssessment).count() == 2
+    assert db_session.query(Finding).count() == 3
+    assert db_session.query(FindingAssessment).count() == 3
+    assert (
+        db_session.query(FindingEvidenceReference)
+        .filter(FindingEvidenceReference.evidence_kind == "resource_occurrence")
+        .count()
+        == 1
+    )
 
 
 def test_queued_job_cancellation_terminalizes_the_evaluation(db_session) -> None:
