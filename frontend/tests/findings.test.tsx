@@ -113,6 +113,21 @@ describe("Findings workspace", () => {
     fireEvent.click(screen.getByText("Unknown reasons"));
     expect(screen.getByText("Subject Fetch Unusable: 1")).toBeInTheDocument();
   });
+
+  it("keeps V2 and V3 bundle identities visible as separate history", async () => {
+    api.listFindingEvaluations.mockResolvedValue({
+      items: [
+        { ...evaluation, id: 8, detector_bundle_identity: "finding-detectors-v3" },
+        { ...evaluation, detector_bundle_identity: "finding-detectors-v2" },
+      ],
+      total: 2,
+      limit: 25,
+      offset: 0,
+    });
+    renderWorkspace("/?view=evaluations");
+    expect(await screen.findByText("finding-detectors-v3")).toBeInTheDocument();
+    expect(screen.getByText("finding-detectors-v2")).toBeInTheDocument();
+  });
 });
 
 function renderWorkspace(initialEntry = "/") {

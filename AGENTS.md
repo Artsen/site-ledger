@@ -367,6 +367,13 @@ versioned, and absence means "Not observed in Target", not automatic removal. Te
 distinct from substantive document-content change. Comparison is deterministic interpretation of
 evidence, not an LLM Finding; Findings and AI interpretation must remain downstream.
 
+Finding version identities are semantic contracts. Change `detector_identity` for detector
+semantics, `logical_key_version` for logical Finding identity, `detector_bundle_identity` for
+production detector membership or ordering, and `evaluator_version` for evaluator execution
+semantics. Unchanged identities after a semantic change are a compatibility bug. The deterministic
+detector manifest checksum is a second safety boundary included in evaluation input identity; it
+does not replace explicit bundle versioning and must never be derived from source-code hashes.
+
 ## Graph Rules
 
 The Graph is read-only and scan-specific. Nodes represent observations, with optional distinct

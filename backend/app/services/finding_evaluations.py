@@ -21,6 +21,7 @@ from app.models import (
     WebsiteProperty,
 )
 from app.services.finding_detectors import (
+    CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
     CURRENT_FINDING_DETECTORS,
     PAGE_HTTP_ERROR_KEY_VERSION,
     PAGE_HTTP_ERROR_TYPE,
@@ -32,7 +33,7 @@ from app.services.finding_detectors import (
 from app.services.scan_projections import TERMINAL_SCAN_STATUSES
 
 FINDING_EVALUATOR_VERSION = "finding-evaluator-v2"
-FINDING_DETECTOR_BUNDLE_IDENTITY = "finding-detectors-v2"
+FINDING_DETECTOR_BUNDLE_IDENTITY = "finding-detectors-v3"
 
 
 class DetectorSummary(TypedDict):
@@ -120,6 +121,7 @@ def create_evaluation(db: Session, site_id: int) -> tuple[FindingEvaluation, boo
         {
             "active_page_universe_sha256": universe_hash,
             "detector_bundle_identity": FINDING_DETECTOR_BUNDLE_IDENTITY,
+            "detector_bundle_manifest_sha256": CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
             "evaluator_version": FINDING_EVALUATOR_VERSION,
             "site_id": site_id,
             "source_scan_id": scan.id,

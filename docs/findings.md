@@ -8,9 +8,9 @@ Evidence -> deterministic derivatives -> deterministic Finding evaluation
          -> persistent Findings -> Site Intelligence and workflow -> future AI interpretation
 ```
 
-## V2 Static Contract
+## V3 Detector Bundle Contract
 
-`finding-evaluator-v2` runs the fixed `finding-detectors-v2` bundle over one frozen ordered
+`finding-evaluator-v2` runs the fixed `finding-detectors-v3` bundle over one frozen ordered
 universe of active Site Page resource IDs and one server-selected terminal static Scan. It contains
 exactly these production detectors:
 
@@ -63,11 +63,24 @@ WebResource ID. Scan, snapshot, status, severity, timestamps, and database Findi
 The V1 HTTP payload is preserved byte-for-byte, so V2 continues an existing HTTP Finding rather
 than duplicating it.
 
-The V2 evaluation input fingerprint includes `finding-evaluator-v2`, `finding-detectors-v2`, Site,
-source Scan, and the frozen active-Page-universe checksum. A V2 evaluation can therefore evaluate a
-Scan that previously received a V1 evaluation. Historical terminal V1 evaluations remain readable;
+The current evaluation input fingerprint includes `finding-evaluator-v2`, `finding-detectors-v3`,
+the deterministic detector-manifest checksum, Site, source Scan, and the frozen
+active-Page-universe checksum. A V3 bundle evaluation can therefore evaluate a Scan that previously
+received a V1 or V2 bundle evaluation. Historical terminal evaluations remain readable;
 nonterminal historical evaluations do not execute through newer detector code. Within one bundle,
 an older evidence horizon fails closed after a newer completed evaluation.
+
+The manifest is derived in registry order from each production detector's `finding_type`,
+`detector_identity`, `logical_key_version`, and `subject_kind`, then hashed as canonical JSON with
+SHA-256. The explicit bundle identity remains the primary compatibility contract; the manifest is a
+second deterministic safety boundary, not a replacement for semantic versioning or a hash of source
+code.
+
+Detector semantic changes require a new `detector_identity`. Logical Finding identity changes
+require a new `logical_key_version`. Production detector membership or ordering changes require a
+new `detector_bundle_identity`. Evaluator execution-contract changes require a new
+`evaluator_version`. Reusing any of these semantic identities after changing its contract is a
+compatibility bug, even when implementation code alone changed.
 
 Counts cover detector-subject outcomes. Nine detectors over 100 active Pages produce 900 outcomes,
 while `active_page_count` remains 100. The evaluation checksum hashes the complete deterministic

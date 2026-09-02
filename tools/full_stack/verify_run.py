@@ -267,7 +267,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert finding_evaluation.status == "completed"
         assert finding_evaluation.source_scan_id == lifecycle_scan_id
         assert finding_evaluation.evaluator_version == "finding-evaluator-v2"
-        assert finding_evaluation.detector_bundle_identity == "finding-detectors-v2"
+        assert finding_evaluation.detector_bundle_identity == "finding-detectors-v3"
         assert len(finding_evaluation.detector_summary_json) == 9
         assert finding_evaluation.detector_summary_json["page_noindex"]["detected"] == 1
         assert finding_evaluation.detector_summary_json["page_noindex"]["unknown"] == 0

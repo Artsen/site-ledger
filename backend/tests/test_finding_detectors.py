@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -11,6 +12,8 @@ from app.crawler.url_normalizer import (
 )
 from app.models import ResourceSnapshot, Scan
 from app.services.finding_detectors import (
+    CURRENT_FINDING_DETECTOR_MANIFEST,
+    CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
     CURRENT_FINDING_DETECTORS,
     PAGE_CANONICAL_TARGET_HTTP_ERROR_TYPE,
     PAGE_HTTP_ERROR_TYPE,
@@ -18,6 +21,7 @@ from app.services.finding_detectors import (
     PAGE_NOINDEX_TYPE,
     DetectorContext,
     build_snapshot_url_index,
+    finding_detector_manifest_sha256,
 )
 from app.services.finding_evaluations import finding_fingerprint
 
@@ -275,6 +279,47 @@ def test_general_fingerprint_preserves_exact_v1_http_identity() -> None:
     ) != finding_fingerprint(17, 29)
     assert finding_fingerprint(17, 30) != finding_fingerprint(17, 29)
     assert finding_fingerprint(18, 29) != finding_fingerprint(17, 29)
+
+
+def test_detector_manifest_is_deterministic_and_covers_registry_contract() -> None:
+    assert len(CURRENT_FINDING_DETECTOR_MANIFEST) == len(CURRENT_FINDING_DETECTORS) == 9
+    assert CURRENT_FINDING_DETECTOR_MANIFEST[0] == {
+        "finding_type": "page_http_error",
+        "detector_identity": "page-http-error-v1",
+        "logical_key_version": "page-http-error-key-v1",
+        "subject_kind": "web_resource",
+    }
+    payload = json.dumps(
+        CURRENT_FINDING_DETECTOR_MANIFEST,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode()
+    assert (
+        CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
+        == "8d413eb1d494beb84be11c682d058c9a6ee474beabd4e77fa78be084414b99db"
+    )
+    assert hashlib.sha256(payload).hexdigest() == CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
+    assert (
+        finding_detector_manifest_sha256(CURRENT_FINDING_DETECTORS)
+        == CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
+    )
+
+
+def test_detector_manifest_changes_with_membership_order_or_semantic_identity() -> None:
+    assert (
+        finding_detector_manifest_sha256(CURRENT_FINDING_DETECTORS[:-1])
+        != CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
+    )
+    assert (
+        finding_detector_manifest_sha256(tuple(reversed(CURRENT_FINDING_DETECTORS)))
+        != CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
+    )
+    changed = (
+        replace(CURRENT_FINDING_DETECTORS[0], detector_identity="page-http-error-v2"),
+        *CURRENT_FINDING_DETECTORS[1:],
+    )
+    assert finding_detector_manifest_sha256(changed) != CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
 
 
 @pytest.mark.parametrize(
