@@ -39,6 +39,7 @@ class FindingEvaluation(Base):
     detected_count: Mapped[int] = mapped_column(Integer, default=0)
     clear_count: Mapped[int] = mapped_column(Integer, default=0)
     unknown_count: Mapped[int] = mapped_column(Integer, default=0)
+    detector_summary_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_finding_count: Mapped[int] = mapped_column(Integer, default=0)
     resolved_finding_count: Mapped[int] = mapped_column(Integer, default=0)
     reopened_finding_count: Mapped[int] = mapped_column(Integer, default=0)

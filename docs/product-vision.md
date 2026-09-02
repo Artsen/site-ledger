@@ -42,7 +42,8 @@ The current application implements:
 - Read-only Site Intelligence with independent evidence clocks and explicit coverage denominators.
 - Current-evidence Collection Plans that batch existing native collectors without becoming evidence.
 - Scan, source, Site, and Activity lifecycle management.
-- Persistent deterministic Findings with evidence-linked lifecycle and acknowledgement workflow.
+- Persistent deterministic static Findings for Page HTTP/fetch failures, noindex directives,
+  conflicting indexability, missing titles, canonical defects, and current non-HTML representations.
 
 ## Product Vocabulary
 
@@ -170,10 +171,13 @@ Change History without interpreting those facts as Findings.
 
 Rules, statistics, models, or AI that explain evidence.
 
-The first deterministic Finding evaluator and HTTP-error detector are implemented with persistent
-logical lifecycle and immutable evidence-linked assessments. Additional detector packs, semantic
-analysis, and AI explanations remain future direction. Automated Accessibility and Performance
-collection are evidence domains, not automatically Finding or compliance conclusions.
+The deterministic static Finding evaluator covers Page HTTP/fetch failures, noindex directives,
+indexability conflicts, missing titles, canonical validity/cardinality/observed-target failures,
+and active Pages currently returning non-HTML representations. Per-detector evaluation diagnostics
+make clear and unknown outcomes observable without expanding sparse Finding persistence.
+Cross-domain detector packs, semantic analysis, and AI
+explanations remain future direction. Automated Accessibility and Performance collection are
+evidence domains, not automatically Finding or compliance conclusions.
 
 ### Workflow
 
@@ -184,7 +188,7 @@ investigations, permissions, and richer resolution workflow remain future direct
 ## Roadmap
 
 Planned areas include Resource-body analysis, environment comparisons,
-additional Finding detector packs, performance regression interpretation, analytics
+cross-domain Finding evidence, performance regression interpretation, analytics
 integrations, semantic analysis, and investigation workflow.
 
 New work should preserve the separation between evidence, deterministic comparison, interpretation,
@@ -195,9 +199,9 @@ and workflow. Interpretation must remain traceable to the observations that supp
 - Browser rendering is bounded optional Page evidence, not browser-only crawling or Resource discovery.
 - Cross-Site and environment comparison are not implemented. Same-Site Scan comparison is
   documented in [Deterministic Scan comparisons](scan-comparisons.md).
-- Resource-body storage and analysis, broad Finding detector packs, analytics, semantic embeddings,
-  and AI summaries are not implemented. HTTP-error Findings and Automated Accessibility and
-  Performance evidence collection are current.
+- Resource-body storage and analysis, cross-domain Finding evidence, analytics, semantic embeddings,
+  and AI summaries are not implemented. Static technical/indexability Findings and Automated
+  Accessibility and Performance evidence collection are current.
 - Authenticated crawling is not supported. Private-network crawling is blocked by default and is
   available only through the explicit trusted `allow_private_networks=true` scope setting.
 - Robots.txt enforcement and within-crawl concurrency remain deferred.

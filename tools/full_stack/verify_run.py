@@ -19,7 +19,9 @@ from app.models import (
     BackgroundJob,
     ContentBlob,
     Finding,
+    FindingAssessment,
     FindingEvaluation,
+    FindingEvidenceReference,
     HtmlStructuredContentArtifact,
     HtmlStructuredContentNode,
     RenderedArtifact,
@@ -264,11 +266,36 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert finding_evaluation is not None
         assert finding_evaluation.status == "completed"
         assert finding_evaluation.source_scan_id == lifecycle_scan_id
-        assert finding_evaluation.evaluator_version == "finding-evaluator-v1"
-        assert finding_evaluation.detector_bundle_identity == "finding-detectors-v1"
+        assert finding_evaluation.evaluator_version == "finding-evaluator-v2"
+        assert finding_evaluation.detector_bundle_identity == "finding-detectors-v2"
+        assert len(finding_evaluation.detector_summary_json) == 9
+        assert finding_evaluation.detector_summary_json["page_noindex"]["detected"] == 1
+        assert finding_evaluation.detector_summary_json["page_noindex"]["unknown"] == 0
+        finding = db.get(Finding, int(result["finding_id"]))
+        assert finding is not None
+        assert finding.website_property_id == site.id
+        assert finding.finding_type == "page_noindex"
+        assert finding.logical_key_version == "page-noindex-key-v1"
+        assert finding.condition_state == "detected"
+        assessment = db.get(FindingAssessment, finding.current_assessment_id)
+        assert assessment is not None
+        assert assessment.finding_evaluation_id == finding_evaluation.id
+        assert assessment.outcome == "detected"
+        assert assessment.details_json["detector_identity"] == "page-noindex-v1"
+        finding_references = list(
+            db.scalars(
+                select(FindingEvidenceReference)
+                .where(FindingEvidenceReference.finding_assessment_id == assessment.id)
+                .order_by(FindingEvidenceReference.position)
+            )
+        )
+        assert [(item.role, item.evidence_kind) for item in finding_references] == [
+            ("primary", "resource_snapshot"),
+            ("evaluation_horizon", "scan"),
+        ]
         assert (
             db.scalar(select(func.count(Finding.id)).where(Finding.website_property_id == site.id))
-            == 0
+            == 1
         )
         all_jobs = list(db.scalars(select(BackgroundJob)))
         assert all_jobs
@@ -406,6 +433,8 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "duplicate_current_source_identity_count": 0,
         "duplicate_site_page_identity_count": 0,
         "foreign_key_violation_count": 0,
+        "finding_count": 1,
+        "finding_type": finding.finding_type,
         "render_run_count": db.scalar(select(func.count(RenderRun.id))) or 0,
         "rendered_observation_count": db.scalar(select(func.count(RenderedObservation.id))) or 0,
         "rendered_artifact_blob_count": db.scalar(select(func.count(ArtifactBlob.id))) or 0,

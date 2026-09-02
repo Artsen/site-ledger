@@ -133,6 +133,7 @@ def fixture_page(path: str, version: int) -> str | None:
         return _document(
             "Stable Page",
             "<main><h1>Stable Page</h1><p>This page does not change.</p></main>",
+            head='<meta name="robots" content="noindex">',
         )
     if path == "/new/" and version == 2:
         return _document(

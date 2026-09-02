@@ -3,14 +3,21 @@ export type FindingEvaluation = {
   evaluator_version: string; detector_bundle_identity: string; input_fingerprint_sha256: string;
   evidence_horizon_at: string; active_page_count: number; active_page_universe_sha256: string;
   status: string; detected_count: number; clear_count: number; unknown_count: number;
+  detector_summary_json: Record<string, FindingDetectorSummary>;
   created_finding_count: number; resolved_finding_count: number; reopened_finding_count: number;
   assessment_count: number; evaluation_checksum_sha256: string | null; created_at: string;
   started_at: string | null; finished_at: string | null; failed_at: string | null;
   error_type: string | null; error_message: string | null; background_job_id: number | null;
 };
 
+export type FindingDetectorSummary = {
+  detector_identity: string; detected: number; clear: number; unknown: number;
+  reason_counts: Record<string, number>;
+};
+
 export type Finding = {
   id: number; web_resource_id: number; page_url: string; finding_type: string;
+  finding_label: string;
   logical_key_version: string; fingerprint_sha256: string;
   condition_state: "detected" | "unknown" | "resolved";
   current_severity: "medium" | "high" | null; first_detected_at: string;
