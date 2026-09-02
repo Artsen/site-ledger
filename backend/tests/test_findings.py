@@ -1,3 +1,5 @@
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -21,10 +23,13 @@ from app.models import (
     WebsiteProperty,
 )
 from app.services import background_jobs
+from app.services.finding_detectors import CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
 from app.services.finding_evaluations import (
+    FINDING_DETECTOR_BUNDLE_IDENTITY,
     FindingEvaluationChronologyError,
     create_evaluation,
     execute_evaluation,
+    finding_fingerprint,
 )
 from app.services.findings import get_finding, list_evaluations, list_findings, set_acknowledged
 from app.services.job_handlers import (
@@ -137,6 +142,11 @@ def _job_context(factory, job, lease_token: str) -> JobExecutionContext:
         lease_token=lease_token,
         lease_seconds=30,
     )
+
+
+def _universe_hash(resource_ids: list[int]) -> str:
+    payload = json.dumps(resource_ids, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def test_http_finding_lifecycle_uses_one_identity_and_evidence_time(db_session) -> None:
@@ -298,7 +308,7 @@ def test_noindex_full_lifecycle_preserves_and_clears_acknowledgement(db_session)
     ]
 
 
-def test_v2_continues_http_identity_but_will_not_execute_historical_v1(db_session) -> None:
+def test_v3_continues_http_identity_but_will_not_execute_historical_v1(db_session) -> None:
     site, resource, _page = _site_page(db_session)
     scan, _snapshot = _scan(db_session, site, resource, datetime(2026, 8, 24, tzinfo=UTC), 404)
     legacy = FindingEvaluation(
@@ -330,6 +340,151 @@ def test_v2_continues_http_identity_but_will_not_execute_historical_v1(db_sessio
     db_session.refresh(finding)
     assert finding.fingerprint_sha256 == fingerprint
     assert finding.condition_state == "detected"
+
+
+def test_v3_reevaluates_same_retained_scan_and_preserves_v2_finding_continuity(
+    db_session,
+) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, snapshot = _scan(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 2, 1, tzinfo=UTC),
+        404,
+        page_title=None,
+    )
+    universe_hash = _universe_hash([resource.id])
+    historical_v2 = FindingEvaluation(
+        website_property_id=site.id,
+        source_scan_id=scan.id,
+        evaluator_version="finding-evaluator-v2",
+        detector_bundle_identity="finding-detectors-v2",
+        input_fingerprint_sha256="2" * 64,
+        evidence_horizon_at=scan.finished_at,
+        active_page_count=1,
+        active_page_universe_sha256=universe_hash,
+        active_page_resource_ids_json=[resource.id],
+        status="completed",
+        detected_count=1,
+        clear_count=3,
+    )
+    observed_at = snapshot.fetched_at or scan.finished_at
+    http_finding = Finding(
+        website_property_id=site.id,
+        web_resource_id=resource.id,
+        finding_type="page_http_error",
+        logical_key_version="page-http-error-key-v1",
+        fingerprint_sha256=finding_fingerprint(site.id, resource.id),
+        condition_state="detected",
+        current_severity="medium",
+        first_detected_at=observed_at,
+        last_detected_at=observed_at,
+        last_evaluated_evidence_at=observed_at,
+    )
+    db_session.add_all([historical_v2, http_finding])
+    db_session.flush()
+    historical_assessment = FindingAssessment(
+        finding_id=http_finding.id,
+        finding_evaluation_id=historical_v2.id,
+        outcome="detected",
+        severity="medium",
+        evidence_observed_at=observed_at,
+        details_json={"detector_identity": "page-http-error-v1", "http_status": 404},
+        assessment_sha256="3" * 64,
+    )
+    db_session.add(historical_assessment)
+    db_session.flush()
+    http_finding.current_assessment_id = historical_assessment.id
+    db_session.commit()
+
+    current_v3, created = create_evaluation(db_session, site.id)
+    assert created is True
+    assert current_v3.source_scan_id == historical_v2.source_scan_id == scan.id
+    assert current_v3.active_page_universe_sha256 == historical_v2.active_page_universe_sha256
+    assert current_v3.evaluator_version == "finding-evaluator-v2"
+    assert current_v3.detector_bundle_identity == "finding-detectors-v3"
+    expected_fingerprint_payload = json.dumps(
+        {
+            "active_page_universe_sha256": universe_hash,
+            "detector_bundle_identity": "finding-detectors-v3",
+            "detector_bundle_manifest_sha256": CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
+            "evaluator_version": "finding-evaluator-v2",
+            "site_id": site.id,
+            "source_scan_id": scan.id,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode()
+    assert (
+        current_v3.input_fingerprint_sha256
+        == hashlib.sha256(expected_fingerprint_payload).hexdigest()
+    )
+    execute_evaluation(db_session, current_v3.id)
+    db_session.commit()
+
+    http_rows = list(
+        db_session.scalars(select(Finding).where(Finding.finding_type == "page_http_error"))
+    )
+    assert len(http_rows) == 1
+    assert http_rows[0].id == http_finding.id
+    assert (
+        db_session.query(FindingAssessment)
+        .filter(FindingAssessment.finding_id == http_finding.id)
+        .count()
+        == 2
+    )
+    missing_title = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "page_missing_title")
+    )
+    assert missing_title is not None
+    assert missing_title.id != http_finding.id
+
+    repeated_v3, repeated_created = create_evaluation(db_session, site.id)
+    assert repeated_created is False
+    assert repeated_v3.id == current_v3.id
+    history = list_evaluations(db_session, site.id, 10, 0)
+    assert history is not None
+    assert [item.detector_bundle_identity for item in history.items] == [
+        "finding-detectors-v3",
+        "finding-detectors-v2",
+    ]
+
+
+def test_v3_chronology_ignores_v2_but_blocks_older_pending_v3(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan_a, _snapshot = _scan(db_session, site, resource, datetime(2026, 9, 2, 1, tzinfo=UTC), 404)
+    universe_hash = _universe_hash([resource.id])
+    historical_v2 = FindingEvaluation(
+        website_property_id=site.id,
+        source_scan_id=scan_a.id,
+        evaluator_version="finding-evaluator-v2",
+        detector_bundle_identity="finding-detectors-v2",
+        input_fingerprint_sha256="4" * 64,
+        evidence_horizon_at=scan_a.finished_at,
+        active_page_count=1,
+        active_page_universe_sha256=universe_hash,
+        active_page_resource_ids_json=[resource.id],
+        status="completed",
+    )
+    db_session.add(historical_v2)
+    db_session.flush()
+    pending_v3_a, created = create_evaluation(db_session, site.id)
+    assert created and pending_v3_a.source_scan_id == scan_a.id
+
+    scan_b, _snapshot = _scan(db_session, site, resource, datetime(2026, 9, 2, 2, tzinfo=UTC), 200)
+    v3_b, created = create_evaluation(db_session, site.id)
+    assert created and v3_b.source_scan_id == scan_b.id
+    execute_evaluation(db_session, v3_b.id)
+    db_session.commit()
+
+    with pytest.raises(FindingEvaluationChronologyError):
+        execute_evaluation(db_session, pending_v3_a.id)
+    db_session.rollback()
+    assert historical_v2.status == "completed"
+    assert historical_v2.detector_bundle_identity == "finding-detectors-v2"
+    assert FINDING_DETECTOR_BUNDLE_IDENTITY == "finding-detectors-v3"
 
 
 def test_suppression_and_evidence_deletion_do_not_resolve_or_delete_history(db_session) -> None:
@@ -507,6 +662,62 @@ def test_findings_api_queues_lists_details_and_keeps_acknowledgement_separate(
             f"/api/sites/{site.id}/findings/{finding_id}/unacknowledge"
         ).json()
         assert unacknowledged["acknowledged_at"] is None
+
+
+def test_api_runs_v3_against_same_scan_after_completed_v2_without_recrawl(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, _snapshot = _scan(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 2, 1, tzinfo=UTC),
+        200,
+        page_title=None,
+    )
+    historical_v2 = FindingEvaluation(
+        website_property_id=site.id,
+        source_scan_id=scan.id,
+        evaluator_version="finding-evaluator-v2",
+        detector_bundle_identity="finding-detectors-v2",
+        input_fingerprint_sha256="5" * 64,
+        evidence_horizon_at=scan.finished_at,
+        active_page_count=1,
+        active_page_universe_sha256=_universe_hash([resource.id]),
+        active_page_resource_ids_json=[resource.id],
+        status="completed",
+    )
+    db_session.add(historical_v2)
+    db_session.commit()
+
+    with _findings_client(db_session) as client:
+        queued = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert queued.status_code == 202
+        payload = queued.json()
+        assert payload["id"] != historical_v2.id
+        assert payload["source_scan_id"] == historical_v2.source_scan_id == scan.id
+        assert payload["active_page_universe_sha256"] == (historical_v2.active_page_universe_sha256)
+        assert payload["evaluator_version"] == "finding-evaluator-v2"
+        assert payload["detector_bundle_identity"] == "finding-detectors-v3"
+
+        claimed = background_jobs.claim_next_job(
+            db_session, worker_id="v3-same-scan-worker", lease_seconds=30
+        )
+        assert claimed is not None
+        factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+        FindingEvaluationJobHandler(factory)._execute_blocking(
+            claimed.job,
+            payload["id"],
+            _job_context(factory, claimed.job, claimed.lease_token),
+        )
+        db_session.expire_all()
+        findings = client.get(f"/api/sites/{site.id}/findings").json()
+        assert [item["finding_type"] for item in findings["items"]] == ["page_missing_title"]
+
+        repeated = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert repeated.status_code == 202
+        assert repeated.json()["id"] == payload["id"]
+        assert db_session.query(FindingEvaluation).count() == 2
+        assert db_session.query(Scan).count() == 1
 
 
 def test_manual_product_fixture_exposes_distinct_static_pack_rows_through_worker_and_api(

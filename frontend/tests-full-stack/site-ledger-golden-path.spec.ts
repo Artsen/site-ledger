@@ -281,7 +281,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   const findingEvaluation = await waitForFindingEvaluation(request, site.id, queuedFindingEvaluation.id);
   expect(findingEvaluation.source_scan_id).toBe(scan3Id);
   expect(findingEvaluation.evaluator_version).toBe("finding-evaluator-v2");
-  expect(findingEvaluation.detector_bundle_identity).toBe("finding-detectors-v2");
+  expect(findingEvaluation.detector_bundle_identity).toBe("finding-detectors-v3");
   const findings = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings?limit=50`);
   expect(findings.total).toBe(1);
   expect(findings.items[0].finding_type).toBe("page_noindex");

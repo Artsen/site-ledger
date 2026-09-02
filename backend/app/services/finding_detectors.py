@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -512,6 +514,36 @@ CURRENT_FINDING_DETECTORS = (
         "web_resource",
         _non_html_representation,
     ),
+)
+
+
+def finding_detector_manifest(
+    detectors: Sequence[FindingDetector],
+) -> tuple[dict[str, str], ...]:
+    return tuple(
+        {
+            "finding_type": detector.finding_type,
+            "detector_identity": detector.detector_identity,
+            "logical_key_version": detector.logical_key_version,
+            "subject_kind": detector.subject_kind,
+        }
+        for detector in detectors
+    )
+
+
+def finding_detector_manifest_sha256(detectors: Sequence[FindingDetector]) -> str:
+    payload = json.dumps(
+        finding_detector_manifest(detectors),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+CURRENT_FINDING_DETECTOR_MANIFEST = finding_detector_manifest(CURRENT_FINDING_DETECTORS)
+CURRENT_FINDING_DETECTOR_MANIFEST_SHA256 = finding_detector_manifest_sha256(
+    CURRENT_FINDING_DETECTORS
 )
 
 
