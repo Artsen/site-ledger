@@ -30,6 +30,7 @@ from app.schemas.findings import (
     FindingSeverity,
     FindingState,
 )
+from app.services.finding_detectors import FINDING_TYPE_LABELS
 
 
 def list_findings(
@@ -272,6 +273,9 @@ def _list_item(
         web_resource_id=finding.web_resource_id,
         page_url=url,
         finding_type=finding.finding_type,
+        finding_label=FINDING_TYPE_LABELS.get(
+            finding.finding_type, finding.finding_type.replace("_", " ").title()
+        ),
         logical_key_version=finding.logical_key_version,
         fingerprint_sha256=finding.fingerprint_sha256,
         condition_state=cast(FindingState, finding.condition_state),

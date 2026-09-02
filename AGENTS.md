@@ -89,10 +89,12 @@ Implemented capabilities include:
   Render, Performance, Accessibility, Structured Content, Source, and Comparison provenance.
 - Current-evidence Collection Plans for Performance, Accessibility, Render, and Structured Content,
   with deterministic target checksums, fixed native batching, cancellation, and Plan history.
-- First-class deterministic HTTP-error Findings with stable logical identity, immutable
-  assessments, evidence chronology, and acknowledgement workflow.
+- First-class deterministic static Page Findings for HTTP/fetch failures, noindex directives,
+  conflicting indexability, missing titles, canonical validity/cardinality/target failures, and
+  current non-HTML representations. Evaluation history persists complete per-detector diagnostics
+  even though clean and unknown logical outcomes remain sparsely persisted.
 
-Additional Finding detector packs and investigation records, GA4/Search Console, section-level comparison,
+Cross-domain Finding evidence and investigation records, GA4/Search Console, section-level comparison,
 structured-content full-text search, Resource/PDF body extraction,
 rendered-DOM structured extraction, environment or cross-Site comparison, scheduling and
 notifications, embeddings, RAG, and semantic/LLM interpretation are future areas. Describe them as

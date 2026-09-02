@@ -8,6 +8,14 @@ FindingSeverity = Literal["medium", "high"]
 AssessmentOutcome = Literal["detected", "clear", "unknown"]
 
 
+class FindingDetectorSummary(BaseModel):
+    detector_identity: str
+    detected: int
+    clear: int
+    unknown: int
+    reason_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class FindingEvaluationRead(BaseModel):
     id: int
     website_property_id: int
@@ -22,6 +30,7 @@ class FindingEvaluationRead(BaseModel):
     detected_count: int
     clear_count: int
     unknown_count: int
+    detector_summary_json: dict[str, FindingDetectorSummary] = Field(default_factory=dict)
     created_finding_count: int
     resolved_finding_count: int
     reopened_finding_count: int
@@ -50,6 +59,7 @@ class FindingListItem(BaseModel):
     web_resource_id: int
     page_url: str
     finding_type: str
+    finding_label: str
     logical_key_version: str
     fingerprint_sha256: str
     condition_state: FindingState

@@ -280,14 +280,20 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   const queuedFindingEvaluation = await postJson(request, `${apiUrl}/api/sites/${site.id}/findings/evaluations`);
   const findingEvaluation = await waitForFindingEvaluation(request, site.id, queuedFindingEvaluation.id);
   expect(findingEvaluation.source_scan_id).toBe(scan3Id);
-  expect(findingEvaluation.evaluator_version).toBe("finding-evaluator-v1");
-  expect(findingEvaluation.detector_bundle_identity).toBe("finding-detectors-v1");
+  expect(findingEvaluation.evaluator_version).toBe("finding-evaluator-v2");
+  expect(findingEvaluation.detector_bundle_identity).toBe("finding-detectors-v2");
   const findings = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings?limit=50`);
-  expect(findings.total).toBe(0);
+  expect(findings.total).toBe(1);
+  expect(findings.items[0].finding_type).toBe("page_noindex");
+  expect(findings.items[0].finding_label).toBe("Page is noindex");
+  const findingDetail = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings/${findings.items[0].id}`);
+  const findingAssessments = findingDetail.assessments as Json[];
+  expect((findingAssessments[0].details_json as Json).detector_identity).toBe("page-noindex-v1");
+  expect((findingAssessments[0].evidence_references as Json[]).map((item) => item.role)).toEqual(["primary", "evaluation_horizon"]);
   const intelligenceWithFindings = await getJson(request, `${apiUrl}/api/sites/${site.id}/intelligence`);
   const findingIntelligence = intelligenceWithFindings.findings as Json;
   expect(findingIntelligence.latest_evaluation_id).toBe(findingEvaluation.id);
-  expect(findingIntelligence.detected).toBe(0);
+  expect(findingIntelligence.detected).toBe(1);
   expect((intelligenceWithFindings.activity as Record<string, number>).active_job_count).toBe(0);
 
   await page.goto(`/sites/${site.id}/comparisons?comparison_id=${comparisonId}`);
@@ -319,6 +325,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     lifecycle_source_id: source.id,
     comparison_id: comparisonId,
     finding_evaluation_id: findingEvaluation.id,
+    finding_id: findings.items[0].id,
     deleted_scan_render_run_id: scan1RenderRun.id,
     standalone_render_run_id: completedStandaloneRenderRun.id,
     rerender_render_run_id: completedRerenderRun.id,

@@ -5,8 +5,9 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TypedDict
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -19,13 +20,27 @@ from app.models import (
     SitePage,
     WebsiteProperty,
 )
+from app.services.finding_detectors import (
+    CURRENT_FINDING_DETECTORS,
+    PAGE_HTTP_ERROR_KEY_VERSION,
+    PAGE_HTTP_ERROR_TYPE,
+    DetectorContext,
+    DetectorResult,
+    FindingDetector,
+    build_snapshot_url_index,
+)
 from app.services.scan_projections import TERMINAL_SCAN_STATUSES
 
-FINDING_EVALUATOR_VERSION = "finding-evaluator-v1"
-FINDING_DETECTOR_BUNDLE_IDENTITY = "finding-detectors-v1"
-PAGE_HTTP_ERROR_DETECTOR_IDENTITY = "page-http-error-v1"
-PAGE_HTTP_ERROR_TYPE = "page_http_error"
-PAGE_HTTP_ERROR_KEY_VERSION = "page-http-error-key-v1"
+FINDING_EVALUATOR_VERSION = "finding-evaluator-v2"
+FINDING_DETECTOR_BUNDLE_IDENTITY = "finding-detectors-v2"
+
+
+class DetectorSummary(TypedDict):
+    detector_identity: str
+    detected: int
+    clear: int
+    unknown: int
+    reason_counts: dict[str, int]
 
 
 class FindingEvaluationChronologyError(RuntimeError):
@@ -43,6 +58,15 @@ class FindingEvaluationResult:
     reopened_findings: int
     assessments: int
     checksum_sha256: str
+    detector_summary: dict[str, DetectorSummary]
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    resource_id: int
+    detector: FindingDetector
+    result: DetectorResult
+    observed_at: datetime
 
 
 def _hash(value: object) -> str:
@@ -50,13 +74,20 @@ def _hash(value: object) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def finding_fingerprint(site_id: int, resource_id: int) -> str:
+def finding_fingerprint(
+    site_id: int,
+    resource_id: int,
+    *,
+    finding_type: str = PAGE_HTTP_ERROR_TYPE,
+    logical_key_version: str = PAGE_HTTP_ERROR_KEY_VERSION,
+    subject_kind: str = "web_resource",
+) -> str:
     return _hash(
         {
-            "finding_type": PAGE_HTTP_ERROR_TYPE,
-            "logical_key_version": PAGE_HTTP_ERROR_KEY_VERSION,
+            "finding_type": finding_type,
+            "logical_key_version": logical_key_version,
             "site_id": site_id,
-            "subject_kind": "web_resource",
+            "subject_kind": subject_kind,
             "web_resource_id": resource_id,
         }
     )
@@ -127,6 +158,11 @@ def execute_evaluation(
         raise ValueError("Finding evaluation not found.")
     if evaluation.status == "completed":
         return _result(evaluation)
+    if (
+        evaluation.evaluator_version != FINDING_EVALUATOR_VERSION
+        or evaluation.detector_bundle_identity != FINDING_DETECTOR_BUNDLE_IDENTITY
+    ):
+        raise ValueError("Historical Finding evaluations cannot run under the current evaluator.")
     if evaluation.source_scan_id is None:
         raise ValueError("The source Scan is no longer retained.")
     newer = db.scalar(
@@ -143,93 +179,153 @@ def execute_evaluation(
         raise FindingEvaluationChronologyError(
             "A newer evidence horizon has already been applied to this Site."
         )
+    scan = db.get(Scan, evaluation.source_scan_id)
+    if scan is None:
+        raise ValueError("The source Scan is no longer retained.")
     if check_ownership:
         check_ownership()
     evaluation.status = "running"
     evaluation.started_at = datetime.now(UTC)
 
-    resource_ids = list(evaluation.active_page_resource_ids_json)
-    snapshots: dict[int, ResourceSnapshot] = {}
-    for chunk in _chunks(resource_ids, 500):
-        rows = db.scalars(
-            select(ResourceSnapshot)
-            .where(
-                ResourceSnapshot.scan_id == evaluation.source_scan_id,
-                ResourceSnapshot.resource_id.in_(chunk),
-            )
-            .order_by(ResourceSnapshot.id.desc())
-        )
-        for snapshot_row in rows:
-            snapshots.setdefault(snapshot_row.resource_id, snapshot_row)
+    all_snapshots: dict[int, ResourceSnapshot] = {}
+    for snapshot in db.scalars(
+        select(ResourceSnapshot)
+        .where(ResourceSnapshot.scan_id == evaluation.source_scan_id)
+        .order_by(ResourceSnapshot.id.desc())
+    ):
+        all_snapshots.setdefault(snapshot.resource_id, snapshot)
+    context = DetectorContext(
+        scan=scan,
+        snapshots_by_resource_id=all_snapshots,
+        snapshots_by_normalized_url=build_snapshot_url_index(scan, all_snapshots),
+    )
+    detector_keys = [
+        (detector.finding_type, detector.logical_key_version)
+        for detector in CURRENT_FINDING_DETECTORS
+    ]
     existing = {
-        item.web_resource_id: item
+        (item.finding_type, item.logical_key_version, item.web_resource_id): item
         for item in db.scalars(
             select(Finding).where(
                 Finding.website_property_id == evaluation.website_property_id,
-                Finding.finding_type == PAGE_HTTP_ERROR_TYPE,
-                Finding.logical_key_version == PAGE_HTTP_ERROR_KEY_VERSION,
+                or_(
+                    *[
+                        (
+                            (Finding.finding_type == finding_type)
+                            & (Finding.logical_key_version == key_version)
+                        )
+                        for finding_type, key_version in detector_keys
+                    ]
+                ),
             )
         )
     }
 
-    candidates: list[tuple[int, str, str | None, datetime, ResourceSnapshot | None]] = []
     counts = {"detected": 0, "clear": 0, "unknown": 0}
+    detector_summary: dict[str, DetectorSummary] = {
+        detector.finding_type: {
+            "detector_identity": detector.detector_identity,
+            "detected": 0,
+            "clear": 0,
+            "unknown": 0,
+            "reason_counts": {},
+        }
+        for detector in CURRENT_FINDING_DETECTORS
+    }
+    candidates: list[_Candidate] = []
+    outcome_hashes: list[str] = []
     new_findings: list[Finding] = []
-    for resource_id in resource_ids:
-        candidate_snapshot = snapshots.get(resource_id)
-        outcome, severity = _classify(candidate_snapshot)
-        counts[outcome] += 1
-        finding = existing.get(resource_id)
-        if finding is None and outcome != "detected":
-            continue
+    for resource_id in evaluation.active_page_resource_ids_json:
+        subject_snapshot = all_snapshots.get(resource_id)
         observed_at = (
-            candidate_snapshot.fetched_at
-            if candidate_snapshot is not None and candidate_snapshot.fetched_at is not None
+            subject_snapshot.fetched_at
+            if subject_snapshot is not None and subject_snapshot.fetched_at is not None
             else evaluation.evidence_horizon_at
         )
-        if finding is None:
-            finding = Finding(
-                website_property_id=evaluation.website_property_id,
-                web_resource_id=resource_id,
-                finding_type=PAGE_HTTP_ERROR_TYPE,
-                logical_key_version=PAGE_HTTP_ERROR_KEY_VERSION,
-                fingerprint_sha256=finding_fingerprint(evaluation.website_property_id, resource_id),
-                condition_state="detected",
-                current_severity=severity,
-                first_detected_at=observed_at,
-                last_detected_at=observed_at,
-                last_evaluated_evidence_at=observed_at,
+        for detector in CURRENT_FINDING_DETECTORS:
+            detector_result = detector.evaluate(subject_snapshot, context)
+            counts[detector_result.outcome] += 1
+            summary = detector_summary[detector.finding_type]
+            summary[detector_result.outcome] += 1
+            if detector_result.reason_code:
+                reason_counts = summary["reason_counts"]
+                reason_counts[detector_result.reason_code] = (
+                    reason_counts.get(detector_result.reason_code, 0) + 1
+                )
+            outcome_hashes.append(
+                _hash(
+                    {
+                        "details": detector_result.details,
+                        "detector_identity": detector.detector_identity,
+                        "evidence": [
+                            {
+                                "resource_snapshot_id": item.snapshot.id,
+                                "role": item.role,
+                            }
+                            for item in detector_result.evidence
+                        ],
+                        "outcome": detector_result.outcome,
+                        "resource_id": resource_id,
+                        "severity": detector_result.severity,
+                    }
+                )
             )
-            db.add(finding)
-            new_findings.append(finding)
-            existing[resource_id] = finding
-        candidates.append((resource_id, outcome, severity, observed_at, candidate_snapshot))
+            identity = (detector.finding_type, detector.logical_key_version, resource_id)
+            finding = existing.get(identity)
+            if finding is None and detector_result.outcome != "detected":
+                continue
+            if finding is None:
+                finding = Finding(
+                    website_property_id=evaluation.website_property_id,
+                    web_resource_id=resource_id,
+                    finding_type=detector.finding_type,
+                    logical_key_version=detector.logical_key_version,
+                    fingerprint_sha256=finding_fingerprint(
+                        evaluation.website_property_id,
+                        resource_id,
+                        finding_type=detector.finding_type,
+                        logical_key_version=detector.logical_key_version,
+                        subject_kind=detector.subject_kind,
+                    ),
+                    condition_state="detected",
+                    current_severity=detector_result.severity,
+                    first_detected_at=observed_at,
+                    last_detected_at=observed_at,
+                    last_evaluated_evidence_at=observed_at,
+                )
+                db.add(finding)
+                new_findings.append(finding)
+                existing[identity] = finding
+            candidates.append(_Candidate(resource_id, detector, detector_result, observed_at))
 
     if check_ownership:
         check_ownership()
     db.flush()
     resolved = 0
     reopened = 0
-    assessment_hashes: list[str] = []
-    assessments: list[tuple[FindingAssessment, Finding, ResourceSnapshot | None]] = []
+    assessments: list[tuple[FindingAssessment, _Candidate]] = []
     new_ids = {item.id for item in new_findings}
-    for resource_id, outcome, severity, observed_at, candidate_snapshot in candidates:
-        finding = existing[resource_id]
+    for candidate in candidates:
+        identity = (
+            candidate.detector.finding_type,
+            candidate.detector.logical_key_version,
+            candidate.resource_id,
+        )
+        finding = existing[identity]
         prior_state = finding.condition_state
         prior_acknowledged_at = finding.acknowledged_at
         is_new = finding.id in new_ids
         is_reopen = (
             not is_new
-            and outcome == "detected"
+            and candidate.result.outcome == "detected"
             and finding.resolved_at is not None
             and finding.resolved_at >= finding.last_detected_at
         )
         details = {
-            "detector_identity": PAGE_HTTP_ERROR_DETECTOR_IDENTITY,
-            "fetch_state": candidate_snapshot.fetch_state if candidate_snapshot else None,
-            "http_status": candidate_snapshot.http_status if candidate_snapshot else None,
+            **candidate.result.details,
+            "detector_identity": candidate.detector.detector_identity,
             "source_scan_id": evaluation.source_scan_id,
-            "transition": f"{prior_state}->{_state_for_outcome(outcome)}",
+            "transition": (f"{prior_state}->{_state_for_outcome(candidate.result.outcome)}"),
         }
         if is_reopen and prior_acknowledged_at is not None:
             details["prior_acknowledged_at"] = prior_acknowledged_at.isoformat()
@@ -237,63 +333,69 @@ def execute_evaluation(
             {
                 "details": details,
                 "evaluation_fingerprint": evaluation.input_fingerprint_sha256,
-                "evidence_observed_at": observed_at.isoformat(),
+                "evidence_observed_at": candidate.observed_at.isoformat(),
                 "finding_fingerprint": finding.fingerprint_sha256,
-                "outcome": outcome,
-                "severity": severity,
+                "outcome": candidate.result.outcome,
+                "severity": candidate.result.severity,
             }
         )
         assessment = FindingAssessment(
             finding_id=finding.id,
             finding_evaluation_id=evaluation.id,
-            outcome=outcome,
-            severity=severity,
-            evidence_observed_at=observed_at,
+            outcome=candidate.result.outcome,
+            severity=candidate.result.severity,
+            evidence_observed_at=candidate.observed_at,
             details_json=details,
             assessment_sha256=assessment_hash,
         )
         db.add(assessment)
-        assessments.append((assessment, finding, candidate_snapshot))
-        assessment_hashes.append(assessment_hash)
+        assessments.append((assessment, candidate))
 
-        finding.last_evaluated_evidence_at = observed_at
-        if outcome == "detected":
+        finding.last_evaluated_evidence_at = candidate.observed_at
+        if candidate.result.outcome == "detected":
             finding.condition_state = "detected"
-            finding.current_severity = severity
-            finding.last_detected_at = observed_at
+            finding.current_severity = candidate.result.severity
+            finding.last_detected_at = candidate.observed_at
             if is_reopen:
-                finding.reopened_at = observed_at
+                finding.reopened_at = candidate.observed_at
                 finding.acknowledged_at = None
                 reopened += 1
-        elif outcome == "clear":
+        elif candidate.result.outcome == "clear":
             finding.condition_state = "resolved"
             finding.current_severity = None
             if prior_state != "resolved":
-                finding.resolved_at = observed_at
+                finding.resolved_at = candidate.observed_at
                 resolved += 1
         else:
             finding.condition_state = "unknown"
             finding.current_severity = None
 
     db.flush()
-    for assessment, finding, evidence_snapshot in assessments:
+    for assessment, candidate in assessments:
+        finding = existing[
+            (
+                candidate.detector.finding_type,
+                candidate.detector.logical_key_version,
+                candidate.resource_id,
+            )
+        ]
         finding.current_assessment_id = assessment.id
-        if evidence_snapshot is not None:
+        for position, item in enumerate(candidate.result.evidence):
             db.add(
                 FindingEvidenceReference(
                     finding_assessment_id=assessment.id,
-                    position=0,
-                    role="primary",
+                    position=position,
+                    role=item.role,
                     evidence_kind="resource_snapshot",
-                    evidence_id=evidence_snapshot.id,
-                    evidence_observed_at=assessment.evidence_observed_at,
-                    metadata_json={"resource_id": evidence_snapshot.resource_id},
+                    evidence_id=item.snapshot.id,
+                    evidence_observed_at=(item.snapshot.fetched_at or candidate.observed_at),
+                    metadata_json={"resource_id": item.snapshot.resource_id},
                 )
             )
         db.add(
             FindingEvidenceReference(
                 finding_assessment_id=assessment.id,
-                position=1 if evidence_snapshot is not None else 0,
+                position=len(candidate.result.evidence),
                 role="evaluation_horizon",
                 evidence_kind="scan",
                 evidence_id=evaluation.source_scan_id,
@@ -302,15 +404,17 @@ def execute_evaluation(
             )
         )
 
-    checksum = _hash(sorted(assessment_hashes))
     evaluation.detected_count = counts["detected"]
     evaluation.clear_count = counts["clear"]
     evaluation.unknown_count = counts["unknown"]
+    evaluation.detector_summary_json = detector_summary
     evaluation.created_finding_count = len(new_findings)
     evaluation.resolved_finding_count = resolved
     evaluation.reopened_finding_count = reopened
     evaluation.assessment_count = len(assessments)
-    evaluation.evaluation_checksum_sha256 = checksum
+    evaluation.evaluation_checksum_sha256 = _hash(
+        {"detector_summary": detector_summary, "outcomes": sorted(outcome_hashes)}
+    )
     evaluation.status = "completed"
     evaluation.finished_at = datetime.now(UTC)
     if check_ownership:
@@ -340,22 +444,8 @@ def mark_evaluation_terminal(
     evaluation.error_message = error_message
 
 
-def _classify(snapshot: ResourceSnapshot | None) -> tuple[str, str | None]:
-    if snapshot is None or snapshot.fetch_state != "fetched" or snapshot.http_status is None:
-        return "unknown", None
-    if 500 <= snapshot.http_status <= 599:
-        return "detected", "high"
-    if 400 <= snapshot.http_status <= 499:
-        return "detected", "medium"
-    return "clear", None
-
-
 def _state_for_outcome(outcome: str) -> str:
     return {"detected": "detected", "clear": "resolved", "unknown": "unknown"}[outcome]
-
-
-def _chunks(values: list[int], size: int) -> list[list[int]]:
-    return [values[index : index + size] for index in range(0, len(values), size)]
 
 
 def _result(evaluation: FindingEvaluation) -> FindingEvaluationResult:
@@ -369,4 +459,5 @@ def _result(evaluation: FindingEvaluation) -> FindingEvaluationResult:
         reopened_findings=evaluation.reopened_finding_count,
         assessments=evaluation.assessment_count,
         checksum_sha256=evaluation.evaluation_checksum_sha256 or "",
+        detector_summary=evaluation.detector_summary_json or {},
     )

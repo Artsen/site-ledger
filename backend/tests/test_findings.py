@@ -62,7 +62,23 @@ def _site_page(db):
     return site, resource, page
 
 
-def _scan(db, site, resource, moment, status, fetch_state="fetched"):
+def _scan(
+    db,
+    site,
+    resource,
+    moment,
+    status,
+    fetch_state="fetched",
+    *,
+    meta_robots=None,
+    response_headers=None,
+    canonical_url=None,
+    page_title="Example page",
+    parsed_head_json=None,
+    representation_kind="html_page",
+    error_type=None,
+    error_message=None,
+):
     scan = Scan(
         website_property_id=site.id,
         starting_url=site.base_url,
@@ -81,6 +97,14 @@ def _scan(db, site, resource, moment, status, fetch_state="fetched"):
         crawl_depth=0,
         fetched_at=moment - timedelta(minutes=5),
         fetch_state=fetch_state,
+        meta_robots=meta_robots,
+        response_headers=response_headers,
+        canonical_url=canonical_url,
+        page_title=page_title,
+        parsed_head_json={"links": []} if parsed_head_json is None else parsed_head_json,
+        representation_kind=representation_kind,
+        error_type=error_type,
+        error_message=error_message,
     )
     db.add(snapshot)
     db.flush()
@@ -174,6 +198,140 @@ def test_clean_and_unknown_pages_without_history_create_no_rows_and_exact_input_
     assert db_session.query(FindingAssessment).count() == 0
 
 
+def test_multi_detector_counts_identity_and_sparse_persistence(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 8, 24, tzinfo=UTC),
+        404,
+        meta_robots="index",
+        response_headers={"x-robots-tag": "noindex"},
+    )
+    evaluation, result = _evaluate(db_session, site)
+
+    findings = list(db_session.scalars(select(Finding).order_by(Finding.finding_type)))
+    assert [item.finding_type for item in findings] == [
+        "page_http_error",
+        "page_indexability_conflict",
+        "page_noindex",
+    ]
+    assert len({item.fingerprint_sha256 for item in findings}) == 3
+    assert (result.detected, result.clear, result.unknown) == (3, 6, 0)
+    assert evaluation.active_page_count == 1
+    assert evaluation.assessment_count == 3
+    assert evaluation.detector_summary_json["page_http_error"] == {
+        "detector_identity": "page-http-error-v1",
+        "detected": 1,
+        "clear": 0,
+        "unknown": 0,
+        "reason_counts": {},
+    }
+    assert len(evaluation.detector_summary_json) == 9
+    assert db_session.query(FindingAssessment).count() == 3
+
+
+def test_detector_summary_persists_sparse_unknown_diagnostics(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 8, 24, tzinfo=UTC),
+        None,
+        "failed",
+        error_type="connection_timeout",
+        error_message="Timed out",
+    )
+    evaluation, result = _evaluate(db_session, site)
+    assert result.detector_summary == evaluation.detector_summary_json
+    assert evaluation.detector_summary_json["page_static_fetch_failure"]["detected"] == 1
+    assert evaluation.detector_summary_json["page_missing_title"] == {
+        "detector_identity": "page-missing-title-v1",
+        "detected": 0,
+        "clear": 0,
+        "unknown": 1,
+        "reason_counts": {"subject_fetch_unusable": 1},
+    }
+    assert evaluation.detected_count == 1
+    assert db_session.query(Finding).count() == 1
+
+
+def test_noindex_full_lifecycle_preserves_and_clears_acknowledgement(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    start = datetime(2026, 8, 24, 9, tzinfo=UTC)
+    _scan(db_session, site, resource, start, 200, meta_robots="noindex")
+    _evaluate(db_session, site)
+    finding = db_session.scalar(select(Finding).where(Finding.finding_type == "page_noindex"))
+    assert finding is not None and finding.condition_state == "detected"
+
+    _scan(db_session, site, resource, start + timedelta(hours=1), None, "failed")
+    _evaluate(db_session, site)
+    db_session.refresh(finding)
+    assert finding.condition_state == "unknown" and finding.resolved_at is None
+
+    _scan(db_session, site, resource, start + timedelta(hours=2), 200, meta_robots="index")
+    _evaluate(db_session, site)
+    assert set_acknowledged(db_session, site.id, finding.id, True).acknowledged_at is not None
+    db_session.refresh(finding)
+    assert finding.condition_state == "resolved" and finding.acknowledged_at is not None
+
+    _scan(db_session, site, resource, start + timedelta(hours=3), 200, meta_robots="noindex")
+    _evaluate(db_session, site)
+    db_session.refresh(finding)
+    assert finding.condition_state == "detected"
+    assert finding.reopened_at == start + timedelta(hours=3, minutes=-5)
+    assert finding.acknowledged_at is None
+    assessments = list(
+        db_session.scalars(
+            select(FindingAssessment)
+            .where(FindingAssessment.finding_id == finding.id)
+            .order_by(FindingAssessment.id)
+        )
+    )
+    assert [item.outcome for item in assessments] == [
+        "detected",
+        "unknown",
+        "clear",
+        "detected",
+    ]
+
+
+def test_v2_continues_http_identity_but_will_not_execute_historical_v1(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, _snapshot = _scan(db_session, site, resource, datetime(2026, 8, 24, tzinfo=UTC), 404)
+    legacy = FindingEvaluation(
+        website_property_id=site.id,
+        source_scan_id=scan.id,
+        evaluator_version="finding-evaluator-v1",
+        detector_bundle_identity="finding-detectors-v1",
+        input_fingerprint_sha256="1" * 64,
+        evidence_horizon_at=scan.finished_at,
+        active_page_count=1,
+        active_page_universe_sha256="2" * 64,
+        active_page_resource_ids_json=[resource.id],
+        status="queued",
+    )
+    db_session.add(legacy)
+    db_session.commit()
+
+    current, created = create_evaluation(db_session, site.id)
+    assert created
+    execute_evaluation(db_session, current.id)
+    db_session.commit()
+    finding = db_session.scalar(select(Finding).where(Finding.finding_type == "page_http_error"))
+    assert finding is not None
+    fingerprint = finding.fingerprint_sha256
+
+    with pytest.raises(ValueError, match="Historical Finding evaluations"):
+        execute_evaluation(db_session, legacy.id)
+    db_session.rollback()
+    db_session.refresh(finding)
+    assert finding.fingerprint_sha256 == fingerprint
+    assert finding.condition_state == "detected"
+
+
 def test_suppression_and_evidence_deletion_do_not_resolve_or_delete_history(db_session) -> None:
     site, resource, page = _site_page(db_session)
     scan, _snapshot = _scan(db_session, site, resource, datetime(2026, 8, 24, tzinfo=UTC), 404)
@@ -230,6 +388,69 @@ def test_invalid_typed_evidence_pointer_is_rejected_by_service_contract(db_sessi
     assert {item.evidence_kind for item in references} == {"resource_snapshot", "scan"}
 
 
+def test_canonical_finding_retains_ordered_subject_target_and_scan_evidence(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    target = WebResource(
+        resource_type="page",
+        normalized_url="https://example.test/canonical-target",
+        scheme="https",
+        host="example.test",
+        path="/canonical-target",
+        query="",
+    )
+    db_session.add(target)
+    db_session.flush()
+    moment = datetime(2026, 8, 24, tzinfo=UTC)
+    scan, subject_snapshot = _scan(
+        db_session,
+        site,
+        resource,
+        moment,
+        200,
+        canonical_url=target.normalized_url,
+    )
+    target_snapshot = ResourceSnapshot(
+        scan_id=scan.id,
+        resource_id=target.id,
+        requested_url=target.normalized_url,
+        final_url=target.normalized_url,
+        http_status=404,
+        crawl_depth=1,
+        fetched_at=moment - timedelta(minutes=4),
+        fetch_state="fetched",
+    )
+    db_session.add(target_snapshot)
+    db_session.flush()
+
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "page_canonical_target_http_error")
+    )
+    assert finding is not None and finding.web_resource_id == resource.id
+    assessment = db_session.get(FindingAssessment, finding.current_assessment_id)
+    assert assessment is not None
+    references = list(
+        db_session.scalars(
+            select(FindingEvidenceReference)
+            .where(FindingEvidenceReference.finding_assessment_id == assessment.id)
+            .order_by(FindingEvidenceReference.position)
+        )
+    )
+    assert [(item.role, item.evidence_kind, item.evidence_id) for item in references] == [
+        ("primary", "resource_snapshot", subject_snapshot.id),
+        ("canonical_target", "resource_snapshot", target_snapshot.id),
+        ("evaluation_horizon", "scan", scan.id),
+    ]
+    detail = get_finding(db_session, site.id, finding.id)
+    assert detail is not None
+    assert detail.finding_label == "Canonical target HTTP error"
+    assert [item.role for item in detail.assessments[0].evidence_references] == [
+        "primary",
+        "canonical_target",
+        "evaluation_horizon",
+    ]
+
+
 def test_findings_api_queues_lists_details_and_keeps_acknowledgement_separate(
     db_session,
 ) -> None:
@@ -275,6 +496,7 @@ def test_findings_api_queues_lists_details_and_keeps_acknowledgement_separate(
 
         listing = client.get(f"/api/sites/{site.id}/findings").json()
         assert listing["total"] == 1
+        assert listing["items"][0]["finding_label"] == "Page HTTP error"
         finding_id = listing["items"][0]["id"]
         detail = client.get(f"/api/sites/{site.id}/findings/{finding_id}").json()
         assert detail["assessments"][0]["evidence_references"][0]["retained"] is True
@@ -287,11 +509,268 @@ def test_findings_api_queues_lists_details_and_keeps_acknowledgement_separate(
         assert unacknowledged["acknowledged_at"] is None
 
 
+def test_manual_product_fixture_exposes_distinct_static_pack_rows_through_worker_and_api(
+    db_session,
+) -> None:
+    site, http_resource, _page = _site_page(db_session)
+    fixture_specs = [
+        ("fetch-failure", {}),
+        ("noindex", {}),
+        ("missing-title", {}),
+        ("invalid-canonical", {}),
+        ("multiple-canonicals", {}),
+        ("broken-canonical", {}),
+    ]
+    resources = {"http-error": http_resource}
+    for path, _config in fixture_specs:
+        resource = WebResource(
+            resource_type="page",
+            normalized_url=f"https://example.test/{path}",
+            scheme="https",
+            host="example.test",
+            path=f"/{path}",
+            query="",
+        )
+        db_session.add(resource)
+        db_session.flush()
+        db_session.add(SitePage(website_property_id=site.id, resource_id=resource.id))
+        resources[path] = resource
+    target = WebResource(
+        resource_type="page",
+        normalized_url="https://example.test/canonical-target",
+        scheme="https",
+        host="example.test",
+        path="/canonical-target",
+        query="",
+    )
+    db_session.add(target)
+    db_session.flush()
+    moment = datetime(2026, 9, 1, 12, tzinfo=UTC)
+    scan = Scan(
+        website_property_id=site.id,
+        starting_url=site.base_url,
+        status="completed",
+        scope_config={},
+        created_at=moment,
+        finished_at=moment,
+    )
+    db_session.add(scan)
+    db_session.flush()
+
+    def add_snapshot(path: str, **values) -> None:
+        resource = resources[path]
+        defaults = {
+            "scan_id": scan.id,
+            "resource_id": resource.id,
+            "requested_url": resource.normalized_url,
+            "final_url": resource.normalized_url,
+            "http_status": 200,
+            "crawl_depth": 0,
+            "fetched_at": moment - timedelta(minutes=5),
+            "fetch_state": "fetched",
+            "page_title": "Fixture page",
+            "representation_kind": "html_page",
+            "parsed_head_json": {"links": []},
+        }
+        defaults.update(values)
+        db_session.add(ResourceSnapshot(**defaults))
+
+    add_snapshot("http-error", http_status=404)
+    add_snapshot(
+        "fetch-failure",
+        final_url=None,
+        http_status=None,
+        fetch_state="failed",
+        error_type="connection_timeout",
+        error_message="Connection timed out",
+        representation_kind=None,
+        page_title=None,
+        parsed_head_json=None,
+    )
+    add_snapshot("noindex", meta_robots="noindex")
+    add_snapshot("missing-title", page_title="  ")
+    add_snapshot("invalid-canonical", canonical_url="http://[invalid")
+    add_snapshot(
+        "multiple-canonicals",
+        canonical_url="/two",
+        parsed_head_json={
+            "links": [
+                {"rel": "canonical", "href": "/one"},
+                {"rel": "alternate CANONICAL", "href": "/two"},
+            ]
+        },
+    )
+    add_snapshot("broken-canonical", canonical_url=target.normalized_url)
+    db_session.add(
+        ResourceSnapshot(
+            scan_id=scan.id,
+            resource_id=target.id,
+            requested_url=target.normalized_url,
+            final_url=target.normalized_url,
+            http_status=500,
+            crawl_depth=1,
+            fetched_at=moment - timedelta(minutes=4),
+            fetch_state="fetched",
+            page_title="Broken target",
+            representation_kind="html_page",
+            parsed_head_json={"links": []},
+        )
+    )
+    db_session.commit()
+
+    with _findings_client(db_session) as client:
+        queued = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert queued.status_code == 202
+        evaluation_id = queued.json()["id"]
+        claimed = background_jobs.claim_next_job(
+            db_session, worker_id="manual-product-worker", lease_seconds=30
+        )
+        assert claimed is not None
+        factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+        FindingEvaluationJobHandler(factory)._execute_blocking(
+            claimed.job,
+            evaluation_id,
+            _job_context(factory, claimed.job, claimed.lease_token),
+        )
+        db_session.expire_all()
+        response = client.get(f"/api/sites/{site.id}/findings?limit=100")
+        assert response.status_code == 200
+        visible_types = {item["finding_type"] for item in response.json()["items"]}
+        assert visible_types == {
+            "page_http_error",
+            "page_static_fetch_failure",
+            "page_noindex",
+            "page_missing_title",
+            "page_invalid_canonical",
+            "page_multiple_canonicals",
+            "page_canonical_target_http_error",
+        }
+        evaluation_payload = client.get(
+            f"/api/sites/{site.id}/findings/evaluations/{evaluation_id}"
+        ).json()
+        assert (
+            evaluation_payload["detected_count"],
+            evaluation_payload["clear_count"],
+            evaluation_payload["unknown_count"],
+        ) == (7, 46, 10)
+        assert len(evaluation_payload["detector_summary_json"]) == 9
+
+
+def test_static_fetch_failure_clears_after_successful_fetch(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    start = datetime(2026, 9, 1, 9, tzinfo=UTC)
+    _scan(
+        db_session,
+        site,
+        resource,
+        start,
+        None,
+        "failed",
+        error_type="dns_error",
+        error_message="Name resolution failed",
+    )
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "page_static_fetch_failure")
+    )
+    assert finding is not None and finding.condition_state == "detected"
+    _scan(db_session, site, resource, start + timedelta(hours=1), 200)
+    _evaluate(db_session, site)
+    db_session.refresh(finding)
+    assert finding.condition_state == "resolved"
+
+
+def test_head_evidence_detectors_share_snapshot_but_keep_distinct_lifecycles(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    start = datetime(2026, 9, 1, 9, tzinfo=UTC)
+    _scan(
+        db_session,
+        site,
+        resource,
+        start,
+        200,
+        page_title=" ",
+        canonical_url="http://[invalid",
+        parsed_head_json={
+            "links": [
+                {"rel": "canonical", "href": "http://[invalid"},
+                {"rel": "alternate canonical", "href": "/second"},
+            ]
+        },
+    )
+    _evaluate(db_session, site)
+    finding_types = set(db_session.scalars(select(Finding.finding_type)))
+    assert {
+        "page_missing_title",
+        "page_invalid_canonical",
+        "page_multiple_canonicals",
+    }.issubset(finding_types)
+
+    _scan(
+        db_session,
+        site,
+        resource,
+        start + timedelta(hours=1),
+        200,
+        page_title="Restored title",
+        canonical_url="/page",
+        parsed_head_json={"links": [{"rel": "canonical", "href": "/page"}]},
+    )
+    _evaluate(db_session, site)
+    states = dict(
+        db_session.execute(
+            select(Finding.finding_type, Finding.condition_state).where(
+                Finding.finding_type.in_(
+                    {
+                        "page_missing_title",
+                        "page_invalid_canonical",
+                        "page_multiple_canonicals",
+                    }
+                )
+            )
+        ).all()
+    )
+    assert states == {
+        "page_missing_title": "resolved",
+        "page_invalid_canonical": "resolved",
+        "page_multiple_canonicals": "resolved",
+    }
+
+
+def test_non_html_representation_clears_when_page_returns_html_again(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    start = datetime(2026, 9, 1, 9, tzinfo=UTC)
+    _scan(
+        db_session,
+        site,
+        resource,
+        start,
+        200,
+        representation_kind="document",
+    )
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "page_non_html_representation")
+    )
+    assert finding is not None and finding.condition_state == "detected"
+    _scan(db_session, site, resource, start + timedelta(hours=1), 200)
+    _evaluate(db_session, site)
+    db_session.refresh(finding)
+    assert finding.condition_state == "resolved"
+
+
 def test_job_completion_and_finding_lifecycle_share_one_transaction(
     db_session, monkeypatch
 ) -> None:
     site, resource, _page = _site_page(db_session)
-    _scan(db_session, site, resource, datetime(2026, 8, 24, tzinfo=UTC), 404)
+    _scan(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 8, 24, tzinfo=UTC),
+        404,
+        meta_robots="noindex",
+    )
     evaluation, _ = create_evaluation(db_session, site.id)
     job = background_jobs.enqueue_finding_evaluation_job(db_session, evaluation.id, site.id)
     job.status = "running"
@@ -325,8 +804,8 @@ def test_job_completion_and_finding_lifecycle_share_one_transaction(
     db_session.expire_all()
     assert db_session.get(FindingEvaluation, evaluation.id).status == "completed"
     assert db_session.get(BackgroundJob, job.id).status == "completed"
-    assert db_session.query(Finding).count() == 1
-    assert db_session.query(FindingAssessment).count() == 1
+    assert db_session.query(Finding).count() == 2
+    assert db_session.query(FindingAssessment).count() == 2
 
 
 def test_queued_job_cancellation_terminalizes_the_evaluation(db_session) -> None:

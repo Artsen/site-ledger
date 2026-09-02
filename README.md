@@ -41,7 +41,9 @@ observations from separate scans without erasing the evidence captured by each s
 - Composes read-only Site Intelligence with active-Page denominators and independent evidence clocks.
 - Orchestrates missing-current Performance, Accessibility, Render, and Structured Content evidence
   through durable Collection Plans that reuse native collectors.
-- Evaluates persistent deterministic Findings V1; current detector breadth is intentionally limited.
+- Evaluates persistent deterministic static Findings for HTTP/fetch failures, noindex directives,
+  indexability conflicts, missing titles, invalid or multiple canonicals, broken observed canonical
+  targets, and active Pages returning non-HTML representations, with per-detector diagnostics.
 - Indexes browser-rendered observations from Site, Page, Render Run, and historical Scan workspaces
 - Deletes retained browser evidence independently with target tombstones, bounded bulk actions,
   reference-safe artifact reclamation, and Site/legacy Scan ownership controls

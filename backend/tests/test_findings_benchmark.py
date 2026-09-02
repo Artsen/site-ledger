@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 
@@ -101,18 +102,25 @@ def test_finding_evaluation_scales_with_operational_issues_not_page_selects(db_s
         event.remove(db_session.bind, "before_cursor_execute", count_sql)
     duration = perf_counter() - started
 
-    assert result.assessments == 200
+    assert result.assessments == 250
     assert result.resolved_findings == 50
-    assert result.detected == 100
-    assert result.unknown == 50
-    assert db_session.query(Finding).count() == 200
-    assert db_session.query(FindingAssessment).count() == 400
+    assert result.detected == 150
+    assert result.clear == 26_450
+    assert result.unknown == 400
+    assert result.detected + result.clear + result.unknown == page_count * 9
+    assert db_session.query(Finding).count() == 250
+    assert db_session.query(FindingAssessment).count() == 450
     assert selects <= 12
     assert statements < 1_000
     assert duration < 15
+    summary_payload = json.dumps(
+        evaluation.detector_summary_json, sort_keys=True, separators=(",", ":")
+    ).encode()
     print(
-        f"finding benchmark: pages={page_count} assessments={result.assessments} "
-        f"sql={statements} selects={selects} duration={duration:.3f}s"
+        f"finding benchmark: pages={page_count} detectors=9 outcomes={page_count * 9} "
+        f"persisted_findings=250 assessments={result.assessments} sql={statements} "
+        f"selects={selects} duration={duration:.3f}s "
+        f"detector_summary_bytes={len(summary_payload)}"
     )
 
 
@@ -141,5 +149,9 @@ def _snapshot(
         "crawl_depth": 0,
         "fetched_at": moment,
         "fetch_state": state,
+        "error_type": "connection_timeout" if state == "failed" else None,
+        "page_title": "Benchmark page",
+        "parsed_head_json": {"links": []},
+        "representation_kind": "html_page",
         "inspected_prefix_byte_count": 0,
     }
