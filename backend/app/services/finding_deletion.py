@@ -13,8 +13,8 @@ from app.models import (
     FindingEvaluation,
     FindingEvidenceReference,
     JobEvent,
-    WebsiteProperty,
 )
+from app.services.finding_serialization import lock_site_for_finding_change
 from app.services.job_types import (
     ACTIVE_JOB_STATUSES,
     JOB_TYPE_FINDING_EVALUATION,
@@ -39,7 +39,7 @@ class FindingResetCounts:
 
 def delete_finding(db: Session, site_id: int, finding_id: int) -> bool | None:
     """Stage deletion of one Finding while retaining its frozen evaluation history."""
-    if _lock_site(db, site_id) is None:
+    if lock_site_for_finding_change(db, site_id) is None:
         return None
     finding = db.scalar(
         select(Finding).where(
@@ -69,7 +69,7 @@ def delete_finding(db: Session, site_id: int, finding_id: int) -> bool | None:
 
 def reset_site_findings(db: Session, site_id: int) -> FindingResetCounts | None:
     """Stage an atomic reset of one Site's rebuildable Finding interpretation layer."""
-    if _lock_site(db, site_id) is None:
+    if lock_site_for_finding_change(db, site_id) is None:
         return None
     _raise_if_active_finding_work(db, site_id)
 
@@ -146,10 +146,6 @@ def _raise_if_active_finding_work(db: Session, site_id: int) -> None:
             "Finding deletion is unavailable while a Finding evaluation is queued or running. "
             "Wait for it to finish or cancel it first."
         )
-
-
-def _lock_site(db: Session, site_id: int) -> WebsiteProperty | None:
-    return db.scalar(select(WebsiteProperty).where(WebsiteProperty.id == site_id).with_for_update())
 
 
 def _count(db: Session, column: Any, *conditions: Any) -> int:

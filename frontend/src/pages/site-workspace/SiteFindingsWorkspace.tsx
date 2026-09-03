@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, Play, Search, Trash2, Undo2, X } from "lucide-react";
-import { FormEvent, useId, useState } from "react";
+import { FormEvent, useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { createFindingEvaluation, deleteFinding, getFinding, listFindingEvaluations, listFindings, resetSiteFindings, setFindingAcknowledged } from "../../api/findings";
@@ -179,9 +179,42 @@ function FindingDestructiveAction({ label, title, description, confirmationPhras
   const [confirmation, setConfirmation] = useState("");
   const titleId = useId();
   const descriptionId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const mutation = useMutation({ mutationFn: onConfirm, onSuccess: async () => { await onSuccess(); setOpen(false); setConfirmation(""); } });
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    const trigger = triggerRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])') ?? []);
+    focusable()[0]?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !mutation.isPending) {
+        event.preventDefault();
+        setOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog?.addEventListener("keydown", handleKeyDown);
+    return () => {
+      dialog?.removeEventListener("keydown", handleKeyDown);
+      trigger?.focus();
+    };
+  }, [open, mutation.isPending]);
   const confirmed = !confirmationPhrase || confirmation === confirmationPhrase;
-  return <><Button type="button" variant="danger" className="mt-3" onClick={() => setOpen(true)}><Trash2 className="mr-2 size-4"/>{label}</Button>{open ? <section role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-3 sm:p-8"><div className="mx-auto max-w-xl rounded-md bg-white p-4 shadow-xl sm:p-6"><header className="flex items-start justify-between gap-3"><div><h2 id={titleId} className="flex items-center gap-2 text-lg font-semibold text-red-800"><AlertTriangle className="size-5"/>{title}</h2><p id={descriptionId} className="mt-2 text-sm text-stone-600">{description}</p></div><button type="button" aria-label="Close dialog" disabled={mutation.isPending} onClick={() => setOpen(false)} className="rounded p-2 hover:bg-stone-100"><X className="size-5"/></button></header>{confirmationPhrase ? <label className="mt-5 block text-sm font-medium">Type <code>{confirmationPhrase}</code> to confirm<input aria-label={`Type ${confirmationPhrase} to confirm`} value={confirmation} autoComplete="off" onChange={(event) => setConfirmation(event.target.value)} className="mt-2 w-full rounded-md border border-stone-300 px-3 py-2 font-mono"/></label> : null}{mutation.error ? <div className="mt-4"><ErrorBanner error={mutation.error} title="Could not complete Finding deletion"/></div> : null}<div className="mt-5 flex justify-end gap-2"><Button type="button" disabled={mutation.isPending} onClick={() => setOpen(false)}>Cancel</Button><Button type="button" variant="danger" loading={mutation.isPending} disabled={!confirmed} onClick={() => mutation.mutate()}>Delete permanently</Button></div></div></section> : null}</>;
+  return <><Button ref={triggerRef} type="button" variant="danger" className="mt-3" onClick={() => setOpen(true)}><Trash2 className="mr-2 size-4"/>{label}</Button>{open ? <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-3 sm:p-8"><div className="mx-auto max-w-xl rounded-md bg-white p-4 shadow-xl sm:p-6"><header className="flex items-start justify-between gap-3"><div><h2 id={titleId} className="flex items-center gap-2 text-lg font-semibold text-red-800"><AlertTriangle className="size-5"/>{title}</h2><p id={descriptionId} className="mt-2 text-sm text-stone-600">{description}</p></div><button type="button" aria-label="Close dialog" disabled={mutation.isPending} onClick={() => setOpen(false)} className="rounded p-2 hover:bg-stone-100 disabled:opacity-60"><X className="size-5"/></button></header>{confirmationPhrase ? <label className="mt-5 block text-sm font-medium">Type <code>{confirmationPhrase}</code> to confirm<input aria-label={`Type ${confirmationPhrase} to confirm`} value={confirmation} autoComplete="off" onChange={(event) => setConfirmation(event.target.value)} className="mt-2 w-full rounded-md border border-stone-300 px-3 py-2 font-mono"/></label> : null}{mutation.error ? <div className="mt-4"><ErrorBanner error={mutation.error} title="Could not complete Finding deletion"/></div> : null}<div className="mt-5 flex justify-end gap-2"><Button type="button" disabled={mutation.isPending} onClick={() => setOpen(false)}>Cancel</Button><Button type="button" variant="danger" loading={mutation.isPending} disabled={!confirmed} onClick={() => mutation.mutate()}>Delete permanently</Button></div></div></section> : null}</>;
 }
 
 function TopologyTargetSamples({ findingType, assessment }: { findingType: string; assessment: FindingAssessment }) {

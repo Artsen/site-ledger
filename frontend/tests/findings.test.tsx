@@ -297,6 +297,45 @@ describe("Findings workspace", () => {
     expect(screen.getByRole("button", { name: /Run evaluation/ })).toBeInTheDocument();
   });
 
+  it("traps dialog focus, closes with Escape, and restores the reset trigger", async () => {
+    renderWorkspace();
+    const trigger = await screen.findByRole("button", { name: "Reset Findings..." });
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog");
+    const close = screen.getByRole("button", { name: "Close dialog" });
+    const input = screen.getByLabelText("Type RESET to confirm");
+    expect(close).toHaveFocus();
+    input.focus();
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: "RESET" } });
+    const remove = screen.getByRole("button", { name: "Delete permanently" });
+    remove.focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(remove).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("does not let Escape interrupt a pending destructive mutation", async () => {
+    let finishReset!: () => void;
+    api.resetSiteFindings.mockImplementation(
+      () => new Promise<void>((resolve) => { finishReset = resolve; }),
+    );
+    renderWorkspace();
+    fireEvent.click(await screen.findByRole("button", { name: "Reset Findings..." }));
+    fireEvent.change(screen.getByLabelText("Type RESET to confirm"), { target: { value: "RESET" } });
+    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+    const dialog = screen.getByRole("dialog");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close dialog" })).toBeDisabled());
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    finishReset();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("shows an active-evaluation reset conflict without clearing the workspace", async () => {
     api.resetSiteFindings.mockRejectedValue(new Error("Finding deletion is unavailable while a Finding evaluation is queued or running."));
     renderWorkspace();

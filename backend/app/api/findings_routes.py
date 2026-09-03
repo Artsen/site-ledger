@@ -19,6 +19,7 @@ from app.services.finding_deletion import (
     reset_site_findings,
 )
 from app.services.finding_evaluations import create_evaluation
+from app.services.finding_serialization import FindingSerializationBusyError
 from app.services.findings import (
     get_evaluation,
     get_finding,
@@ -124,7 +125,7 @@ def delete_finding_detail(site_id: int, finding_id: int, db: DbSession) -> Respo
         if result is False:
             raise HTTPException(404, "Finding not found")
         db.commit()
-    except ActiveFindingEvaluationError as exc:
+    except (ActiveFindingEvaluationError, FindingSerializationBusyError) as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
     except HTTPException:
@@ -145,7 +146,7 @@ def reset_findings(
         if result is None:
             raise HTTPException(404, "Site not found")
         db.commit()
-    except ActiveFindingEvaluationError as exc:
+    except (ActiveFindingEvaluationError, FindingSerializationBusyError) as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
     except HTTPException:
