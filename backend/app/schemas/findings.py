@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 FindingState = Literal["detected", "unknown", "resolved"]
 FindingSeverity = Literal["medium", "high"]
 AssessmentOutcome = Literal["detected", "clear", "unknown"]
+FindingEvidenceKind = Literal["resource_snapshot", "resource_occurrence", "scan"]
 
 
 class FindingDetectorSummary(BaseModel):
@@ -86,7 +87,7 @@ class FindingEvidenceReferenceRead(BaseModel):
     id: int
     position: int
     role: str
-    evidence_kind: str
+    evidence_kind: FindingEvidenceKind
     evidence_id: int
     evidence_observed_at: datetime
     metadata_json: dict[str, Any]

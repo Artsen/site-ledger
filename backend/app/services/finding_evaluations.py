@@ -15,6 +15,7 @@ from app.models import (
     FindingAssessment,
     FindingEvaluation,
     FindingEvidenceReference,
+    ResourceOccurrence,
     ResourceSnapshot,
     Scan,
     SitePage,
@@ -26,6 +27,7 @@ from app.services.finding_detectors import (
     PAGE_HTTP_ERROR_KEY_VERSION,
     PAGE_HTTP_ERROR_TYPE,
     DetectorContext,
+    DetectorEvidence,
     DetectorResult,
     FindingDetector,
     build_snapshot_url_index,
@@ -33,7 +35,7 @@ from app.services.finding_detectors import (
 from app.services.scan_projections import TERMINAL_SCAN_STATUSES
 
 FINDING_EVALUATOR_VERSION = "finding-evaluator-v2"
-FINDING_DETECTOR_BUNDLE_IDENTITY = "finding-detectors-v3"
+FINDING_DETECTOR_BUNDLE_IDENTITY = "finding-detectors-v4"
 
 
 class DetectorSummary(TypedDict):
@@ -196,10 +198,26 @@ def execute_evaluation(
         .order_by(ResourceSnapshot.id.desc())
     ):
         all_snapshots.setdefault(snapshot.resource_id, snapshot)
+    source_resource_by_snapshot_id = {
+        snapshot.id: resource_id for resource_id, snapshot in all_snapshots.items()
+    }
+    occurrences_by_source_resource_id: dict[int, list[ResourceOccurrence]] = {}
+    for occurrence in db.scalars(
+        select(ResourceOccurrence)
+        .where(ResourceOccurrence.source_snapshot_id.in_(source_resource_by_snapshot_id or {-1}))
+        .order_by(ResourceOccurrence.normalized_target_url.asc(), ResourceOccurrence.id.asc())
+    ):
+        source_resource_id = source_resource_by_snapshot_id.get(occurrence.source_snapshot_id)
+        if source_resource_id is not None:
+            occurrences_by_source_resource_id.setdefault(source_resource_id, []).append(occurrence)
     context = DetectorContext(
         scan=scan,
         snapshots_by_resource_id=all_snapshots,
         snapshots_by_normalized_url=build_snapshot_url_index(scan, all_snapshots),
+        occurrences_by_source_resource_id={
+            resource_id: tuple(items)
+            for resource_id, items in occurrences_by_source_resource_id.items()
+        },
     )
     detector_keys = [
         (detector.finding_type, detector.logical_key_version)
@@ -261,7 +279,8 @@ def execute_evaluation(
                         "detector_identity": detector.detector_identity,
                         "evidence": [
                             {
-                                "resource_snapshot_id": item.snapshot.id,
+                                "evidence_id": _detector_evidence_id(item),
+                                "evidence_kind": _detector_evidence_kind(item),
                                 "role": item.role,
                             }
                             for item in detector_result.evidence
@@ -383,15 +402,29 @@ def execute_evaluation(
         ]
         finding.current_assessment_id = assessment.id
         for position, item in enumerate(candidate.result.evidence):
+            evidence_kind = _detector_evidence_kind(item)
+            evidence_id = _detector_evidence_id(item)
+            observed_at = candidate.observed_at
+            metadata: dict[str, object] = {}
+            if item.snapshot is not None:
+                observed_at = item.snapshot.fetched_at or candidate.observed_at
+                metadata = {"resource_id": item.snapshot.resource_id}
+            elif item.occurrence is not None:
+                observed_at = item.occurrence.discovered_at or candidate.observed_at
+                metadata = {
+                    "source_snapshot_id": item.occurrence.source_snapshot_id,
+                    "target_resource_id": item.occurrence.target_resource_id,
+                    "normalized_target_url": item.occurrence.normalized_target_url,
+                }
             db.add(
                 FindingEvidenceReference(
                     finding_assessment_id=assessment.id,
                     position=position,
                     role=item.role,
-                    evidence_kind="resource_snapshot",
-                    evidence_id=item.snapshot.id,
-                    evidence_observed_at=(item.snapshot.fetched_at or candidate.observed_at),
-                    metadata_json={"resource_id": item.snapshot.resource_id},
+                    evidence_kind=evidence_kind,
+                    evidence_id=evidence_id,
+                    evidence_observed_at=observed_at,
+                    metadata_json=metadata,
                 )
             )
         db.add(
@@ -423,6 +456,21 @@ def execute_evaluation(
         check_ownership()
     db.flush()
     return _result(evaluation)
+
+
+def _detector_evidence_kind(item: DetectorEvidence) -> str:
+    if item.snapshot is not None and item.occurrence is None:
+        return "resource_snapshot"
+    if item.occurrence is not None and item.snapshot is None:
+        return "resource_occurrence"
+    raise ValueError("Detector evidence must contain exactly one typed evidence object.")
+
+
+def _detector_evidence_id(item: DetectorEvidence) -> int:
+    evidence = item.snapshot or item.occurrence
+    if evidence is None or evidence.id is None:
+        raise ValueError("Detector evidence must be persisted before evaluation.")
+    return evidence.id
 
 
 def mark_evaluation_terminal(

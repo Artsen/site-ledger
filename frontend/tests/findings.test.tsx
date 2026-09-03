@@ -114,19 +114,93 @@ describe("Findings workspace", () => {
     expect(screen.getByText("Subject Fetch Unusable: 1")).toBeInTheDocument();
   });
 
-  it("keeps V2 and V3 bundle identities visible as separate history", async () => {
+  it("keeps V3 and V4 bundle identities visible as separate history", async () => {
     api.listFindingEvaluations.mockResolvedValue({
       items: [
-        { ...evaluation, id: 8, detector_bundle_identity: "finding-detectors-v3" },
-        { ...evaluation, detector_bundle_identity: "finding-detectors-v2" },
+        { ...evaluation, id: 8, detector_bundle_identity: "finding-detectors-v4" },
+        { ...evaluation, detector_bundle_identity: "finding-detectors-v3" },
       ],
       total: 2,
       limit: 25,
       offset: 0,
     });
     renderWorkspace("/?view=evaluations");
-    expect(await screen.findByText("finding-detectors-v3")).toBeInTheDocument();
-    expect(screen.getByText("finding-detectors-v2")).toBeInTheDocument();
+    expect(await screen.findByText("finding-detectors-v4")).toBeInTheDocument();
+    expect(screen.getByText("finding-detectors-v3")).toBeInTheDocument();
+  });
+
+  it("summarizes topology Findings and renders bounded target evidence", async () => {
+    const broken = {
+      ...(await api.listFindings()).items[0],
+      finding_type: "page_broken_internal_links",
+      finding_label: "Broken internal links",
+      logical_key_version: "page-broken-internal-links-key-v1",
+      current_severity: "high",
+      current_evidence_summary: { broken_target_count: 6, broken_occurrence_count: 14 },
+    };
+    api.listFindings.mockResolvedValue({ items: [broken], total: 1, limit: 50, offset: 0 });
+    const workspace = renderWorkspace();
+    expect((await screen.findAllByText("Broken internal links")).length).toBeGreaterThan(1);
+    expect(screen.getByText("6 broken targets")).toBeInTheDocument();
+    workspace.unmount();
+
+    api.getFinding.mockResolvedValue({
+      ...broken,
+      website_property_id: 3,
+      created_at: "2026-08-28T01:00:00Z",
+      updated_at: "2026-08-28T01:00:00Z",
+      assessments: [{
+        id: 14, finding_evaluation_id: 7, outcome: "detected", severity: "high",
+        evidence_observed_at: "2026-08-28T01:00:00Z", assessment_sha256: "e".repeat(64),
+        created_at: "2026-08-28T01:00:00Z", evaluation,
+        details_json: {
+          broken_target_count: 2, broken_occurrence_count: 3, evidence_sample_count: 3,
+          evidence_truncated: false, transition: "detected->detected",
+          target_samples: [
+            { requested_url: "https://example.test/gone", http_status: 404 },
+            { requested_url: "https://example.test/server-error", http_status: 500 },
+          ],
+        },
+        evidence_references: [
+          { id: 1, position: 0, role: "primary", evidence_kind: "resource_snapshot", evidence_id: 20, evidence_observed_at: "2026-08-28T01:00:00Z", metadata_json: {}, retained: true, href: "/scans/9/pages/20" },
+          { id: 2, position: 1, role: "broken_occurrence", evidence_kind: "resource_occurrence", evidence_id: 31, evidence_observed_at: "2026-08-28T01:00:00Z", metadata_json: {}, retained: true, href: "/scans/9/pages/20" },
+        ],
+      }],
+    });
+    renderDetail();
+    expect(await screen.findByText("3 broken internal link occurrences across 2 target Pages")).toBeInTheDocument();
+    expect(screen.getByText("https://example.test/gone -> HTTP 404")).toBeInTheDocument();
+    expect(screen.getByText("https://example.test/server-error -> HTTP 500")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Broken Occurrence: Resource Occurrence 31" })).toBeInTheDocument();
+  });
+
+  it("presents redirect topology as requested and final URL pairs", async () => {
+    const current = (await api.listFindings()).items[0];
+    api.getFinding.mockResolvedValue({
+      ...current,
+      finding_type: "page_internal_links_to_redirects",
+      finding_label: "Internal links to redirects",
+      logical_key_version: "page-internal-links-to-redirects-key-v1",
+      current_evidence_summary: { redirect_target_count: 1, redirect_occurrence_count: 8 },
+      website_property_id: 3,
+      created_at: "2026-08-28T01:00:00Z",
+      updated_at: "2026-08-28T01:00:00Z",
+      assessments: [{
+        id: 15, finding_evaluation_id: 7, outcome: "detected", severity: "medium",
+        evidence_observed_at: "2026-08-28T01:00:00Z", assessment_sha256: "f".repeat(64),
+        created_at: "2026-08-28T01:00:00Z", evaluation,
+        details_json: {
+          redirect_target_count: 1, redirect_occurrence_count: 8, evidence_sample_count: 8,
+          evidence_truncated: false, transition: "detected->detected",
+          target_samples: [{ requested_url: "https://example.test/old", final_url: "https://example.test/new" }],
+        },
+        evidence_references: [],
+      }],
+    });
+    renderDetail();
+    expect(await screen.findByText("Internal links to redirects")).toBeInTheDocument();
+    expect(screen.getByText("8 internal link occurrences point to 1 redirecting Page")).toBeInTheDocument();
+    expect(screen.getByText("https://example.test/old -> https://example.test/new")).toBeInTheDocument();
   });
 });
 

@@ -27,7 +27,8 @@ export type Finding = {
 };
 
 export type FindingEvidenceReference = {
-  id: number; position: number; role: string; evidence_kind: string; evidence_id: number;
+  id: number; position: number; role: string;
+  evidence_kind: "resource_snapshot" | "resource_occurrence" | "scan"; evidence_id: number;
   evidence_observed_at: string; metadata_json: Record<string, unknown>; retained: boolean; href: string | null;
 };
 
