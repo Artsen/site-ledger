@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Play, Search, Undo2 } from "lucide-react";
-import { FormEvent } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { AlertTriangle, Check, Play, Search, Trash2, Undo2, X } from "lucide-react";
+import { FormEvent, useEffect, useId, useRef, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { createFindingEvaluation, getFinding, listFindingEvaluations, listFindings, setFindingAcknowledged } from "../../api/findings";
+import { createFindingEvaluation, deleteFinding, getFinding, listFindingEvaluations, listFindings, resetSiteFindings, setFindingAcknowledged } from "../../api/findings";
 import { invalidateSiteIntelligence } from "../../api/queryKeys";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -40,6 +40,21 @@ export function SiteFindingsWorkspace({ site }: { site: Site }) {
     </div>
     {run.error ? <ErrorBanner error={run.error} title="Could not create Finding evaluation" /> : null}
     {view === "current" ? <CurrentFindings site={site} /> : <EvaluationHistory site={site} />}
+    <section className="border-t border-red-200 pt-4">
+      <h2 className="text-sm font-semibold text-red-900">Administrative reset</h2>
+      <p className="mt-1 max-w-3xl text-sm text-stone-600">Discard this Site's rebuildable Finding interpretation history while preserving collected website evidence.</p>
+      <FindingDestructiveAction
+        label="Reset Findings..."
+        title="Reset Findings for this Site?"
+        description="This permanently deletes all Finding evaluations, Findings, assessment history, acknowledgements, and Finding evidence references for this Site. Collected website evidence is not deleted. You can run the current Finding evaluator again afterward to rebuild Findings from retained evidence."
+        confirmationPhrase="RESET"
+        onConfirm={() => resetSiteFindings(site.id)}
+        onSuccess={async () => {
+          await invalidateFindingQueries(queryClient, site.id);
+          setParams({});
+        }}
+      />
+    </section>
   </div>;
 }
 
@@ -139,13 +154,67 @@ function DetectorSummary({ evaluation }: { evaluation: FindingEvaluation }) {
 
 export function SiteFindingDetailPage({ site }: { site: Site }) {
   const { findingId = "" } = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ["finding", String(site.id), findingId], queryFn: () => getFinding(site.id, findingId) });
   const workflow = useMutation({ mutationFn: (acknowledged: boolean) => setFindingAcknowledged(site.id, findingId, acknowledged), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["finding"] }); await queryClient.invalidateQueries({ queryKey: ["findings"] }); await invalidateSiteIntelligence(queryClient, site.id); } });
   if (query.isLoading) return <LoadingBlock label="Loading Finding history..."/>;
   if (query.error) return <ErrorBanner error={query.error} title="Could not load Finding"/>;
   const finding = query.data!;
-  return <div className="space-y-6"><div><Link to={`/sites/${site.id}/findings`} className="text-sm underline">Findings</Link><p className="mt-2 text-sm font-medium text-stone-600">{finding.finding_label || formatStatus(finding.finding_type)}</p><h2 className="mt-1 break-all text-lg font-semibold">{finding.page_url}</h2><div className="mt-2 flex flex-wrap gap-2"><StatusBadge status={finding.condition_state}/><StatusBadge status={finding.current_severity ?? "none"}/><StatusBadge status={finding.acknowledged_at ? "acknowledged" : "unacknowledged"}/></div></div><div className="flex gap-2">{finding.acknowledged_at ? <Button loading={workflow.isPending} onClick={() => workflow.mutate(false)}><Undo2 className="mr-2 size-4"/>Unacknowledge</Button> : <Button loading={workflow.isPending} onClick={() => workflow.mutate(true)}><Check className="mr-2 size-4"/>Acknowledge</Button>}<Link className="inline-flex min-h-9 items-center rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium" to={`/sites/${site.id}/pages/${finding.web_resource_id}`}>Open Page</Link></div><section><h3 className="text-base font-semibold">Assessment history</h3><div className="mt-3 divide-y divide-stone-200 rounded-md border border-stone-200 bg-white">{finding.assessments.map((assessment) => <article key={assessment.id} className="p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex gap-2"><StatusBadge status={assessment.outcome}/>{assessment.severity ? <StatusBadge status={assessment.severity}/> : null}</div><time className="text-xs text-stone-500">{formatDate(assessment.evidence_observed_at, { timeZone: site.display_timezone, showTimeZone: true })}</time></div><p className="mt-2 text-sm">{assessmentSummary(finding.finding_type, assessment)}</p><SitemapMembershipSamples findingType={finding.finding_type} assessment={assessment}/><TopologyTargetSamples findingType={finding.finding_type} assessment={assessment}/><p className="mt-1 text-xs text-stone-500">{formatStatus(String(assessment.details_json.transition ?? assessment.outcome))}</p><p className="mt-1 font-mono text-xs text-stone-500">{assessment.evaluation.evaluator_version} / {assessment.evaluation.detector_bundle_identity} / evaluation {assessment.finding_evaluation_id}</p><ul className="mt-3 space-y-1 text-sm">{assessment.evidence_references.map((reference) => <li key={reference.id}>{reference.retained && reference.href ? <Link className="underline" to={reference.href}>{formatStatus(reference.role)}: {formatStatus(reference.evidence_kind)} {reference.evidence_id}</Link> : <span>{formatStatus(reference.role)}: {formatStatus(reference.evidence_kind)} {reference.evidence_id} (no longer retained)</span>}<time className="ml-2 text-xs text-stone-500">{formatDate(reference.evidence_observed_at, { timeZone: site.display_timezone, showTimeZone: true })}</time></li>)}</ul></article>)}</div></section><section className="border-t border-stone-200 pt-4 text-xs text-stone-500"><p>Logical identity: {finding.finding_type} / {finding.logical_key_version}</p><p className="mt-1 break-all font-mono">{finding.fingerprint_sha256}</p></section></div>;
+  return <div className="space-y-6"><div><Link to={`/sites/${site.id}/findings`} className="text-sm underline">Findings</Link><p className="mt-2 text-sm font-medium text-stone-600">{finding.finding_label || formatStatus(finding.finding_type)}</p><h2 className="mt-1 break-all text-lg font-semibold">{finding.page_url}</h2><div className="mt-2 flex flex-wrap gap-2"><StatusBadge status={finding.condition_state}/><StatusBadge status={finding.current_severity ?? "none"}/><StatusBadge status={finding.acknowledged_at ? "acknowledged" : "unacknowledged"}/></div></div><div className="flex flex-wrap gap-2">{finding.acknowledged_at ? <Button loading={workflow.isPending} onClick={() => workflow.mutate(false)}><Undo2 className="mr-2 size-4"/>Unacknowledge</Button> : <Button loading={workflow.isPending} onClick={() => workflow.mutate(true)}><Check className="mr-2 size-4"/>Acknowledge</Button>}<Link className="inline-flex min-h-9 items-center rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium" to={`/sites/${site.id}/pages/${finding.web_resource_id}`}>Open Page</Link></div><section><h3 className="text-base font-semibold">Assessment history</h3><div className="mt-3 divide-y divide-stone-200 rounded-md border border-stone-200 bg-white">{finding.assessments.map((assessment) => <article key={assessment.id} className="p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex gap-2"><StatusBadge status={assessment.outcome}/>{assessment.severity ? <StatusBadge status={assessment.severity}/> : null}</div><time className="text-xs text-stone-500">{formatDate(assessment.evidence_observed_at, { timeZone: site.display_timezone, showTimeZone: true })}</time></div><p className="mt-2 text-sm">{assessmentSummary(finding.finding_type, assessment)}</p><SitemapMembershipSamples findingType={finding.finding_type} assessment={assessment}/><TopologyTargetSamples findingType={finding.finding_type} assessment={assessment}/><p className="mt-1 text-xs text-stone-500">{formatStatus(String(assessment.details_json.transition ?? assessment.outcome))}</p><p className="mt-1 font-mono text-xs text-stone-500">{assessment.evaluation.evaluator_version} / {assessment.evaluation.detector_bundle_identity} / evaluation {assessment.finding_evaluation_id}</p><ul className="mt-3 space-y-1 text-sm">{assessment.evidence_references.map((reference) => <li key={reference.id}>{reference.retained && reference.href ? <Link className="underline" to={reference.href}>{formatStatus(reference.role)}: {formatStatus(reference.evidence_kind)} {reference.evidence_id}</Link> : <span>{formatStatus(reference.role)}: {formatStatus(reference.evidence_kind)} {reference.evidence_id} (no longer retained)</span>}<time className="ml-2 text-xs text-stone-500">{formatDate(reference.evidence_observed_at, { timeZone: site.display_timezone, showTimeZone: true })}</time></li>)}</ul></article>)}</div></section><section className="border-t border-stone-200 pt-4 text-xs text-stone-500"><p>Logical identity: {finding.finding_type} / {finding.logical_key_version}</p><p className="mt-1 break-all font-mono">{finding.fingerprint_sha256}</p></section><section className="border-t border-red-200 pt-4"><FindingDestructiveAction label="Delete Finding..." title="Delete this Finding?" description="This permanently deletes this Finding's lifecycle and assessment history, including its acknowledgement. Collected website evidence is preserved. The completed evaluation that produced this Finding is not reset, so deleting one Finding does not make that same evaluation run again." onConfirm={() => deleteFinding(site.id, findingId)} onSuccess={async () => { await invalidateFindingQueries(queryClient, site.id); navigate(`/sites/${site.id}/findings`); }}/></section></div>;
+}
+
+async function invalidateFindingQueries(queryClient: ReturnType<typeof useQueryClient>, siteId: string | number) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["finding"] }),
+    queryClient.invalidateQueries({ queryKey: ["findings", String(siteId)] }),
+    queryClient.invalidateQueries({ queryKey: ["finding-evaluations", String(siteId)] }),
+    queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+    invalidateSiteIntelligence(queryClient, siteId),
+  ]);
+}
+
+function FindingDestructiveAction({ label, title, description, confirmationPhrase, onConfirm, onSuccess }: { label: string; title: string; description: string; confirmationPhrase?: string; onConfirm: () => Promise<unknown>; onSuccess: () => void | Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const mutation = useMutation({ mutationFn: onConfirm, onSuccess: async () => { await onSuccess(); setOpen(false); setConfirmation(""); } });
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    const trigger = triggerRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])') ?? []);
+    focusable()[0]?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !mutation.isPending) {
+        event.preventDefault();
+        setOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog?.addEventListener("keydown", handleKeyDown);
+    return () => {
+      dialog?.removeEventListener("keydown", handleKeyDown);
+      trigger?.focus();
+    };
+  }, [open, mutation.isPending]);
+  const confirmed = !confirmationPhrase || confirmation === confirmationPhrase;
+  return <><Button ref={triggerRef} type="button" variant="danger" className="mt-3" onClick={() => setOpen(true)}><Trash2 className="mr-2 size-4"/>{label}</Button>{open ? <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-3 sm:p-8"><div className="mx-auto max-w-xl rounded-md bg-white p-4 shadow-xl sm:p-6"><header className="flex items-start justify-between gap-3"><div><h2 id={titleId} className="flex items-center gap-2 text-lg font-semibold text-red-800"><AlertTriangle className="size-5"/>{title}</h2><p id={descriptionId} className="mt-2 text-sm text-stone-600">{description}</p></div><button type="button" aria-label="Close dialog" disabled={mutation.isPending} onClick={() => setOpen(false)} className="rounded p-2 hover:bg-stone-100 disabled:opacity-60"><X className="size-5"/></button></header>{confirmationPhrase ? <label className="mt-5 block text-sm font-medium">Type <code>{confirmationPhrase}</code> to confirm<input aria-label={`Type ${confirmationPhrase} to confirm`} value={confirmation} autoComplete="off" onChange={(event) => setConfirmation(event.target.value)} className="mt-2 w-full rounded-md border border-stone-300 px-3 py-2 font-mono"/></label> : null}{mutation.error ? <div className="mt-4"><ErrorBanner error={mutation.error} title="Could not complete Finding deletion"/></div> : null}<div className="mt-5 flex justify-end gap-2"><Button type="button" disabled={mutation.isPending} onClick={() => setOpen(false)}>Cancel</Button><Button type="button" variant="danger" loading={mutation.isPending} disabled={!confirmed} onClick={() => mutation.mutate()}>Delete permanently</Button></div></div></section> : null}</>;
 }
 
 function TopologyTargetSamples({ findingType, assessment }: { findingType: string; assessment: FindingAssessment }) {

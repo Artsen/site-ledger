@@ -98,8 +98,9 @@ Implemented capabilities include:
   current non-HTML representations. Evaluation history persists complete per-detector diagnostics
   even though clean and unknown logical outcomes remain sparsely persisted.
 
-Cross-domain Finding evidence and investigation records, GA4/Search Console, section-level comparison,
-structured-content full-text search, Resource/PDF body extraction,
+Additional cross-domain Finding evidence beyond static Scan and immutable sitemap Source evidence,
+investigation records, GA4/Search Console, section-level comparison, structured-content full-text
+search, Resource/PDF body extraction,
 rendered-DOM structured extraction, environment or cross-Site comparison, scheduling and
 notifications, embeddings, RAG, and semantic/LLM interpretation are future areas. Describe them as
 planned or designed to support, never as current behavior.
@@ -509,6 +510,19 @@ Do not disable checks or weaken tests to force passing results.
 ## Working Rules
 
 - Read this file and inspect the repository before editing.
+- For unfamiliar or cross-domain work, start with `docs/brain/CONTEXT_PACKS.md` and the relevant
+  entries in `docs/brain/INVARIANTS.md`. The checked-in Site Ledger second brain is a maintained
+  context/navigation layer, not authoritative source code; current source, migrations, and tests
+  win when they disagree.
+- Update affected second-brain files in the same PR when a change materially alters a domain
+  boundary, durable architectural invariant, major workflow, semantic graph relationship,
+  architecture-relevant compatibility/version identity, or recommended context-pack assumptions.
+  Ordinary internal refactors and bug fixes do not require mechanical graph churn. Update
+  `GRAPH.md`/`graph.json` for semantic relationships, `DOMAINS.md` for ownership and canonical paths,
+  `WORKFLOWS.md` for major lifecycles, `INVARIANTS.md` only for durable constraints,
+  `CONTEXT_PACKS.md` for minimum authoritative file sets, `AGENT_GUIDE.md` for retrieval policy,
+  `FRONTIER.md` for material roadmap changes, `DESIGN_NOTES.md` for context-map design, and the
+  brain `README.md` for orientation/provenance.
 - Prefer existing patterns and typed boundaries.
 - Make the smallest complete change that satisfies the request.
 - Never run substantial synchronous job-domain computation directly on the asyncio worker event
@@ -532,6 +546,10 @@ Do not disable checks or weaken tests to force passing results.
 - Recursive sitemap evidence must retain ordered child refresh IDs on the exact parent refresh.
   Finding manifests select explicit roots and freeze those refresh trees; mutable discovered-child
   Source state must not determine historical or current membership.
+- Finding history is durable by default. Explicit individual deletion may discard one Finding's
+  lifecycle while retaining its completed evaluation; explicit Site reset may discard the complete
+  rebuildable Finding/evaluation layer while preserving all collected evidence. Both operations
+  must fail closed while Site Finding evaluation work is queued or running.
 - Queued native cancellation must commit BackgroundJob and native terminal state together. Required
   post-success work may use an idempotent recovery protocol when its domain terminal commit is an
   earlier transaction; recovery must ensure that work before reconciling the BackgroundJob.

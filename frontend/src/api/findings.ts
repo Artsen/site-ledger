@@ -1,4 +1,4 @@
-import type { FindingDetail, FindingEvaluation, FindingEvaluationList, FindingList } from "../types/findings";
+import type { FindingDetail, FindingEvaluation, FindingEvaluationList, FindingList, FindingResetResult } from "../types/findings";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -27,4 +27,17 @@ export function createFindingEvaluation(siteId: string | number) {
 
 export function setFindingAcknowledged(siteId: string | number, findingId: string | number, acknowledged: boolean) {
   return request<FindingDetail>(`/api/sites/${siteId}/findings/${findingId}/${acknowledged ? "acknowledge" : "unacknowledge"}`, { method: "POST" });
+}
+
+export async function deleteFinding(siteId: string | number, findingId: string | number) {
+  const response = await fetch(`${API_BASE}/api/sites/${siteId}/findings/${findingId}`, { method: "DELETE" });
+  if (!response.ok) throw errorFromResponse(response.status, await response.text());
+}
+
+export function resetSiteFindings(siteId: string | number) {
+  return request<FindingResetResult>(`/api/sites/${siteId}/findings/reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm: true }),
+  });
 }

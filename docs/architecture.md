@@ -318,6 +318,12 @@ Finding evaluation, persistent Findings, Site Intelligence and workflow, and onl
 interpretation. No health score or Finding
 inference belongs in the composition layer.
 
+Finding history is durable during normal evidence and Page lifecycle operations. Explicit
+administrative deletion can remove one Finding while retaining its frozen evaluation; explicit
+Site-scoped reset can atomically remove the complete rebuildable Finding/evaluation layer and its
+terminal Finding job history. Both preserve collected evidence, including frozen recursive sitemap
+Source evidence, and block while Site Finding evaluation work is active.
+
 ## Collection Plans
 
 Collection Plans are implemented orchestration records, not evidence and not a scheduler. They

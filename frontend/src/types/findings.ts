@@ -62,3 +62,13 @@ export type FindingDetail = Finding & {
 
 export type FindingList = { items: Finding[]; total: number; limit: number; offset: number };
 export type FindingEvaluationList = { items: FindingEvaluation[]; total: number; limit: number; offset: number };
+
+export type FindingResetResult = {
+  site_id: number;
+  deleted_finding_count: number;
+  deleted_assessment_count: number;
+  deleted_evidence_reference_count: number;
+  deleted_evaluation_count: number;
+  deleted_job_count: number;
+  deleted_job_event_count: number;
+};

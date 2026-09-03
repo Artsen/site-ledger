@@ -1,0 +1,793 @@
+{
+  "schema": "site-ledger-second-brain-v1.2",
+  "repository": "Artsen/site-ledger",
+  "base_commit": "6e17e08e641b48660a7ed7a13d9227b288fcafc6",
+  "generated_at": "2026-09-03",
+  "principles": [
+    "Source code, migrations, and tests remain authoritative; this graph is a navigation and context-compression layer.",
+    "graph.json is the canonical machine-readable source for semantic nodes and edges; generated human views must not drift from it.",
+    "Prefer stable domain concepts and invariants over one node per function.",
+    "Every semantic node should point back to concrete source paths.",
+    "Derived state must be labeled as derived rather than presented as authoritative evidence.",
+    "Mutable current Source/Inventory state must never stand in for immutable historical Source evidence.",
+    "Active/unmerged work belongs in FRONTIER.md, not the canonical graph."
+  ],
+  "nodes": [
+    {
+      "id": "product",
+      "type": "community",
+      "label": "Product & Workspace",
+      "summary": "Local-first website intelligence workspace centered on persistent Sites, Pages, evidence history, derived intelligence, and actionable Findings.",
+      "source_paths": [
+        "README.md",
+        "docs/product-vision.md",
+        "docs/workspace-navigation.md",
+        "docs/page-workspaces.md"
+      ],
+      "entry_points": [
+        "frontend/src/pages/site-workspace/SiteWorkspaceLayout.tsx"
+      ],
+      "state_layer": "mixed",
+      "invariants": [
+        "evidence-not-workspace",
+        "derived-state-rebuildable",
+        "independent-evidence-clocks"
+      ]
+    },
+    {
+      "id": "truth-model",
+      "type": "concept",
+      "label": "Truth Model",
+      "summary": "Separate authoritative evidence, mutable workspace identity/state, rebuildable derived state, and operational execution state.",
+      "source_paths": [
+        "docs/architecture.md",
+        "AGENTS.md"
+      ],
+      "state_layer": "mixed",
+      "invariants": [
+        "evidence-not-workspace",
+        "derived-state-rebuildable",
+        "independent-evidence-clocks",
+        "source-inventory-not-historical-evidence"
+      ]
+    },
+    {
+      "id": "site-identity",
+      "type": "domain",
+      "label": "Site / Page / Resource Identity",
+      "summary": "WebsiteProperty scopes work; SitePage is persistent workspace membership; WebResource is normalized resource identity; observations attach history without replacing identity.",
+      "source_paths": [
+        "backend/app/models/resources.py",
+        "backend/app/services/site_pages.py",
+        "backend/app/services/repositories.py",
+        "docs/page-history-and-reuse.md",
+        "docs/url-identity-contract.md"
+      ],
+      "state_layer": "workspace",
+      "invariants": [
+        "evidence-not-workspace",
+        "frozen-universes-deterministic"
+      ]
+    },
+    {
+      "id": "url-identity",
+      "type": "invariant-area",
+      "label": "URL Identity",
+      "summary": "Normalized resource identity is explicitly versioned; historical identities are not silently reinterpreted.",
+      "source_paths": [
+        "backend/app/services/url_identity.py",
+        "backend/app/crawler/url_normalizer.py",
+        "docs/url-identity-contract.md",
+        "docs/url-identity-reconciliation.md"
+      ],
+      "state_layer": "platform",
+      "invariants": [
+        "url-identity-versioned"
+      ]
+    },
+    {
+      "id": "static-scan",
+      "type": "domain",
+      "label": "Static Scan",
+      "summary": "Deterministic static crawl records durable fetch attempts, snapshots, occurrences, resource identities, and Page membership.",
+      "source_paths": [
+        "backend/app/services/scan_execution.py",
+        "backend/app/crawler/static_crawler.py",
+        "backend/app/services/scan_queries.py",
+        "backend/app/models/resources.py"
+      ],
+      "symbols": [
+        "ScanExecutionCoordinator",
+        "StaticPageCrawler"
+      ],
+      "state_layer": "evidence",
+      "invariants": [
+        "evidence-not-workspace",
+        "job-write-ownership",
+        "recovered-job-zombie-worker",
+        "network-destinations-hostile",
+        "url-identity-versioned"
+      ]
+    },
+    {
+      "id": "network-security",
+      "type": "invariant-area",
+      "label": "Crawler Network Security",
+      "summary": "Treat destinations as hostile: validate schemes, DNS answers, redirects, and pinned connections; private networks are denied by default.",
+      "source_paths": [
+        "backend/app/crawler/security.py",
+        "backend/app/crawler/secure_transport.py",
+        "backend/app/crawler/safe_fetch.py",
+        "docs/network-security.md",
+        "backend/tests/test_network_security.py"
+      ],
+      "state_layer": "platform",
+      "invariants": [
+        "network-destinations-hostile"
+      ]
+    },
+    {
+      "id": "sources",
+      "type": "domain",
+      "label": "Source Definitions & Current Inventory",
+      "summary": "UrlSource definitions, current UrlSourceEntry inventory, manual declarations, robots/sitemap discovery, and AI Document Source configuration provide mutable source/workspace truth and collection entry points; they are not historical sitemap evidence.",
+      "source_paths": [
+        "backend/app/services/source_management.py",
+        "backend/app/services/source_refresh.py",
+        "backend/app/services/source_queries.py",
+        "docs/architecture.md",
+        "docs/resource-inventory.md",
+        "docs/ai-document-sources.md"
+      ],
+      "state_layer": "mixed",
+      "invariants": [
+        "evidence-not-workspace",
+        "url-identity-versioned",
+        "job-write-ownership",
+        "source-inventory-not-historical-evidence"
+      ]
+    },
+    {
+      "id": "source-evidence",
+      "type": "evidence-domain",
+      "label": "Immutable Source Evidence",
+      "summary": "SourceRefresh is the immutable collection envelope. Sitemap urlset refreshes persist duplicate-preserving SourceEntryObservation rows and sitemapindex refreshes retain ordered exact child-refresh topology so historical membership can be reconstructed without mutable inventory state.",
+      "source_paths": [
+        "backend/app/models/resources.py",
+        "backend/app/services/source_refresh.py",
+        "backend/app/services/finding_evaluations.py",
+        "backend/alembic/versions/202609030032_sitemap_finding_evidence.py",
+        "docs/architecture.md",
+        "docs/findings.md",
+        "backend/tests/test_sources.py",
+        "backend/tests/test_findings.py"
+      ],
+      "symbols": [
+        "SourceRefresh",
+        "SourceEntryObservation",
+        "_build_evidence_manifest"
+      ],
+      "state_layer": "evidence",
+      "invariants": [
+        "evidence-not-workspace",
+        "url-identity-versioned",
+        "job-write-ownership",
+        "independent-evidence-clocks",
+        "frozen-universes-deterministic",
+        "source-inventory-not-historical-evidence",
+        "recursive-sitemap-topology-frozen"
+      ]
+    },
+    {
+      "id": "background-jobs",
+      "type": "domain",
+      "label": "Durable Background Jobs",
+      "summary": "BackgroundJob provides queued/running/terminal execution, leases, recovery, retries, and ownership fencing for durable domain mutation.",
+      "source_paths": [
+        "backend/app/services/background_jobs.py",
+        "backend/app/services/job_handlers.py",
+        "backend/app/worker.py",
+        "docs/background-jobs.md"
+      ],
+      "symbols": [
+        "claim_next_job",
+        "JobExecutionContext.fence_domain_mutation",
+        "guard_execution_ownership"
+      ],
+      "state_layer": "operational",
+      "invariants": [
+        "job-write-ownership",
+        "recovered-job-zombie-worker",
+        "required-followups-recoverable"
+      ]
+    },
+    {
+      "id": "job-followups",
+      "type": "domain",
+      "label": "Required Follow-ups",
+      "summary": "Terminal domain work schedules idempotent required downstream work such as scan projection and category reconciliation.",
+      "source_paths": [
+        "backend/app/services/job_followups.py",
+        "backend/app/services/job_handlers.py"
+      ],
+      "symbols": [
+        "ensure_terminal_scan_followups",
+        "ensure_required_followups"
+      ],
+      "state_layer": "operational",
+      "invariants": [
+        "required-followups-recoverable"
+      ]
+    },
+    {
+      "id": "render",
+      "type": "evidence-domain",
+      "label": "Rendered Evidence",
+      "summary": "Browser observations are a separate evidence clock and run type rather than being hidden inside static Scan.",
+      "source_paths": [
+        "backend/app/services/render_runs.py",
+        "backend/app/services/rendered_capture.py",
+        "backend/app/services/rendered_queries.py",
+        "docs/browser-rendered-observations.md"
+      ],
+      "state_layer": "evidence",
+      "invariants": [
+        "independent-evidence-clocks",
+        "job-write-ownership",
+        "network-destinations-hostile"
+      ]
+    },
+    {
+      "id": "performance",
+      "type": "evidence-domain",
+      "label": "Performance Evidence",
+      "summary": "Performance observations are collected in native runs with their own compatibility and freshness semantics.",
+      "source_paths": [
+        "backend/app/services/performance_collection.py",
+        "backend/app/services/performance_queries.py",
+        "docs/performance-observations.md"
+      ],
+      "state_layer": "evidence",
+      "invariants": [
+        "independent-evidence-clocks",
+        "job-write-ownership"
+      ]
+    },
+    {
+      "id": "accessibility",
+      "type": "evidence-domain",
+      "label": "Accessibility Evidence",
+      "summary": "Accessibility observations use the hardened browser stack and remain a separately collected evidence domain.",
+      "source_paths": [
+        "backend/app/services/accessibility_collection.py",
+        "backend/app/services/accessibility_queries.py",
+        "docs/accessibility-observations.md"
+      ],
+      "state_layer": "evidence",
+      "invariants": [
+        "independent-evidence-clocks",
+        "job-write-ownership",
+        "network-destinations-hostile"
+      ]
+    },
+    {
+      "id": "structured-content",
+      "type": "derived-domain",
+      "label": "Structured Content",
+      "summary": "Versioned structured extraction and canonical document rendering derive semantic content from retained page evidence.",
+      "source_paths": [
+        "backend/app/services/structured_content.py",
+        "backend/app/services/structured_content_queries.py",
+        "backend/app/crawler/structured_content.py",
+        "docs/structured-page-content.md"
+      ],
+      "state_layer": "derived",
+      "invariants": [
+        "derived-state-rebuildable",
+        "independent-evidence-clocks"
+      ]
+    },
+    {
+      "id": "scan-projections",
+      "type": "derived-domain",
+      "label": "Scan Projections",
+      "summary": "Versioned deterministic materialization turns authoritative Scan evidence into queryable current derived state using staged build, checksum, validation, and atomic activation.",
+      "source_paths": [
+        "backend/app/services/scan_projections.py",
+        "backend/app/services/projection_queries.py",
+        "backend/app/models/projections.py",
+        "docs/scan-projections.md"
+      ],
+      "symbols": [
+        "current_projection_build",
+        "create_projection_build",
+        "execute_projection_build"
+      ],
+      "state_layer": "derived",
+      "invariants": [
+        "derived-state-rebuildable",
+        "projection-activation-atomic"
+      ]
+    },
+    {
+      "id": "comparisons",
+      "type": "derived-domain",
+      "label": "Scan Comparisons",
+      "summary": "Comparisons pin exact baseline and target projection builds and compute deterministic deltas without rewriting source history.",
+      "source_paths": [
+        "backend/app/services/scan_comparisons.py",
+        "backend/app/services/comparison_queries.py",
+        "backend/app/models/comparisons.py",
+        "docs/scan-comparisons.md"
+      ],
+      "symbols": [
+        "create_comparison_build"
+      ],
+      "state_layer": "derived",
+      "invariants": [
+        "derived-state-rebuildable",
+        "comparisons-pin-exact-inputs"
+      ]
+    },
+    {
+      "id": "findings",
+      "type": "derived-domain",
+      "label": "Findings",
+      "summary": "Versioned detector bundles evaluate a frozen active-Page universe plus explicit retained evidence manifests. V5 correlates static Scan evidence with immutable recursive sitemap Source evidence while preserving tri-state lifecycle and typed provenance. History is durable by default; explicit administrative deletion/reset can discard rebuildable interpretation state without deleting evidence.",
+      "source_paths": [
+        "backend/app/services/finding_detectors.py",
+        "backend/app/services/finding_evaluations.py",
+        "backend/app/services/findings.py",
+        "backend/app/services/finding_deletion.py",
+        "backend/app/api/findings_routes.py",
+        "backend/app/models/findings.py",
+        "docs/findings.md",
+        "backend/tests/test_findings.py",
+        "frontend/src/pages/site-workspace/SiteFindingsWorkspace.tsx"
+      ],
+      "symbols": [
+        "execute_evaluation",
+        "delete_finding",
+        "reset_site_findings"
+      ],
+      "state_layer": "derived",
+      "invariants": [
+        "derived-state-rebuildable",
+        "findings-tristate",
+        "finding-history-durable",
+        "frozen-universes-deterministic",
+        "independent-evidence-clocks",
+        "source-inventory-not-historical-evidence",
+        "recursive-sitemap-topology-frozen"
+      ]
+    },
+    {
+      "id": "site-intelligence",
+      "type": "read-model",
+      "label": "Site Intelligence",
+      "summary": "Cross-domain overview summarizes coverage/currentness while preserving independent evidence clocks rather than inventing one fake site timestamp.",
+      "source_paths": [
+        "backend/app/services/site_intelligence.py",
+        "backend/app/api/site_intelligence_routes.py",
+        "frontend/src/pages/site-workspace/SiteIntelligenceOverview.tsx",
+        "docs/site-intelligence.md"
+      ],
+      "symbols": [
+        "get_site_intelligence"
+      ],
+      "state_layer": "derived",
+      "invariants": [
+        "independent-evidence-clocks"
+      ]
+    },
+    {
+      "id": "collection-plans",
+      "type": "orchestration-domain",
+      "label": "Collection Plans",
+      "summary": "Plans compute missing-current evidence across the active Page universe, freeze target selection/checksums, and batch existing native collectors.",
+      "source_paths": [
+        "backend/app/services/collection_plans.py",
+        "backend/app/models/collection_plans.py",
+        "frontend/src/pages/site-workspace/CollectionPlansWorkspace.tsx",
+        "docs/collection-plans.md"
+      ],
+      "symbols": [
+        "build_selection",
+        "create_collection_plan"
+      ],
+      "state_layer": "operational",
+      "invariants": [
+        "collection-plans-use-native-collectors",
+        "frozen-universes-deterministic"
+      ]
+    },
+    {
+      "id": "categories",
+      "type": "workspace-domain",
+      "label": "Page Categories & Rules",
+      "summary": "Mutable organizational state classifies persistent Pages independently from immutable scan evidence.",
+      "source_paths": [
+        "backend/app/services/page_categories.py",
+        "backend/app/services/category_rules.py",
+        "backend/app/services/category_rule_evaluator.py",
+        "docs/page-category-rules.md"
+      ],
+      "state_layer": "workspace",
+      "invariants": [
+        "evidence-not-workspace"
+      ]
+    },
+    {
+      "id": "website-graph",
+      "type": "read-model",
+      "label": "Website Graph",
+      "summary": "Scan-specific graph representation of Pages/resources/links for exploration; it is a view over stored evidence, not the source of truth.",
+      "source_paths": [
+        "backend/app/services/graph_queries.py",
+        "backend/app/services/graph_filters.py",
+        "backend/app/services/graph_config.py",
+        "docs/website-graph.md",
+        "docs/graph-performance.md"
+      ],
+      "state_layer": "derived",
+      "invariants": [
+        "derived-state-rebuildable"
+      ]
+    },
+    {
+      "id": "frontend",
+      "type": "community",
+      "label": "Frontend Workspace",
+      "summary": "React/TanStack Query workspace routes expose site intelligence, Findings, collection plans, Pages, graph, and evidence-detail surfaces.",
+      "source_paths": [
+        "frontend/src/main.tsx",
+        "frontend/src/pages/site-workspace/SiteWorkspaceLayout.tsx",
+        "frontend/src/pages/site-workspace/SiteWorkspacePages.tsx",
+        "frontend/src/pages/site-workspace/SiteFindingsWorkspace.tsx"
+      ],
+      "state_layer": "platform",
+      "invariants": []
+    },
+    {
+      "id": "persistence",
+      "type": "platform",
+      "label": "Persistence",
+      "summary": "SQLite/WAL plus SQLAlchemy/Alembic store durable identity, evidence, derived state, and job state; filesystem stores content/artifacts where appropriate.",
+      "source_paths": [
+        "backend/app/database.py",
+        "backend/alembic",
+        "backend/app/storage/content_store.py"
+      ],
+      "state_layer": "platform",
+      "invariants": [
+        "sqlite-intentional"
+      ]
+    },
+    {
+      "id": "testing",
+      "type": "platform",
+      "label": "Invariant-focused Testing",
+      "summary": "Unit/integration tests stress concurrency, migrations, security, deterministic derivation, and a real full-stack Golden Path.",
+      "source_paths": [
+        "backend/tests/test_execution_ownership_fencing.py",
+        "backend/tests/test_worker_resilience.py",
+        "backend/tests/test_network_security.py",
+        "backend/tests/test_collection_plans.py",
+        "backend/tests/test_findings.py",
+        "frontend/tests-full-stack/site-ledger-golden-path.spec.ts",
+        "docs/full-stack-testing.md"
+      ],
+      "state_layer": "platform",
+      "invariants": []
+    },
+    {
+      "id": "api",
+      "type": "platform",
+      "label": "HTTP API",
+      "summary": "FastAPI route modules expose domain operations and read models while service modules retain domain behavior.",
+      "source_paths": [
+        "backend/app/api",
+        "backend/app/main.py"
+      ],
+      "state_layer": "platform",
+      "invariants": []
+    }
+  ],
+  "edges": [
+    {
+      "source": "product",
+      "target": "truth-model",
+      "relation": "organized_by"
+    },
+    {
+      "source": "product",
+      "target": "frontend",
+      "relation": "presented_by"
+    },
+    {
+      "source": "product",
+      "target": "site-identity",
+      "relation": "scoped_by"
+    },
+    {
+      "source": "site-identity",
+      "target": "url-identity",
+      "relation": "depends_on"
+    },
+    {
+      "source": "static-scan",
+      "target": "site-identity",
+      "relation": "records"
+    },
+    {
+      "source": "static-scan",
+      "target": "network-security",
+      "relation": "guarded_by"
+    },
+    {
+      "source": "sources",
+      "target": "site-identity",
+      "relation": "declares_candidates_for"
+    },
+    {
+      "source": "sources",
+      "target": "url-identity",
+      "relation": "normalizes_with"
+    },
+    {
+      "source": "static-scan",
+      "target": "background-jobs",
+      "relation": "executed_by"
+    },
+    {
+      "source": "sources",
+      "target": "background-jobs",
+      "relation": "refresh_executed_by"
+    },
+    {
+      "source": "render",
+      "target": "background-jobs",
+      "relation": "executed_by"
+    },
+    {
+      "source": "performance",
+      "target": "background-jobs",
+      "relation": "executed_by"
+    },
+    {
+      "source": "accessibility",
+      "target": "background-jobs",
+      "relation": "executed_by"
+    },
+    {
+      "source": "structured-content",
+      "target": "background-jobs",
+      "relation": "executed_by"
+    },
+    {
+      "source": "scan-projections",
+      "target": "background-jobs",
+      "relation": "built_by"
+    },
+    {
+      "source": "comparisons",
+      "target": "background-jobs",
+      "relation": "built_by"
+    },
+    {
+      "source": "findings",
+      "target": "background-jobs",
+      "relation": "evaluated_by"
+    },
+    {
+      "source": "background-jobs",
+      "target": "persistence",
+      "relation": "leases_and_fences_in"
+    },
+    {
+      "source": "background-jobs",
+      "target": "job-followups",
+      "relation": "terminalizes_into"
+    },
+    {
+      "source": "static-scan",
+      "target": "job-followups",
+      "relation": "triggers"
+    },
+    {
+      "source": "job-followups",
+      "target": "scan-projections",
+      "relation": "enqueues"
+    },
+    {
+      "source": "job-followups",
+      "target": "categories",
+      "relation": "reconciles"
+    },
+    {
+      "source": "scan-projections",
+      "target": "static-scan",
+      "relation": "derived_from"
+    },
+    {
+      "source": "comparisons",
+      "target": "scan-projections",
+      "relation": "pins"
+    },
+    {
+      "source": "website-graph",
+      "target": "static-scan",
+      "relation": "reads"
+    },
+    {
+      "source": "structured-content",
+      "target": "static-scan",
+      "relation": "derives_from"
+    },
+    {
+      "source": "findings",
+      "target": "static-scan",
+      "relation": "evaluates"
+    },
+    {
+      "source": "findings",
+      "target": "scan-projections",
+      "relation": "adjacent_to"
+    },
+    {
+      "source": "site-intelligence",
+      "target": "static-scan",
+      "relation": "summarizes"
+    },
+    {
+      "source": "site-intelligence",
+      "target": "render",
+      "relation": "summarizes"
+    },
+    {
+      "source": "site-intelligence",
+      "target": "performance",
+      "relation": "summarizes"
+    },
+    {
+      "source": "site-intelligence",
+      "target": "accessibility",
+      "relation": "summarizes"
+    },
+    {
+      "source": "site-intelligence",
+      "target": "structured-content",
+      "relation": "summarizes"
+    },
+    {
+      "source": "site-intelligence",
+      "target": "comparisons",
+      "relation": "summarizes"
+    },
+    {
+      "source": "site-intelligence",
+      "target": "sources",
+      "relation": "summarizes"
+    },
+    {
+      "source": "site-intelligence",
+      "target": "findings",
+      "relation": "surfaces"
+    },
+    {
+      "source": "collection-plans",
+      "target": "site-identity",
+      "relation": "freezes_active_page_universe"
+    },
+    {
+      "source": "collection-plans",
+      "target": "render",
+      "relation": "targets_missing_current"
+    },
+    {
+      "source": "collection-plans",
+      "target": "performance",
+      "relation": "targets_missing_current"
+    },
+    {
+      "source": "collection-plans",
+      "target": "accessibility",
+      "relation": "targets_missing_current"
+    },
+    {
+      "source": "collection-plans",
+      "target": "structured-content",
+      "relation": "targets_missing_current"
+    },
+    {
+      "source": "frontend",
+      "target": "site-intelligence",
+      "relation": "renders"
+    },
+    {
+      "source": "frontend",
+      "target": "findings",
+      "relation": "renders"
+    },
+    {
+      "source": "frontend",
+      "target": "collection-plans",
+      "relation": "renders"
+    },
+    {
+      "source": "frontend",
+      "target": "website-graph",
+      "relation": "renders"
+    },
+    {
+      "source": "api",
+      "target": "site-intelligence",
+      "relation": "exposes"
+    },
+    {
+      "source": "api",
+      "target": "findings",
+      "relation": "exposes"
+    },
+    {
+      "source": "api",
+      "target": "collection-plans",
+      "relation": "exposes"
+    },
+    {
+      "source": "api",
+      "target": "static-scan",
+      "relation": "exposes"
+    },
+    {
+      "source": "testing",
+      "target": "background-jobs",
+      "relation": "stress_tests"
+    },
+    {
+      "source": "testing",
+      "target": "network-security",
+      "relation": "stress_tests"
+    },
+    {
+      "source": "testing",
+      "target": "findings",
+      "relation": "verifies"
+    },
+    {
+      "source": "testing",
+      "target": "collection-plans",
+      "relation": "verifies"
+    },
+    {
+      "source": "testing",
+      "target": "scan-projections",
+      "relation": "verifies"
+    },
+    {
+      "source": "testing",
+      "target": "comparisons",
+      "relation": "verifies"
+    },
+    {
+      "source": "sources",
+      "target": "source-evidence",
+      "relation": "records"
+    },
+    {
+      "source": "source-evidence",
+      "target": "url-identity",
+      "relation": "normalizes_with"
+    },
+    {
+      "source": "findings",
+      "target": "source-evidence",
+      "relation": "evaluates"
+    },
+    {
+      "source": "testing",
+      "target": "source-evidence",
+      "relation": "verifies"
+    }
+  ]
+}

@@ -43,7 +43,8 @@ observations from separate scans without erasing the evidence captured by each s
   through durable Collection Plans that reuse native collectors.
 - Evaluates persistent deterministic static Findings for HTTP/fetch failures, noindex directives,
   indexability conflicts, missing titles, invalid or multiple canonicals, broken observed canonical
-  targets, and active Pages returning non-HTML representations, with per-detector diagnostics.
+  targets, internal-link topology, and sitemap/static cross-stream conditions, with per-detector
+  diagnostics and explicit administrative delete/reset controls that preserve collected evidence.
 - Indexes browser-rendered observations from Site, Page, Render Run, and historical Scan workspaces
 - Deletes retained browser evidence independently with target tombstones, bounded bulk actions,
   reference-safe artifact reclamation, and Site/legacy Scan ownership controls
@@ -89,6 +90,8 @@ See [Site Intelligence](docs/site-intelligence.md) for current coverage, indepen
 evidence-compatibility semantics.
 See [URL identity contract](docs/url-identity-contract.md) for persistent WebResource semantics,
 known V1 equivalences, retained-data audit results, and future migration constraints.
+Developers and coding agents can use the maintained [Site Ledger second brain](docs/brain/README.md)
+as a context/navigation layer; source code, migrations, and tests remain authoritative.
 
 ## Architecture Overview
 

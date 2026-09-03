@@ -11,11 +11,22 @@ from sqlalchemy.orm import sessionmaker
 from app.api.findings_routes import router as findings_router
 from app.database import get_db
 from app.models import (
+    AccessibilityObservation,
+    AccessibilityRun,
     BackgroundJob,
+    CollectionPlan,
+    ContentBlob,
     Finding,
     FindingAssessment,
     FindingEvaluation,
     FindingEvidenceReference,
+    HtmlStructuredContentArtifact,
+    HtmlStructuredContentNode,
+    JobEvent,
+    PerformanceObservation,
+    PerformanceRun,
+    RenderedObservation,
+    RenderRun,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -27,6 +38,7 @@ from app.models import (
     WebsiteProperty,
 )
 from app.services import background_jobs
+from app.services.finding_deletion import reset_site_findings
 from app.services.finding_detectors import CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
 from app.services.finding_evaluations import (
     FINDING_DETECTOR_BUNDLE_IDENTITY,
@@ -43,13 +55,15 @@ from app.services.job_handlers import (
     run_claimed_job,
 )
 from app.services.job_types import JOB_TYPE_FINDING_EVALUATION
+from app.services.site_intelligence import get_site_intelligence
 
 
-def _site_page(db):
+def _site_page(db, *, name: str = "Finding fixture", base_url: str = "https://example.test/"):
+    host = base_url.removeprefix("https://").removeprefix("http://").rstrip("/")
     site = WebsiteProperty(
-        name="Finding fixture",
-        base_url="https://example.test/",
-        normalized_base_url="https://example.test/",
+        name=name,
+        base_url=base_url,
+        normalized_base_url=base_url,
         group_key="Other",
         platform_key="Other",
         ownership_key="Unknown",
@@ -57,9 +71,9 @@ def _site_page(db):
     )
     resource = WebResource(
         resource_type="page",
-        normalized_url="https://example.test/page",
+        normalized_url=f"{base_url.rstrip('/')}/page",
         scheme="https",
-        host="example.test",
+        host=host,
         path="/page",
         query="",
     )
@@ -2228,3 +2242,512 @@ def test_finding_detail_batches_retained_evidence_resolution(db_session) -> None
     )
     assert selects <= 7
     print(f"finding detail: assessments=25 references=50 selects={selects}")
+
+
+def test_individual_finding_delete_preserves_evaluation_job_siblings_and_evidence(
+    db_session,
+) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, snapshot = _scan(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 3, tzinfo=UTC),
+        404,
+        meta_robots="noindex",
+    )
+    evaluation, _result = _evaluate(db_session, site)
+    job = background_jobs.enqueue_finding_evaluation_job(db_session, evaluation.id, site.id)
+    job.status = "completed"
+    job.finished_at = datetime.now(UTC)
+    event_row = JobEvent(
+        job_id=job.id,
+        event_type="completed",
+        level="info",
+        message="Job completed.",
+        data_json={},
+    )
+    db_session.add(event_row)
+    db_session.commit()
+
+    findings = list(db_session.scalars(select(Finding).order_by(Finding.id)))
+    assert len(findings) >= 2
+    selected, sibling = findings[:2]
+    assert set_acknowledged(db_session, site.id, selected.id, True) is not None
+    selected_assessment_ids = list(
+        db_session.scalars(
+            select(FindingAssessment.id).where(FindingAssessment.finding_id == selected.id)
+        )
+    )
+    sibling_snapshot = (
+        sibling.id,
+        sibling.condition_state,
+        sibling.current_assessment_id,
+        sibling.fingerprint_sha256,
+    )
+    historical_counts = (
+        evaluation.detected_count,
+        evaluation.clear_count,
+        evaluation.unknown_count,
+        evaluation.assessment_count,
+    )
+
+    with _findings_client(db_session) as client:
+        response = client.delete(f"/api/sites/{site.id}/findings/{selected.id}")
+        assert response.status_code == 204
+        duplicate = client.post(f"/api/sites/{site.id}/findings/evaluations")
+        assert duplicate.status_code == 202
+        assert duplicate.json()["id"] == evaluation.id
+
+    db_session.expire_all()
+    assert db_session.get(Finding, selected.id) is None
+    assert not list(
+        db_session.scalars(
+            select(FindingAssessment).where(FindingAssessment.id.in_(selected_assessment_ids))
+        )
+    )
+    assert not list(
+        db_session.scalars(
+            select(FindingEvidenceReference).where(
+                FindingEvidenceReference.finding_assessment_id.in_(selected_assessment_ids)
+            )
+        )
+    )
+    retained_sibling = db_session.get(Finding, sibling.id)
+    assert retained_sibling is not None
+    assert (
+        retained_sibling.id,
+        retained_sibling.condition_state,
+        retained_sibling.current_assessment_id,
+        retained_sibling.fingerprint_sha256,
+    ) == sibling_snapshot
+    retained_evaluation = db_session.get(FindingEvaluation, evaluation.id)
+    assert retained_evaluation is not None
+    assert (
+        retained_evaluation.detected_count,
+        retained_evaluation.clear_count,
+        retained_evaluation.unknown_count,
+        retained_evaluation.assessment_count,
+    ) == historical_counts
+    assert db_session.get(BackgroundJob, job.id) is not None
+    assert db_session.get(JobEvent, event_row.id) is not None
+    assert db_session.get(Scan, scan.id) is not None
+    assert db_session.get(ResourceSnapshot, snapshot.id) is not None
+
+
+def test_site_reset_rebuilds_same_static_topology_and_recursive_sitemap_evidence(
+    db_session,
+) -> None:
+    site, resource, _page = _site_page(db_session)
+    moment = datetime(2026, 9, 3, 2, tzinfo=UTC)
+    scan, source_snapshot = _scan(db_session, site, resource, moment, 404, meta_robots="noindex")
+    target = _resource(db_session, "/broken")
+    target_snapshot = _target_snapshot(db_session, scan, target, moment, 404)
+    occurrence = _link(db_session, source_snapshot, target)[0]
+    root = _sitemap_source(db_session, site, "Root", "index.xml", discovery_mode="configured")
+    child = _sitemap_source(db_session, site, "Child", "child.xml")
+    _child_source, leaf = _sitemap_refresh(
+        db_session, site, resource, moment + timedelta(minutes=1), source=child
+    )
+    root_refresh = _sitemap_index_refresh(db_session, root, moment + timedelta(minutes=2), [leaf])
+    evaluation, _result = _evaluate(db_session, site)
+    content_blob = ContentBlob(
+        sha256="a" * 64,
+        storage_key="content/pr52-reset-fixture.html.gz",
+        compression_type="gzip",
+        content_type="text/html",
+        encoding="utf-8",
+        raw_byte_size=64,
+        stored_byte_size=32,
+    )
+    render_run = RenderRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=1,
+        attempted_count=1,
+        completed_count=1,
+    )
+    performance_run = PerformanceRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=1,
+        request_count=1,
+        completed_count=1,
+        ready_count=1,
+    )
+    accessibility_run = AccessibilityRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=1,
+        observation_count=1,
+        completed_count=1,
+        ready_count=1,
+        axe_core_version="fixture-v1",
+        detector_bundle_sha256="b" * 64,
+        integration_version="fixture-v1",
+        normalization_version="fixture-v1",
+        ruleset_profile="fixture",
+        ruleset_rule_count=0,
+        ruleset_sha256="c" * 64,
+    )
+    collection_plan = CollectionPlan(
+        website_property_id=site.id,
+        planner_version="collection-planner-v1",
+        evidence_domain="render",
+        target_mode="missing_current",
+        context_identity="fixture",
+        context_json={},
+        active_page_count=1,
+        active_page_universe_sha256="d" * 64,
+        eligible_count=1,
+        covered_count_at_creation=0,
+        in_flight_count_at_creation=0,
+        ineligible_count_at_creation=0,
+        target_count=1,
+        batch_size=1,
+        batch_count=1,
+        target_selection_sha256="e" * 64,
+    )
+    db_session.add_all(
+        [content_blob, render_run, performance_run, accessibility_run, collection_plan]
+    )
+    db_session.flush()
+    structured_artifact = HtmlStructuredContentArtifact(
+        content_blob_id=content_blob.id,
+        extractor_version="structured-content-v2",
+        extractor_config_version="default-v2",
+        extraction_state="ready",
+        document_profile="headed",
+        section_count=1,
+        heading_count=1,
+        heading_counts_json={"h1": 1},
+        document_word_count=2,
+        document_character_count=12,
+        document_text_sha256="f" * 64,
+        outline_sha256="1" * 64,
+        node_count=1,
+        canonical_document_sha256="2" * 64,
+        markdown_renderer_version="structured-markdown-v1",
+        markdown_sha256="3" * 64,
+        markdown_character_count=12,
+    )
+    rendered_observation = RenderedObservation(
+        render_run_id=render_run.id,
+        web_resource_id=resource.id,
+        snapshot_id=source_snapshot.id,
+        capture_state="completed",
+        requested_url=resource.normalized_url,
+        final_url=resource.normalized_url,
+        navigation_http_status=200,
+        browser_engine="chromium",
+        renderer_version="renderer-v2",
+        browser_policy_version="browser-policy-v2",
+        capture_schema_version="capture-schema-v2",
+        viewport_width=1440,
+        viewport_height=900,
+        device_scale_factor=1,
+        locale="en-US",
+        timezone_id="UTC",
+        color_scheme="light",
+        reduced_motion="reduce",
+        configuration_fingerprint="4" * 64,
+    )
+    performance_observation = PerformanceObservation(
+        performance_run_id=performance_run.id,
+        website_property_id=site.id,
+        web_resource_id=resource.id,
+        provider="pagespeed",
+        provider_adapter_version="fixture-v1",
+        normalization_version="fixture-v1",
+        target_kind="url",
+        target_key="5" * 64,
+        requested_target=resource.normalized_url,
+        dimension="mobile",
+        outcome="ready",
+        request_descriptor_json={},
+    )
+    accessibility_observation = AccessibilityObservation(
+        accessibility_run_id=accessibility_run.id,
+        website_property_id=site.id,
+        web_resource_id=resource.id,
+        requested_url=resource.normalized_url,
+        final_url=resource.normalized_url,
+        profile="desktop",
+        outcome="ready",
+        axe_core_version="fixture-v1",
+        detector_bundle_sha256="b" * 64,
+        integration_version="fixture-v1",
+        normalization_version="fixture-v1",
+        ruleset_profile="fixture",
+        ruleset_sha256="c" * 64,
+        profile_json={},
+    )
+    db_session.add_all(
+        [
+            structured_artifact,
+            rendered_observation,
+            performance_observation,
+            accessibility_observation,
+        ]
+    )
+    db_session.flush()
+    structured_node = HtmlStructuredContentNode(
+        artifact_id=structured_artifact.id,
+        position=0,
+        kind="heading",
+        depth=0,
+        source_tag="h1",
+        source_dom_path="html/body/h1",
+        region_key="main",
+        region_dom_path="html/body",
+        text="Fixture page",
+        semantic_sha256="6" * 64,
+        subtree_sha256="7" * 64,
+    )
+    db_session.add(structured_node)
+    db_session.flush()
+    job = background_jobs.enqueue_finding_evaluation_job(db_session, evaluation.id, site.id)
+    job.status = "completed"
+    job.finished_at = datetime.now(UTC)
+    event_row = JobEvent(
+        job_id=job.id,
+        event_type="completed",
+        level="info",
+        message="Job completed.",
+        data_json={},
+    )
+    db_session.add(event_row)
+    scan_job = background_jobs.enqueue_scan_job(db_session, scan)
+    scan_job.status = "completed"
+    scan_job.finished_at = datetime.now(UTC)
+    category_job = background_jobs.enqueue_category_rule_job(db_session, 999, site.id)
+    category_job.status = "completed"
+    category_job.finished_at = datetime.now(UTC)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert finding is not None
+    finding.acknowledged_at = datetime.now(UTC)
+    db_session.commit()
+    intelligence_before = get_site_intelligence(db_session, site.id)
+    assert intelligence_before is not None
+    assert intelligence_before.findings.detected > 0
+
+    fingerprint = evaluation.input_fingerprint_sha256
+    checksum = evaluation.evaluation_checksum_sha256
+    finding_identities = set(
+        db_session.execute(select(Finding.finding_type, Finding.fingerprint_sha256)).all()
+    )
+    detector_summary = evaluation.detector_summary_json
+    manifest = evaluation.evidence_manifest_json
+    evidence_ids = {
+        "scan": scan.id,
+        "source_snapshot": source_snapshot.id,
+        "target_snapshot": target_snapshot.id,
+        "occurrence": occurrence.id,
+        "url_source": root.id,
+        "root_refresh": root_refresh.id,
+        "leaf_refresh": leaf.id,
+        "content_blob": content_blob.id,
+        "render_run": render_run.id,
+        "rendered_observation": rendered_observation.id,
+        "performance_run": performance_run.id,
+        "performance_observation": performance_observation.id,
+        "accessibility_run": accessibility_run.id,
+        "accessibility_observation": accessibility_observation.id,
+        "structured_artifact": structured_artifact.id,
+        "structured_node": structured_node.id,
+        "collection_plan": collection_plan.id,
+    }
+    source_observation_ids = list(
+        db_session.scalars(
+            select(SourceEntryObservation.id).where(
+                SourceEntryObservation.source_refresh_id == leaf.id
+            )
+        )
+    )
+
+    with _findings_client(db_session) as client:
+        rejected = client.post(f"/api/sites/{site.id}/findings/reset", json={"confirm": False})
+        assert rejected.status_code == 422
+        response = client.post(f"/api/sites/{site.id}/findings/reset", json={"confirm": True})
+        assert response.status_code == 200
+        result = response.json()
+        assert result["deleted_finding_count"] == len(finding_identities)
+        assert result["deleted_assessment_count"] > 0
+        assert result["deleted_evidence_reference_count"] > 0
+        assert result["deleted_evaluation_count"] == 1
+        assert result["deleted_job_count"] == 1
+        assert result["deleted_job_event_count"] == 2
+
+    db_session.expire_all()
+    assert db_session.query(Finding).filter_by(website_property_id=site.id).count() == 0
+    assert db_session.query(FindingEvaluation).filter_by(website_property_id=site.id).count() == 0
+    assert db_session.get(BackgroundJob, job.id) is None
+    assert db_session.get(JobEvent, event_row.id) is None
+    assert db_session.get(BackgroundJob, scan_job.id) is not None
+    assert db_session.get(BackgroundJob, category_job.id) is not None
+    assert db_session.get(Scan, evidence_ids["scan"]) is not None
+    assert db_session.get(ResourceSnapshot, evidence_ids["source_snapshot"]) is not None
+    assert db_session.get(ResourceSnapshot, evidence_ids["target_snapshot"]) is not None
+    assert db_session.get(ResourceOccurrence, evidence_ids["occurrence"]) is not None
+    assert db_session.get(UrlSource, evidence_ids["url_source"]) is not None
+    retained_root = db_session.get(SourceRefresh, evidence_ids["root_refresh"])
+    assert retained_root is not None
+    assert retained_root.child_refresh_ids_json == [evidence_ids["leaf_refresh"]]
+    assert db_session.get(SourceRefresh, evidence_ids["leaf_refresh"]) is not None
+    assert (
+        list(
+            db_session.scalars(
+                select(SourceEntryObservation.id).where(
+                    SourceEntryObservation.id.in_(source_observation_ids)
+                )
+            )
+        )
+        == source_observation_ids
+    )
+    assert db_session.get(ContentBlob, evidence_ids["content_blob"]).sha256 == "a" * 64
+    assert db_session.get(RenderRun, evidence_ids["render_run"]).status == "completed"
+    assert (
+        db_session.get(RenderedObservation, evidence_ids["rendered_observation"]).capture_state
+        == "completed"
+    )
+    assert db_session.get(PerformanceRun, evidence_ids["performance_run"]).status == "completed"
+    assert (
+        db_session.get(PerformanceObservation, evidence_ids["performance_observation"]).outcome
+        == "ready"
+    )
+    assert db_session.get(AccessibilityRun, evidence_ids["accessibility_run"]).status == "completed"
+    assert (
+        db_session.get(AccessibilityObservation, evidence_ids["accessibility_observation"]).outcome
+        == "ready"
+    )
+    assert (
+        db_session.get(
+            HtmlStructuredContentArtifact, evidence_ids["structured_artifact"]
+        ).canonical_document_sha256
+        == "2" * 64
+    )
+    assert db_session.get(HtmlStructuredContentNode, evidence_ids["structured_node"]).text == (
+        "Fixture page"
+    )
+    assert db_session.get(CollectionPlan, evidence_ids["collection_plan"]).planner_version == (
+        "collection-planner-v1"
+    )
+    intelligence_after = get_site_intelligence(db_session, site.id)
+    assert intelligence_after is not None
+    assert intelligence_after.findings.detected == 0
+    assert intelligence_after.findings.unknown == 0
+    assert intelligence_after.findings.latest_evaluation_id is None
+
+    rebuilt, created = create_evaluation(db_session, site.id)
+    assert created is True
+    assert rebuilt.input_fingerprint_sha256 == fingerprint
+    assert rebuilt.evidence_manifest_json == manifest
+    assert rebuilt.evaluator_version == "finding-evaluator-v3"
+    assert rebuilt.detector_bundle_identity == "finding-detectors-v5"
+    execute_evaluation(db_session, rebuilt.id)
+    db_session.commit()
+    assert rebuilt.evaluation_checksum_sha256 == checksum
+    assert rebuilt.detector_summary_json == detector_summary
+    assert (
+        set(db_session.execute(select(Finding.finding_type, Finding.fingerprint_sha256)).all())
+        == finding_identities
+    )
+
+
+@pytest.mark.parametrize("evaluation_status", ["queued", "running"])
+def test_finding_deletion_and_reset_block_active_evaluation_without_mutation(
+    db_session, evaluation_status
+) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 9, 3, tzinfo=UTC), 404)
+    evaluation, _result = _evaluate(db_session, site)
+    finding = db_session.scalar(select(Finding))
+    assert finding is not None
+    evaluation.status = evaluation_status
+    db_session.commit()
+    counts = (
+        db_session.query(Finding).count(),
+        db_session.query(FindingAssessment).count(),
+        db_session.query(FindingEvaluation).count(),
+    )
+
+    with _findings_client(db_session) as client:
+        assert client.delete(f"/api/sites/{site.id}/findings/{finding.id}").status_code == 409
+        assert (
+            client.post(f"/api/sites/{site.id}/findings/reset", json={"confirm": True}).status_code
+            == 409
+        )
+    assert (
+        db_session.query(Finding).count(),
+        db_session.query(FindingAssessment).count(),
+        db_session.query(FindingEvaluation).count(),
+    ) == counts
+
+
+def test_site_reset_blocks_active_job_and_isolates_other_sites(db_session) -> None:
+    site_a, resource_a, _page_a = _site_page(db_session)
+    _scan(db_session, site_a, resource_a, datetime(2026, 9, 3, tzinfo=UTC), 404)
+    evaluation_a, _result = _evaluate(db_session, site_a)
+    finding_a = db_session.scalar(select(Finding).where(Finding.website_property_id == site_a.id))
+    assert finding_a is not None
+
+    site_b, resource_b, _page_b = _site_page(
+        db_session, name="Finding fixture B", base_url="https://other.test/"
+    )
+    _scan(db_session, site_b, resource_b, datetime(2026, 9, 3, 1, tzinfo=UTC), 500)
+    evaluation_b, _result = _evaluate(db_session, site_b)
+    finding_b = db_session.scalar(select(Finding).where(Finding.website_property_id == site_b.id))
+    assert finding_b is not None
+    job_a = background_jobs.enqueue_finding_evaluation_job(db_session, evaluation_a.id, site_a.id)
+    db_session.commit()
+
+    with _findings_client(db_session) as client:
+        assert client.delete(f"/api/sites/{site_a.id}/findings/{finding_a.id}").status_code == 409
+        assert (
+            client.post(
+                f"/api/sites/{site_a.id}/findings/reset", json={"confirm": True}
+            ).status_code
+            == 409
+        )
+        assert client.delete(f"/api/sites/{site_a.id}/findings/{finding_b.id}").status_code == 404
+    assert db_session.get(Finding, finding_a.id) is not None
+
+    job_a.status = "cancelled"
+    evaluation_a.status = "cancelled"
+    db_session.commit()
+    with _findings_client(db_session) as client:
+        assert (
+            client.post(
+                f"/api/sites/{site_a.id}/findings/reset", json={"confirm": True}
+            ).status_code
+            == 200
+        )
+        assert client.delete(f"/api/sites/999999/findings/{finding_b.id}").status_code == 404
+    assert db_session.get(FindingEvaluation, evaluation_b.id) is not None
+    assert db_session.get(Finding, finding_b.id) is not None
+    assert db_session.get(Scan, evaluation_b.source_scan_id) is not None
+
+
+def test_site_reset_is_atomic_when_the_caller_rolls_back(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 9, 3, tzinfo=UTC), 404)
+    evaluation, _result = _evaluate(db_session, site)
+    job = background_jobs.enqueue_finding_evaluation_job(db_session, evaluation.id, site.id)
+    job.status = "completed"
+    db_session.commit()
+    finding_count = db_session.query(Finding).count()
+
+    result = reset_site_findings(db_session, site.id)
+    assert result is not None and result.deleted_finding_count == finding_count
+    db_session.rollback()
+    assert db_session.query(Finding).filter_by(website_property_id=site.id).count() == finding_count
+    assert db_session.get(FindingEvaluation, evaluation.id) is not None
+    assert db_session.get(BackgroundJob, job.id) is not None

@@ -22,7 +22,6 @@ from app.models import (
     SourceEntryObservation,
     SourceRefresh,
     UrlSource,
-    WebsiteProperty,
 )
 from app.services.finding_detectors import (
     CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
@@ -36,6 +35,7 @@ from app.services.finding_detectors import (
     SitemapMembershipEvidence,
     build_snapshot_url_index,
 )
+from app.services.finding_serialization import lock_site_for_finding_change
 from app.services.scan_projections import TERMINAL_SCAN_STATUSES
 
 FINDING_EVALUATOR_VERSION = "finding-evaluator-v3"
@@ -113,7 +113,8 @@ def finding_fingerprint(
 
 
 def create_evaluation(db: Session, site_id: int) -> tuple[FindingEvaluation, bool]:
-    if db.get(WebsiteProperty, site_id) is None:
+    site = lock_site_for_finding_change(db, site_id)
+    if site is None:
         raise ValueError("Site not found.")
     scan = db.scalar(
         select(Scan)

@@ -58,6 +58,20 @@ class FindingEvaluationList(BaseModel):
     offset: int
 
 
+class FindingResetRequest(BaseModel):
+    confirm: Literal[True]
+
+
+class FindingResetResult(BaseModel):
+    site_id: int
+    deleted_finding_count: int
+    deleted_assessment_count: int
+    deleted_evidence_reference_count: int
+    deleted_evaluation_count: int
+    deleted_job_count: int
+    deleted_job_event_count: int
+
+
 class FindingListItem(BaseModel):
     id: int
     web_resource_id: int

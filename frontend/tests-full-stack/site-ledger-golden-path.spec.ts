@@ -273,7 +273,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/observations?limit=100`)).total).toBe(3);
 
   const firstQueuedFindingEvaluation = await postJson(request, `${apiUrl}/api/sites/${site.id}/findings/evaluations`);
-  const firstFindingEvaluation = await waitForFindingEvaluation(
+  let firstFindingEvaluation = await waitForFindingEvaluation(
     request,
     site.id,
     firstQueuedFindingEvaluation.id,
@@ -305,7 +305,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   ]) {
     expect(firstFindingTypes.has(findingType)).toBe(true);
   }
-  const sitemapRedirectFinding = firstFindings.items.find(
+  let sitemapRedirectFinding = firstFindings.items.find(
     (item) => item.finding_type === "sitemap_page_redirect",
   );
   if (!sitemapRedirectFinding) throw new Error("Sitemap redirect Finding was not created");
@@ -319,6 +319,52 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     "source_entry_observation",
     "scan",
   ]);
+
+  const firstFingerprint = firstFindingEvaluation.input_fingerprint_sha256;
+  const firstChecksum = firstFindingEvaluation.evaluation_checksum_sha256;
+  const resetResult = await postJson(request, `${apiUrl}/api/sites/${site.id}/findings/reset`, {
+    confirm: true,
+  });
+  expect(resetResult.deleted_finding_count).toBe(firstFindings.total);
+  expect(resetResult.deleted_evaluation_count).toBe(1);
+  expect(resetResult.deleted_job_count).toBe(1);
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/findings?limit=100`)).total).toBe(0);
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/findings/evaluations?limit=100`)).total).toBe(0);
+  const retainedRefreshes = await getJson(
+    request,
+    `${apiUrl}/api/sites/${site.id}/sources/${source.id}/refreshes?limit=100`,
+  ) as unknown as Json[];
+  expect(retainedRefreshes.some((item) => item.id === firstRefresh.id && item.membership_materialized)).toBe(true);
+
+  const rebuiltQueuedEvaluation = await postJson(
+    request,
+    `${apiUrl}/api/sites/${site.id}/findings/evaluations`,
+  );
+  firstFindingEvaluation = await waitForFindingEvaluation(
+    request,
+    site.id,
+    rebuiltQueuedEvaluation.id,
+  );
+  expect(firstFindingEvaluation.evaluator_version).toBe("finding-evaluator-v3");
+  expect(firstFindingEvaluation.detector_bundle_identity).toBe("finding-detectors-v5");
+  expect(firstFindingEvaluation.input_fingerprint_sha256).toBe(firstFingerprint);
+  expect(firstFindingEvaluation.evaluation_checksum_sha256).toBe(firstChecksum);
+  expect(firstFindingEvaluation.evidence_manifest_json).toEqual(firstManifest);
+  const rebuiltFirstFindings = await getJson(
+    request,
+    `${apiUrl}/api/sites/${site.id}/findings?limit=100`,
+  );
+  sitemapRedirectFinding = rebuiltFirstFindings.items.find(
+    (item) => item.finding_type === "sitemap_page_redirect",
+  );
+  if (!sitemapRedirectFinding) throw new Error("Sitemap redirect Finding was not rebuilt");
+  const rebuiltRedirectDetail = await getJson(
+    request,
+    `${apiUrl}/api/sites/${site.id}/findings/${sitemapRedirectFinding.id}`,
+  );
+  expect(((rebuiltRedirectDetail.assessments as Json[])[0].evidence_references as Json[]).map(
+    (item) => item.evidence_kind,
+  )).toEqual(["resource_snapshot", "source_entry_observation", "scan"]);
 
   await postJson(request, `${apiUrl}/api/sites/${site.id}/inventory/bulk-delete`, {
     entry_ids: [inventoryEntryId]
