@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -9,8 +9,15 @@ from app.schemas.findings import (
     FindingEvaluationList,
     FindingEvaluationRead,
     FindingList,
+    FindingResetRequest,
+    FindingResetResult,
 )
 from app.services import background_jobs
+from app.services.finding_deletion import (
+    ActiveFindingEvaluationError,
+    delete_finding,
+    reset_site_findings,
+)
 from app.services.finding_evaluations import create_evaluation
 from app.services.findings import (
     get_evaluation,
@@ -106,6 +113,48 @@ def get_finding_detail(site_id: int, finding_id: int, db: DbSession) -> FindingD
     if result is None:
         raise HTTPException(404, "Finding not found")
     return result
+
+
+@router.delete("/sites/{site_id}/findings/{finding_id}", status_code=204)
+def delete_finding_detail(site_id: int, finding_id: int, db: DbSession) -> Response:
+    try:
+        result = delete_finding(db, site_id, finding_id)
+        if result is None:
+            raise HTTPException(404, "Site not found")
+        if result is False:
+            raise HTTPException(404, "Finding not found")
+        db.commit()
+    except ActiveFindingEvaluationError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    return Response(status_code=204)
+
+
+@router.post("/sites/{site_id}/findings/reset", response_model=FindingResetResult)
+def reset_findings(
+    site_id: int, _request: FindingResetRequest, db: DbSession
+) -> FindingResetResult:
+    try:
+        result = reset_site_findings(db, site_id)
+        if result is None:
+            raise HTTPException(404, "Site not found")
+        db.commit()
+    except ActiveFindingEvaluationError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    return FindingResetResult.model_validate(result, from_attributes=True)
 
 
 @router.post("/sites/{site_id}/findings/{finding_id}/acknowledge", response_model=FindingDetail)

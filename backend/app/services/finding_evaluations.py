@@ -113,7 +113,8 @@ def finding_fingerprint(
 
 
 def create_evaluation(db: Session, site_id: int) -> tuple[FindingEvaluation, bool]:
-    if db.get(WebsiteProperty, site_id) is None:
+    site = db.scalar(select(WebsiteProperty).where(WebsiteProperty.id == site_id).with_for_update())
+    if site is None:
         raise ValueError("Site not found.")
     scan = db.scalar(
         select(Scan)
