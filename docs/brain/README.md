@@ -1,8 +1,8 @@
 # Site Ledger Second Brain
 
-**Repository:** `Artsen/site-ledger`  
-**Canonical code snapshot:** `main@6e17e08e641b48660a7ed7a13d9227b288fcafc6`  
-**Generated:** 2026-09-03  
+**Repository:** `Artsen/site-ledger`
+**Canonical code snapshot:** `main@6e17e08e641b48660a7ed7a13d9227b288fcafc6`
+**Generated:** 2026-09-03
 **Recommended location:** `docs/brain/`
 
 This adopted snapshot was reviewed against post-PR #51 `main` at the commit above and updated in

@@ -8,7 +8,7 @@ The goal is **easy context mapping**, not graph maximalism.
 
 Aider compresses a repository into important files, classes, functions, signatures, and relationships so an LLM can understand how the code it is editing fits the rest of the codebase. The key idea is **token-efficient global orientation**, not copying the repository into a second representation.
 
-Reference: https://aider.chat/docs/repomap.html  
+Reference: https://aider.chat/docs/repomap.html
 Background: https://aider.chat/2023/10/22/repomap.html
 
 **Borrowed here:** landmark symbols, small source-path sets, whole-repo orientation.

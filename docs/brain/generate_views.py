@@ -53,7 +53,7 @@ def render_domains_md(data: dict) -> str:
             "",
             node["summary"],
             "",
-            f"**Type:** `{node['type']}`  ",
+            f"**Type:** `{node['type']}`",
             f"**State layer:** `{node.get('state_layer', 'unspecified')}`",
             "",
             "**Canonical paths:**",

@@ -8,7 +8,7 @@ This file is generated from `graph.json`. Source code remains authoritative.
 
 Local-first website intelligence workspace centered on persistent Sites, Pages, evidence history, derived intelligence, and actionable Findings.
 
-**Type:** `community`  
+**Type:** `community`
 **State layer:** `mixed`
 
 **Canonical paths:**
@@ -26,7 +26,7 @@ Local-first website intelligence workspace centered on persistent Sites, Pages, 
 
 Separate authoritative evidence, mutable workspace identity/state, rebuildable derived state, and operational execution state.
 
-**Type:** `concept`  
+**Type:** `concept`
 **State layer:** `mixed`
 
 **Canonical paths:**
@@ -43,7 +43,7 @@ Separate authoritative evidence, mutable workspace identity/state, rebuildable d
 
 WebsiteProperty scopes work; SitePage is persistent workspace membership; WebResource is normalized resource identity; observations attach history without replacing identity.
 
-**Type:** `domain`  
+**Type:** `domain`
 **State layer:** `workspace`
 
 **Canonical paths:**
@@ -61,7 +61,7 @@ WebsiteProperty scopes work; SitePage is persistent workspace membership; WebRes
 
 Normalized resource identity is explicitly versioned; historical identities are not silently reinterpreted.
 
-**Type:** `invariant-area`  
+**Type:** `invariant-area`
 **State layer:** `platform`
 
 **Canonical paths:**
@@ -77,7 +77,7 @@ Normalized resource identity is explicitly versioned; historical identities are 
 
 Deterministic static crawl records durable fetch attempts, snapshots, occurrences, resource identities, and Page membership.
 
-**Type:** `domain`  
+**Type:** `domain`
 **State layer:** `evidence`
 
 **Canonical paths:**
@@ -101,7 +101,7 @@ Deterministic static crawl records durable fetch attempts, snapshots, occurrence
 
 Treat destinations as hostile: validate schemes, DNS answers, redirects, and pinned connections; private networks are denied by default.
 
-**Type:** `invariant-area`  
+**Type:** `invariant-area`
 **State layer:** `platform`
 
 **Canonical paths:**
@@ -118,7 +118,7 @@ Treat destinations as hostile: validate schemes, DNS answers, redirects, and pin
 
 UrlSource definitions, current UrlSourceEntry inventory, manual declarations, robots/sitemap discovery, and AI Document Source configuration provide mutable source/workspace truth and collection entry points; they are not historical sitemap evidence.
 
-**Type:** `domain`  
+**Type:** `domain`
 **State layer:** `mixed`
 
 **Canonical paths:**
@@ -139,7 +139,7 @@ UrlSource definitions, current UrlSourceEntry inventory, manual declarations, ro
 
 SourceRefresh is the immutable collection envelope. Sitemap urlset refreshes persist duplicate-preserving SourceEntryObservation rows and sitemapindex refreshes retain ordered exact child-refresh topology so historical membership can be reconstructed without mutable inventory state.
 
-**Type:** `evidence-domain`  
+**Type:** `evidence-domain`
 **State layer:** `evidence`
 
 **Canonical paths:**
@@ -170,7 +170,7 @@ SourceRefresh is the immutable collection envelope. Sitemap urlset refreshes per
 
 BackgroundJob provides queued/running/terminal execution, leases, recovery, retries, and ownership fencing for durable domain mutation.
 
-**Type:** `domain`  
+**Type:** `domain`
 **State layer:** `operational`
 
 **Canonical paths:**
@@ -193,7 +193,7 @@ BackgroundJob provides queued/running/terminal execution, leases, recovery, retr
 
 Terminal domain work schedules idempotent required downstream work such as scan projection and category reconciliation.
 
-**Type:** `domain`  
+**Type:** `domain`
 **State layer:** `operational`
 
 **Canonical paths:**
@@ -211,7 +211,7 @@ Terminal domain work schedules idempotent required downstream work such as scan 
 
 Browser observations are a separate evidence clock and run type rather than being hidden inside static Scan.
 
-**Type:** `evidence-domain`  
+**Type:** `evidence-domain`
 **State layer:** `evidence`
 
 **Canonical paths:**
@@ -229,7 +229,7 @@ Browser observations are a separate evidence clock and run type rather than bein
 
 Performance observations are collected in native runs with their own compatibility and freshness semantics.
 
-**Type:** `evidence-domain`  
+**Type:** `evidence-domain`
 **State layer:** `evidence`
 
 **Canonical paths:**
@@ -245,7 +245,7 @@ Performance observations are collected in native runs with their own compatibili
 
 Accessibility observations use the hardened browser stack and remain a separately collected evidence domain.
 
-**Type:** `evidence-domain`  
+**Type:** `evidence-domain`
 **State layer:** `evidence`
 
 **Canonical paths:**
@@ -262,7 +262,7 @@ Accessibility observations use the hardened browser stack and remain a separatel
 
 Versioned structured extraction and canonical document rendering derive semantic content from retained page evidence.
 
-**Type:** `derived-domain`  
+**Type:** `derived-domain`
 **State layer:** `derived`
 
 **Canonical paths:**
@@ -279,7 +279,7 @@ Versioned structured extraction and canonical document rendering derive semantic
 
 Versioned deterministic materialization turns authoritative Scan evidence into queryable current derived state using staged build, checksum, validation, and atomic activation.
 
-**Type:** `derived-domain`  
+**Type:** `derived-domain`
 **State layer:** `derived`
 
 **Canonical paths:**
@@ -301,7 +301,7 @@ Versioned deterministic materialization turns authoritative Scan evidence into q
 
 Comparisons pin exact baseline and target projection builds and compute deterministic deltas without rewriting source history.
 
-**Type:** `derived-domain`  
+**Type:** `derived-domain`
 **State layer:** `derived`
 
 **Canonical paths:**
@@ -321,7 +321,7 @@ Comparisons pin exact baseline and target projection builds and compute determin
 
 Versioned detector bundles evaluate a frozen active-Page universe plus explicit retained evidence manifests. V5 correlates static Scan evidence with immutable recursive sitemap Source evidence while preserving tri-state lifecycle and typed provenance. History is durable by default; explicit administrative deletion/reset can discard rebuildable interpretation state without deleting evidence.
 
-**Type:** `derived-domain`  
+**Type:** `derived-domain`
 **State layer:** `derived`
 
 **Canonical paths:**
@@ -353,7 +353,7 @@ Versioned detector bundles evaluate a frozen active-Page universe plus explicit 
 
 Cross-domain overview summarizes coverage/currentness while preserving independent evidence clocks rather than inventing one fake site timestamp.
 
-**Type:** `read-model`  
+**Type:** `read-model`
 **State layer:** `derived`
 
 **Canonical paths:**
@@ -372,7 +372,7 @@ Cross-domain overview summarizes coverage/currentness while preserving independe
 
 Plans compute missing-current evidence across the active Page universe, freeze target selection/checksums, and batch existing native collectors.
 
-**Type:** `orchestration-domain`  
+**Type:** `orchestration-domain`
 **State layer:** `operational`
 
 **Canonical paths:**
@@ -393,7 +393,7 @@ Plans compute missing-current evidence across the active Page universe, freeze t
 
 Mutable organizational state classifies persistent Pages independently from immutable scan evidence.
 
-**Type:** `workspace-domain`  
+**Type:** `workspace-domain`
 **State layer:** `workspace`
 
 **Canonical paths:**
@@ -409,7 +409,7 @@ Mutable organizational state classifies persistent Pages independently from immu
 
 Scan-specific graph representation of Pages/resources/links for exploration; it is a view over stored evidence, not the source of truth.
 
-**Type:** `read-model`  
+**Type:** `read-model`
 **State layer:** `derived`
 
 **Canonical paths:**
@@ -426,7 +426,7 @@ Scan-specific graph representation of Pages/resources/links for exploration; it 
 
 React/TanStack Query workspace routes expose site intelligence, Findings, collection plans, Pages, graph, and evidence-detail surfaces.
 
-**Type:** `community`  
+**Type:** `community`
 **State layer:** `platform`
 
 **Canonical paths:**
@@ -439,7 +439,7 @@ React/TanStack Query workspace routes expose site intelligence, Findings, collec
 
 SQLite/WAL plus SQLAlchemy/Alembic store durable identity, evidence, derived state, and job state; filesystem stores content/artifacts where appropriate.
 
-**Type:** `platform`  
+**Type:** `platform`
 **State layer:** `platform`
 
 **Canonical paths:**
@@ -454,7 +454,7 @@ SQLite/WAL plus SQLAlchemy/Alembic store durable identity, evidence, derived sta
 
 Unit/integration tests stress concurrency, migrations, security, deterministic derivation, and a real full-stack Golden Path.
 
-**Type:** `platform`  
+**Type:** `platform`
 **State layer:** `platform`
 
 **Canonical paths:**
@@ -470,7 +470,7 @@ Unit/integration tests stress concurrency, migrations, security, deterministic d
 
 FastAPI route modules expose domain operations and read models while service modules retain domain behavior.
 
-**Type:** `platform`  
+**Type:** `platform`
 **State layer:** `platform`
 
 **Canonical paths:**
