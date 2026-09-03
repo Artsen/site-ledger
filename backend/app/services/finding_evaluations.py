@@ -57,6 +57,16 @@ class FindingEvaluationChronologyError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class _SitemapRefreshNode:
+    url_source_id: int
+    source_refresh_id: int
+    sitemap_document_type: str | None
+    status: str
+    membership_materialized: bool
+    children: tuple[_SitemapRefreshNode, ...]
+
+
+@dataclass(frozen=True)
 class FindingEvaluationResult:
     evaluation_id: int
     detected: int
@@ -203,33 +213,29 @@ def execute_evaluation(
         or manifest.get("schema") != FINDING_EVIDENCE_MANIFEST_SCHEMA
     ):
         raise ValueError("The frozen Finding evidence manifest is invalid.")
-    source_selections = _manifest_source_selections(manifest)
-    selected_refresh_ids = [
-        refresh_id for _source_id, refresh_id in source_selections if refresh_id is not None
-    ]
+    sitemap_roots = _manifest_sitemap_roots(manifest)
+    selected_nodes = tuple(
+        node for _source_id, root in sitemap_roots if root is not None for node in _walk_tree(root)
+    )
+    selected_refresh_ids = list(dict.fromkeys(node.source_refresh_id for node in selected_nodes))
     selected_refreshes = {
         item.id: item
         for item in db.scalars(
             select(SourceRefresh).where(SourceRefresh.id.in_(selected_refresh_ids or {-1}))
         )
     }
-    usable_refresh_ids_by_source_id = {
-        source_id: refresh_id
-        for source_id, refresh_id in source_selections
-        if refresh_id is not None
-        and (refresh := selected_refreshes.get(refresh_id)) is not None
-        and refresh.url_source_id == source_id
-        and refresh.status in ELIGIBLE_MEMBERSHIP_REFRESH_STATUSES
-        and refresh.membership_materialized
-        and refresh.finished_at is not None
-    }
+    usable_refresh_ids: list[int] = []
+    membership_complete = bool(sitemap_roots)
+    for _source_id, root in sitemap_roots:
+        if root is None or not _collect_usable_sitemap_leaves(
+            root, selected_refreshes, usable_refresh_ids
+        ):
+            membership_complete = False
     membership_by_resource_id: dict[int, list[SitemapMembershipEvidence]] = {}
     for observation in db.scalars(
         select(SourceEntryObservation)
         .where(
-            SourceEntryObservation.source_refresh_id.in_(
-                list(usable_refresh_ids_by_source_id.values()) or {-1}
-            ),
+            SourceEntryObservation.source_refresh_id.in_(usable_refresh_ids or {-1}),
             SourceEntryObservation.resource_id.is_not(None),
             SourceEntryObservation.validation_state == "valid",
         )
@@ -282,8 +288,9 @@ def execute_evaluation(
             resource_id: tuple(items)
             for resource_id, items in occurrences_by_source_resource_id.items()
         },
-        active_sitemap_source_ids=tuple(source_id for source_id, _refresh_id in source_selections),
-        usable_sitemap_refresh_ids_by_source_id=usable_refresh_ids_by_source_id,
+        active_sitemap_source_ids=tuple(source_id for source_id, _root in sitemap_roots),
+        usable_sitemap_refresh_ids=tuple(usable_refresh_ids),
+        sitemap_membership_complete=membership_complete,
         sitemap_membership_by_resource_id={
             resource_id: tuple(items) for resource_id, items in membership_by_resource_id.items()
         },
@@ -324,7 +331,7 @@ def execute_evaluation(
     candidates: list[_Candidate] = []
     outcome_hashes: list[str] = []
     new_findings: list[Finding] = []
-    usable_sitemap_refresh_ids = frozenset(usable_refresh_ids_by_source_id.values())
+    sitemap_evidence_refresh_ids = frozenset(selected_refresh_ids)
     for resource_id in evaluation.active_page_resource_ids_json:
         subject_snapshot = all_snapshots.get(resource_id)
         subject_context = replace(context, subject_resource_id=resource_id)
@@ -336,7 +343,7 @@ def execute_evaluation(
                 selected_refreshes,
                 evaluation.evidence_horizon_at,
                 sitemap_refresh_ids=(
-                    usable_sitemap_refresh_ids
+                    sitemap_evidence_refresh_ids
                     if detector.finding_type.startswith("sitemap_")
                     else frozenset()
                 ),
@@ -495,12 +502,14 @@ def execute_evaluation(
                 }
             elif item.source_entry_observation is not None:
                 observation = item.source_entry_observation
-                refresh = selected_refreshes.get(observation.source_refresh_id)
-                if refresh is not None and refresh.finished_at is not None:
-                    observed_at = refresh.finished_at
+                evidence_refresh = selected_refreshes.get(observation.source_refresh_id)
+                if evidence_refresh is not None and evidence_refresh.finished_at is not None:
+                    observed_at = evidence_refresh.finished_at
                 metadata = {
                     "source_refresh_id": observation.source_refresh_id,
-                    "url_source_id": refresh.url_source_id if refresh is not None else None,
+                    "url_source_id": (
+                        evidence_refresh.url_source_id if evidence_refresh is not None else None
+                    ),
                     "resource_id": observation.resource_id,
                     "raw_url": observation.raw_url,
                     "normalized_url": observation.normalized_url,
@@ -572,13 +581,14 @@ def _detector_evidence_id(item: DetectorEvidence) -> int:
 def _build_evidence_manifest(
     db: Session, site_id: int, scan_id: int
 ) -> tuple[dict[str, object], list[datetime]]:
-    source_ids = list(
+    root_source_ids = list(
         db.scalars(
             select(UrlSource.id)
             .where(
                 UrlSource.website_property_id == site_id,
                 UrlSource.source_type == "sitemap",
                 UrlSource.is_active.is_(True),
+                UrlSource.discovery_mode != "sitemap_index_discovered",
             )
             .order_by(UrlSource.id)
         )
@@ -587,7 +597,7 @@ def _build_evidence_manifest(
     for refresh in db.scalars(
         select(SourceRefresh)
         .where(
-            SourceRefresh.url_source_id.in_(source_ids or {-1}),
+            SourceRefresh.url_source_id.in_(root_source_ids or {-1}),
             SourceRefresh.finished_at.is_not(None),
         )
         .order_by(
@@ -597,49 +607,157 @@ def _build_evidence_manifest(
         )
     ):
         latest_terminal_by_source.setdefault(refresh.url_source_id, refresh)
-    selected_by_source = {
-        source_id: refresh
-        for source_id, refresh in latest_terminal_by_source.items()
+    refresh_cache = {
+        refresh.id: refresh
+        for refresh in latest_terminal_by_source.values()
         if refresh.status in ELIGIBLE_MEMBERSHIP_REFRESH_STATUSES
-        and refresh.membership_materialized
     }
+    frontier = {
+        child_id
+        for refresh in refresh_cache.values()
+        for child_id in (refresh.child_refresh_ids_json or [])
+        if child_id not in refresh_cache
+    }
+    while frontier:
+        loaded = list(
+            db.scalars(select(SourceRefresh).where(SourceRefresh.id.in_(sorted(frontier))))
+        )
+        loaded_by_id = {refresh.id: refresh for refresh in loaded}
+        if set(loaded_by_id) != frontier:
+            raise ValueError("A sitemap refresh has missing immutable child provenance.")
+        refresh_cache.update(loaded_by_id)
+        frontier = {
+            child_id
+            for refresh in loaded
+            for child_id in (refresh.child_refresh_ids_json or [])
+            if child_id not in refresh_cache
+        }
+
+    def freeze_tree(
+        refresh: SourceRefresh, ancestors: frozenset[int] = frozenset()
+    ) -> dict[str, object]:
+        if refresh.id in ancestors:
+            raise ValueError("Sitemap refresh topology must be an acyclic tree.")
+        next_ancestors = ancestors | {refresh.id}
+        children: list[dict[str, object]] = []
+        for child_refresh_id in refresh.child_refresh_ids_json or []:
+            children.append(freeze_tree(refresh_cache[child_refresh_id], next_ancestors))
+        return {
+            "url_source_id": refresh.url_source_id,
+            "source_refresh_id": refresh.id,
+            "sitemap_document_type": refresh.sitemap_document_type,
+            "status": refresh.status,
+            "membership_materialized": refresh.membership_materialized,
+            "children": children,
+        }
+
+    def selected_tree(source_id: int) -> dict[str, object] | None:
+        refresh = latest_terminal_by_source.get(source_id)
+        if refresh is None or refresh.status not in ELIGIBLE_MEMBERSHIP_REFRESH_STATUSES:
+            return None
+        return freeze_tree(refresh)
+
     manifest: dict[str, object] = {
         "schema": FINDING_EVIDENCE_MANIFEST_SCHEMA,
         "static": {"scan_id": scan_id},
-        "sitemap_sources": [
+        "sitemap_roots": [
             {
                 "url_source_id": source_id,
-                "source_refresh_id": (
-                    selected_by_source[source_id].id if source_id in selected_by_source else None
-                ),
+                "refresh_tree": selected_tree(source_id),
             }
-            for source_id in source_ids
+            for source_id in root_source_ids
         ],
     }
     horizons = [
-        refresh.finished_at
-        for refresh in selected_by_source.values()
-        if refresh.finished_at is not None
+        refresh.finished_at for refresh in refresh_cache.values() if refresh.finished_at is not None
     ]
     return manifest, horizons
 
 
-def _manifest_source_selections(manifest: dict[str, object]) -> list[tuple[int, int | None]]:
-    raw = manifest.get("sitemap_sources")
+def _manifest_sitemap_roots(
+    manifest: dict[str, object],
+) -> list[tuple[int, _SitemapRefreshNode | None]]:
+    raw = manifest.get("sitemap_roots")
     if not isinstance(raw, list):
         raise ValueError("The frozen sitemap Source manifest is invalid.")
-    selections: list[tuple[int, int | None]] = []
+    selections: list[tuple[int, _SitemapRefreshNode | None]] = []
     for item in raw:
         if not isinstance(item, dict) or not isinstance(item.get("url_source_id"), int):
             raise ValueError("The frozen sitemap Source manifest is invalid.")
-        refresh_id = item.get("source_refresh_id")
-        if refresh_id is not None and not isinstance(refresh_id, int):
+        tree = item.get("refresh_tree")
+        parsed_tree = None if tree is None else _parse_sitemap_tree(tree)
+        if parsed_tree is not None and parsed_tree.url_source_id != item["url_source_id"]:
             raise ValueError("The frozen sitemap Source manifest is invalid.")
-        selections.append((item["url_source_id"], refresh_id))
+        selections.append((item["url_source_id"], parsed_tree))
     source_ids = [item[0] for item in selections]
     if source_ids != sorted(source_ids) or len(set(source_ids)) != len(source_ids):
         raise ValueError("The frozen sitemap Source manifest is not canonical.")
     return selections
+
+
+def _parse_sitemap_tree(value: object) -> _SitemapRefreshNode:
+    if not isinstance(value, dict):
+        raise ValueError("The frozen sitemap Source manifest is invalid.")
+    source_id = value.get("url_source_id")
+    refresh_id = value.get("source_refresh_id")
+    document_type = value.get("sitemap_document_type")
+    status = value.get("status")
+    membership_materialized = value.get("membership_materialized")
+    raw_children = value.get("children")
+    if (
+        not isinstance(source_id, int)
+        or not isinstance(refresh_id, int)
+        or document_type not in {None, "urlset", "sitemapindex"}
+        or not isinstance(status, str)
+        or not isinstance(membership_materialized, bool)
+        or not isinstance(raw_children, list)
+    ):
+        raise ValueError("The frozen sitemap Source manifest is invalid.")
+    children = tuple(_parse_sitemap_tree(child) for child in raw_children)
+    if document_type != "sitemapindex" and children:
+        raise ValueError("The frozen sitemap Source manifest is invalid.")
+    return _SitemapRefreshNode(
+        source_id, refresh_id, document_type, status, membership_materialized, children
+    )
+
+
+def _walk_tree(root: _SitemapRefreshNode) -> tuple[_SitemapRefreshNode, ...]:
+    return (root, *(node for child in root.children for node in _walk_tree(child)))
+
+
+def _collect_usable_sitemap_leaves(
+    node: _SitemapRefreshNode,
+    refreshes: dict[int, SourceRefresh],
+    usable_refresh_ids: list[int],
+) -> bool:
+    refresh = refreshes.get(node.source_refresh_id)
+    if (
+        refresh is None
+        or refresh.url_source_id != node.url_source_id
+        or refresh.sitemap_document_type != node.sitemap_document_type
+        or refresh.status != node.status
+        or refresh.membership_materialized != node.membership_materialized
+        or tuple(refresh.child_refresh_ids_json or ())
+        != tuple(child.source_refresh_id for child in node.children)
+        or node.status not in ELIGIBLE_MEMBERSHIP_REFRESH_STATUSES
+        or refresh.finished_at is None
+    ):
+        return False
+    if node.sitemap_document_type == "urlset":
+        if not node.membership_materialized:
+            return False
+        if refresh.id not in usable_refresh_ids:
+            usable_refresh_ids.append(refresh.id)
+        return True
+    if node.sitemap_document_type == "sitemapindex":
+        if node.membership_materialized or refresh.rejected_entry_count:
+            return False
+        child_results = [
+            _collect_usable_sitemap_leaves(child, refreshes, usable_refresh_ids)
+            for child in node.children
+        ]
+        return all(child_results)
+    return False
 
 
 def _detector_observed_at(

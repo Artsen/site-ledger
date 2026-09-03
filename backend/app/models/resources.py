@@ -963,7 +963,9 @@ class SourceRefresh(Base):
     error_type: Mapped[str | None] = mapped_column(String(64), index=True)
     error_message: Mapped[str | None] = mapped_column(Text)
     warnings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    sitemap_document_type: Mapped[str | None] = mapped_column(String(32), index=True)
     membership_materialized: Mapped[bool] = mapped_column(default=False, index=True)
+    child_refresh_ids_json: Mapped[list[int]] = mapped_column(JSON, default=list)
 
     url_source: Mapped[UrlSource] = relationship(back_populates="refreshes")
     jobs: Mapped[list["BackgroundJob"]] = relationship(

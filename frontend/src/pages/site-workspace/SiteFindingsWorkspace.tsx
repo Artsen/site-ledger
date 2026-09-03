@@ -11,7 +11,7 @@ import { ErrorBanner } from "../../components/ui/ErrorBanner";
 import { LoadingBlock } from "../../components/ui/Loading";
 import { PaginatedTableControls } from "../../components/ui/PaginatedTableControls";
 import { StatusBadge } from "../../components/ui/StatusBadge";
-import type { Finding, FindingAssessment, FindingEvaluation } from "../../types/findings";
+import type { Finding, FindingAssessment, FindingEvaluation, FindingSitemapRefreshNode } from "../../types/findings";
 import type { Site } from "../../types/scans";
 import { formatDate, formatStatus } from "../../utils/format";
 import { useUrlPagination } from "../../utils/useUrlPagination";
@@ -117,10 +117,18 @@ function sitemapSourceLabel(details: Record<string, unknown>) {
 }
 
 function EvidenceManifestSummary({ evaluation }: { evaluation: FindingEvaluation }) {
-  const sources = evaluation.evidence_manifest_json?.sitemap_sources;
-  if (!sources) return <span className="text-stone-500">Scan #{evaluation.source_scan_id ?? "not retained"}</span>;
-  const selected = sources.filter((item) => item.source_refresh_id != null).length;
-  return <span>Scan #{evaluation.source_scan_id ?? "not retained"} · {sources.length} sitemap Sources · {selected} usable refreshes</span>;
+  const roots = evaluation.evidence_manifest_json?.sitemap_roots;
+  if (!roots) return <span className="text-stone-500">Scan #{evaluation.source_scan_id ?? "not retained"}</span>;
+  const usable = roots.reduce((count, item) => count + countUsableSitemapLeaves(item.refresh_tree), 0);
+  return <span>Scan #{evaluation.source_scan_id ?? "not retained"} · {roots.length} sitemap roots · {usable} usable refreshes</span>;
+}
+
+function countUsableSitemapLeaves(node: FindingSitemapRefreshNode | null): number {
+  if (!node) return 0;
+  if (node.sitemap_document_type === "urlset") {
+    return node.membership_materialized && ["completed", "completed_with_errors"].includes(node.status) ? 1 : 0;
+  }
+  return node.children.reduce((count, child) => count + countUsableSitemapLeaves(child), 0);
 }
 
 function DetectorSummary({ evaluation }: { evaluation: FindingEvaluation }) {

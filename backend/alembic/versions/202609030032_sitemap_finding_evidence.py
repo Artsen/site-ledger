@@ -23,6 +23,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     with op.batch_alter_table("source_refreshes") as batch_op:
+        batch_op.add_column(sa.Column("sitemap_document_type", sa.String(32)))
         batch_op.add_column(
             sa.Column(
                 "membership_materialized",
@@ -35,6 +36,19 @@ def upgrade() -> None:
             "ix_source_refreshes_membership_materialized",
             ["membership_materialized"],
             unique=False,
+        )
+        batch_op.create_index(
+            "ix_source_refreshes_sitemap_document_type",
+            ["sitemap_document_type"],
+            unique=False,
+        )
+        batch_op.add_column(
+            sa.Column(
+                "child_refresh_ids_json",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'[]'"),
+            )
         )
 
     op.create_table(
@@ -134,5 +148,8 @@ def downgrade() -> None:
 
     op.drop_table("source_entry_observations")
     with op.batch_alter_table("source_refreshes") as batch_op:
+        batch_op.drop_column("child_refresh_ids_json")
+        batch_op.drop_index("ix_source_refreshes_sitemap_document_type")
         batch_op.drop_index("ix_source_refreshes_membership_materialized")
         batch_op.drop_column("membership_materialized")
+        batch_op.drop_column("sitemap_document_type")

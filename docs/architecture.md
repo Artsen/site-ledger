@@ -176,13 +176,16 @@ a later refresh can reactivate the same row.
 `SourceEntryObservation` records each declaration from a successfully materialized sitemap
 `urlset` refresh at its deterministic position, preserving duplicate declarations, raw URLs,
 validation/scope results, optional WebResource identity, and the exact normalization version.
-These rows are historical evidence and are not reconstructed for pre-migration refreshes.
+Each refresh also retains sitemap document type and ordered exact child-refresh IDs, allowing
+recursive index topology to be reconstructed without mutable Source state. These rows and topology
+are historical evidence and are not reconstructed for pre-migration refreshes.
 `UrlSourceEntry` remains only the mutable current Inventory projection.
 
-Finding evaluator V3 freezes the selected static Scan and exact eligible sitemap refresh for every
-active sitemap Source in `finding-evidence-manifest-v1`. Scan fetch times and Source refresh finish
-times remain independent evidence clocks. Cross-stream Findings use typed immutable observation
-pointers; they never use current Inventory rows as historical proof.
+Finding evaluator V3 freezes the selected static Scan and exact recursive refresh tree for every
+active configured or robots-discovered sitemap root in `finding-evidence-manifest-v1`.
+Sitemap-index-discovered descendants are selected only through that immutable tree. Scan fetch
+times and Source refresh finish times remain independent evidence clocks. Cross-stream Findings use
+typed immutable observation pointers; they never use current Inventory rows as historical proof.
 
 AI Document refreshes reuse Source jobs, safe fetching, Site scope, `WebResource`, and current
 Inventory origins. Dedicated compressed blobs preserve exact accepted text. They never create

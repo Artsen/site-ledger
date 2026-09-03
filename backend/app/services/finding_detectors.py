@@ -133,7 +133,8 @@ class DetectorContext:
         default_factory=dict
     )
     active_sitemap_source_ids: tuple[int, ...] = ()
-    usable_sitemap_refresh_ids_by_source_id: Mapping[int, int] = field(default_factory=dict)
+    usable_sitemap_refresh_ids: tuple[int, ...] = ()
+    sitemap_membership_complete: bool = False
     sitemap_membership_by_resource_id: Mapping[int, tuple[SitemapMembershipEvidence, ...]] = field(
         default_factory=dict
     )
@@ -871,7 +872,7 @@ def _sitemap_membership(
         "membership_sample_count": len(sampled),
         "membership_evidence_truncated": len(ordered) > len(sampled),
         "active_sitemap_source_count": len(context.active_sitemap_source_ids),
-        "usable_sitemap_source_count": len(context.usable_sitemap_refresh_ids_by_source_id),
+        "usable_sitemap_source_count": len(context.usable_sitemap_refresh_ids),
         "sitemap_membership_samples": [
             {
                 "source_entry_observation_id": item.observation.id,
@@ -888,9 +889,7 @@ def _sitemap_membership(
         return "not_applicable", details, sampled
     if ordered:
         return "present", details, sampled
-    if len(context.usable_sitemap_refresh_ids_by_source_id) == len(
-        context.active_sitemap_source_ids
-    ):
+    if context.sitemap_membership_complete:
         return "absent", details, sampled
     return "unknown", details, sampled
 

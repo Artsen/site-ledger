@@ -366,6 +366,8 @@ async def _refresh_sitemap(
         max_decompressed_bytes=limits.max_decompressed_bytes,
     )
     parsed = parse_sitemap_xml(content)
+    refresh.sitemap_document_type = parsed.document_type
+    refresh.child_refresh_ids_json = []
     if parsed.document_type == "urlset":
         seen_entries: set[str] = set()
         policy_index = _source_policy_index(db, source, source.website_property)
@@ -426,6 +428,7 @@ async def _refresh_sitemap(
         _progress(progress_callback, refresh)
         return
     child_count = 0
+    child_refresh_ids: list[int] = []
     warnings: list[dict[str, Any]] = []
     for child in parsed.children[: limits.max_child_sources]:
         _raise_if_cancelled(should_cancel)
@@ -457,6 +460,8 @@ async def _refresh_sitemap(
             db.flush()
         child_count += 1
         child_refresh = _start_refresh(db, child_source)
+        child_refresh_ids.append(child_refresh.id)
+        refresh.child_refresh_ids_json = list(child_refresh_ids)
         try:
             await _refresh_sitemap(
                 db,
@@ -478,6 +483,7 @@ async def _refresh_sitemap(
             child_refresh.finished_at = datetime.now(UTC)
             warnings.append({"source_url": normalized, "error_type": child_refresh.error_type})
         _finish_source(child_source, child_refresh)
+    refresh.child_refresh_ids_json = child_refresh_ids
     refresh.child_source_count = child_count
     refresh.discovered_entry_count = len(parsed.children)
     refresh.accepted_entry_count = child_count

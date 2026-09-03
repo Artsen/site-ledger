@@ -35,6 +35,11 @@ def test_populated_sitemap_evidence_downgrade_preserves_compatible_history(
             assert "evidence_manifest_json" not in {
                 row[1] for row in connection.execute("PRAGMA table_info(finding_evaluations)")
             }
+            refresh_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(source_refreshes)")
+            }
+            assert "sitemap_document_type" not in refresh_columns
+            assert "child_refresh_ids_json" not in refresh_columns
             references = connection.execute(
                 "SELECT position, evidence_kind FROM finding_evidence_references ORDER BY position"
             ).fetchall()
@@ -100,8 +105,9 @@ def _insert_populated_sitemap_finding(connection: sqlite3.Connection) -> None:
         "(id, url_source_id, status, started_at, finished_at, response_bytes, "
         "discovered_entry_count, accepted_entry_count, rejected_entry_count, child_source_count, "
         "entries_added, entries_updated, entries_no_longer_current, warnings_json, "
-        "membership_materialized) VALUES "
-        "(1, 1, 'completed', ?, ?, 100, 1, 1, 0, 0, 1, 0, 0, '[]', 1)",
+        "membership_materialized, sitemap_document_type, child_refresh_ids_json) VALUES "
+        "(1, 1, 'completed', ?, ?, 100, 1, 1, 0, 0, 1, 0, 0, '[]', 1, "
+        "'urlset', '[]')",
         (_OBSERVED_AT, _OBSERVED_AT),
     )
     connection.execute(
@@ -124,7 +130,9 @@ def _insert_populated_sitemap_finding(connection: sqlite3.Connection) -> None:
             _OBSERVED_AT,
             "u" * 64,
             '{"schema":"finding-evidence-manifest-v1","static":{"scan_id":1},'
-            '"sitemap_sources":[{"url_source_id":1,"source_refresh_id":1}]}',
+            '"sitemap_roots":[{"url_source_id":1,"refresh_tree":{'
+            '"url_source_id":1,"source_refresh_id":1,"sitemap_document_type":"urlset",'
+            '"status":"completed","membership_materialized":true,"children":[]}}]}',
         ),
     )
     connection.execute(

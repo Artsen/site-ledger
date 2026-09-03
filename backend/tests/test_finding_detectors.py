@@ -104,6 +104,7 @@ def _context(
     memberships: list[SitemapMembershipEvidence] | None = None,
     active_sitemap_source_ids: tuple[int, ...] = (),
     usable_sitemap_refresh_ids_by_source_id: dict[int, int] | None = None,
+    sitemap_membership_complete: bool | None = None,
     subject_resource_id: int | None = None,
 ) -> DetectorContext:
     scan = Scan(
@@ -123,15 +124,25 @@ def _context(
     for membership in memberships or []:
         assert membership.observation.resource_id is not None
         membership_by_resource.setdefault(membership.observation.resource_id, []).append(membership)
+    usable = usable_sitemap_refresh_ids_by_source_id or {}
     return DetectorContext(
-        scan,
-        by_resource,
-        build_snapshot_url_index(scan, by_resource),
-        {resource_id: tuple(items) for resource_id, items in by_source.items()},
-        active_sitemap_source_ids,
-        usable_sitemap_refresh_ids_by_source_id or {},
-        {resource_id: tuple(items) for resource_id, items in membership_by_resource.items()},
-        subject_resource_id,
+        scan=scan,
+        snapshots_by_resource_id=by_resource,
+        snapshots_by_normalized_url=build_snapshot_url_index(scan, by_resource),
+        occurrences_by_source_resource_id={
+            resource_id: tuple(items) for resource_id, items in by_source.items()
+        },
+        active_sitemap_source_ids=active_sitemap_source_ids,
+        usable_sitemap_refresh_ids=tuple(usable.values()),
+        sitemap_membership_complete=(
+            len(usable) == len(active_sitemap_source_ids)
+            if sitemap_membership_complete is None
+            else sitemap_membership_complete
+        ),
+        sitemap_membership_by_resource_id={
+            resource_id: tuple(items) for resource_id, items in membership_by_resource.items()
+        },
+        subject_resource_id=subject_resource_id,
     )
 
 

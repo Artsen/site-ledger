@@ -283,8 +283,18 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(firstFindingEvaluation.detector_bundle_identity).toBe("finding-detectors-v5");
   const firstManifest = firstFindingEvaluation.evidence_manifest_json as Json;
   expect(firstManifest.static).toEqual({ scan_id: scan3Id });
-  expect(firstManifest.sitemap_sources).toEqual([
-    { url_source_id: source.id, source_refresh_id: firstRefresh.id },
+  expect(firstManifest.sitemap_roots).toEqual([
+    {
+      url_source_id: source.id,
+      refresh_tree: {
+        url_source_id: source.id,
+        source_refresh_id: firstRefresh.id,
+        sitemap_document_type: "urlset",
+        status: "completed",
+        membership_materialized: true,
+        children: [],
+      },
+    },
   ]);
   const firstFindings = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings?limit=100`);
   const firstFindingTypes = new Set(firstFindings.items.map((item) => item.finding_type));
@@ -331,8 +341,18 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(findingEvaluation.id).not.toBe(firstFindingEvaluation.id);
   const secondManifest = findingEvaluation.evidence_manifest_json as Json;
   expect(secondManifest.static).toEqual({ scan_id: scan3Id });
-  expect(secondManifest.sitemap_sources).toEqual([
-    { url_source_id: source.id, source_refresh_id: secondRefresh.id },
+  expect(secondManifest.sitemap_roots).toEqual([
+    {
+      url_source_id: source.id,
+      refresh_tree: {
+        url_source_id: source.id,
+        source_refresh_id: secondRefresh.id,
+        sitemap_document_type: "urlset",
+        status: "completed",
+        membership_materialized: true,
+        children: [],
+      },
+    },
   ]);
   const findings = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings?limit=100`);
   for (const findingType of [

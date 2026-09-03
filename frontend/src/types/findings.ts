@@ -1,3 +1,12 @@
+export type FindingSitemapRefreshNode = {
+  url_source_id: number;
+  source_refresh_id: number;
+  sitemap_document_type: "urlset" | "sitemapindex" | null;
+  status: string;
+  membership_materialized: boolean;
+  children: FindingSitemapRefreshNode[];
+};
+
 export type FindingEvaluation = {
   id: number; website_property_id: number; source_scan_id: number | null;
   evaluator_version: string; detector_bundle_identity: string; input_fingerprint_sha256: string;
@@ -7,7 +16,10 @@ export type FindingEvaluation = {
   evidence_manifest_json: {
     schema?: string;
     static?: { scan_id?: number };
-    sitemap_sources?: Array<{ url_source_id: number; source_refresh_id: number | null }>;
+    sitemap_roots?: Array<{
+      url_source_id: number;
+      refresh_tree: FindingSitemapRefreshNode | null;
+    }>;
   };
   created_finding_count: number; resolved_finding_count: number; reopened_finding_count: number;
   assessment_count: number; evaluation_checksum_sha256: string | null; created_at: string;

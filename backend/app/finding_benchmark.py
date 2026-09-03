@@ -182,6 +182,8 @@ def _build_fixture(db: Session, page_count: int, links_per_page: int) -> None:
                 "started_at": moment,
                 "finished_at": moment,
                 "membership_materialized": True,
+                "sitemap_document_type": "urlset",
+                "child_refresh_ids_json": [],
             }
             for source_id in range(1, 4)
         ],

@@ -74,6 +74,8 @@ class SourceRefreshRead(BaseModel):
     rejected_entry_count: int
     child_source_count: int
     membership_materialized: bool
+    sitemap_document_type: str | None
+    child_refresh_ids_json: list[int]
     entries_added: int
     entries_updated: int
     entries_no_longer_current: int

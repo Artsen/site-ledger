@@ -224,15 +224,21 @@ describe("Findings workspace", () => {
       evidence_manifest_json: {
         schema: "finding-evidence-manifest-v1",
         static: { scan_id: 9 },
-        sitemap_sources: [
-          { url_source_id: 4, source_refresh_id: 91 },
-          { url_source_id: 7, source_refresh_id: null },
+        sitemap_roots: [
+          {
+            url_source_id: 4,
+            refresh_tree: {
+              url_source_id: 4, source_refresh_id: 91, sitemap_document_type: "urlset",
+              status: "completed", membership_materialized: true, children: [],
+            },
+          },
+          { url_source_id: 7, refresh_tree: null },
         ],
       },
     };
     api.listFindingEvaluations.mockResolvedValue({ items: [v5Evaluation], total: 1, limit: 25, offset: 0 });
     renderWorkspace("/?view=evaluations");
-    expect(await screen.findByText("Scan #9 · 2 sitemap Sources · 1 usable refreshes")).toBeInTheDocument();
+    expect(await screen.findByText("Scan #9 · 2 sitemap roots · 1 usable refreshes")).toBeInTheDocument();
     cleanup();
 
     api.getFinding.mockResolvedValue({

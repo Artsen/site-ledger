@@ -275,10 +275,17 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert first_finding_evaluation.evidence_manifest_json == {
             "schema": "finding-evidence-manifest-v1",
             "static": {"scan_id": lifecycle_scan_id},
-            "sitemap_sources": [
+            "sitemap_roots": [
                 {
                     "url_source_id": int(result["lifecycle_source_id"]),
-                    "source_refresh_id": int(result["first_source_refresh_id"]),
+                    "refresh_tree": {
+                        "url_source_id": int(result["lifecycle_source_id"]),
+                        "source_refresh_id": int(result["first_source_refresh_id"]),
+                        "sitemap_document_type": "urlset",
+                        "status": "completed",
+                        "membership_materialized": True,
+                        "children": [],
+                    },
                 }
             ],
         }
@@ -291,10 +298,17 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert finding_evaluation.evidence_manifest_json == {
             "schema": "finding-evidence-manifest-v1",
             "static": {"scan_id": lifecycle_scan_id},
-            "sitemap_sources": [
+            "sitemap_roots": [
                 {
                     "url_source_id": int(result["lifecycle_source_id"]),
-                    "source_refresh_id": int(result["second_source_refresh_id"]),
+                    "refresh_tree": {
+                        "url_source_id": int(result["lifecycle_source_id"]),
+                        "source_refresh_id": int(result["second_source_refresh_id"]),
+                        "sitemap_document_type": "urlset",
+                        "status": "completed",
+                        "membership_materialized": True,
+                        "children": [],
+                    },
                 }
             ],
         }

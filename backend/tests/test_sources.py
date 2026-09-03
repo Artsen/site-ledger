@@ -174,6 +174,8 @@ async def test_sitemap_refresh_persists_entries_and_current_membership(db_sessio
         for item in observations
     )
     assert refresh.membership_materialized is True
+    assert refresh.sitemap_document_type == "urlset"
+    assert refresh.child_refresh_ids_json == []
 
 
 @pytest.mark.asyncio
@@ -227,6 +229,15 @@ async def test_recursive_sitemap_observation_has_exact_child_refresh_provenance(
                     b"</sitemapindex>"
                 ),
             )
+        if request.url.path == "/child.xml":
+            return httpx.Response(
+                200,
+                content=(
+                    b'<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                    b"<sitemap><loc>https://example.com/leaf.xml</loc></sitemap>"
+                    b"</sitemapindex>"
+                ),
+            )
         return httpx.Response(
             200,
             content=(
@@ -237,13 +248,20 @@ async def test_recursive_sitemap_observation_has_exact_child_refresh_provenance(
 
     root_refresh = await refresh_source(db_session, site.id, root.id, httpx.MockTransport(response))
     assert root_refresh is not None and not root_refresh.membership_materialized
+    assert root_refresh.sitemap_document_type == "sitemapindex"
     observation = db_session.scalar(select(SourceEntryObservation))
     assert observation is not None
-    child_refresh = db_session.get(SourceRefresh, observation.source_refresh_id)
-    assert child_refresh is not None and child_refresh.membership_materialized
-    assert child_refresh.url_source_id != root.id
-    assert child_refresh.url_source.parent_source_id == root.id
-    assert child_refresh.url_source.root_source_id == root.id
+    leaf_refresh = db_session.get(SourceRefresh, observation.source_refresh_id)
+    assert leaf_refresh is not None and leaf_refresh.membership_materialized
+    assert leaf_refresh.sitemap_document_type == "urlset"
+    nested_refresh = db_session.get(SourceRefresh, root_refresh.child_refresh_ids_json[0])
+    assert nested_refresh is not None
+    assert nested_refresh.sitemap_document_type == "sitemapindex"
+    assert nested_refresh.child_refresh_ids_json == [leaf_refresh.id]
+    assert nested_refresh.url_source.parent_source_id == root.id
+    assert nested_refresh.url_source.root_source_id == root.id
+    assert leaf_refresh.url_source.parent_source_id == nested_refresh.url_source_id
+    assert leaf_refresh.url_source.root_source_id == root.id
 
 
 @pytest.mark.asyncio

@@ -529,6 +529,9 @@ Do not disable checks or weaken tests to force passing results.
 - Keep `UrlSourceEntry` as mutable current Inventory state. Historical Source evidence must use an
   immutable refresh-scoped observation and a frozen evaluation manifest; never present a current
   Inventory row as evidence for an earlier refresh.
+- Recursive sitemap evidence must retain ordered child refresh IDs on the exact parent refresh.
+  Finding manifests select explicit roots and freeze those refresh trees; mutable discovered-child
+  Source state must not determine historical or current membership.
 - Queued native cancellation must commit BackgroundJob and native terminal state together. Required
   post-success work may use an idempotent recovery protocol when its domain terminal commit is an
   earlier transaction; recovery must ensure that work before reconciling the BackgroundJob.

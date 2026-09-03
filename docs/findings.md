@@ -82,33 +82,56 @@ immutable `SourceEntryObservation` at its deterministic source position, includi
 raw and normalized URLs, the exact normalization version, sitemap metadata, validation state, scope
 decision, and optional WebResource identity. The rows are staged and committed in the owning
 Source-refresh transaction. Recursive sitemap observations belong to the exact child Source and
-child refresh that declared them.
+child refresh that declared them. Every sitemap refresh also records its document type. A
+`sitemapindex` refresh stores the ordered IDs of the exact child refreshes produced by that
+execution, while a `urlset` stores an empty child list and materializes Page membership directly.
 
 `UrlSourceEntry` is different: it is the mutable current Inventory projection. Refresh can update
 or reactivate that row, so a Finding assessment never points to it as historical evidence. Existing
 pre-`202609030032` refreshes are not backfilled because current Inventory cannot reconstruct their
 historical declarations. Their immutable sitemap evidence is explicitly unavailable.
 
-At evaluation creation, each active sitemap Source is represented in deterministic Source-ID order.
-Its selected refresh is the latest terminal refresh by `finished_at, id` only when that refresh is
-`completed` or `completed_with_errors` and successfully materialized membership. A latest terminal
-failed or cancelled refresh is represented with `source_refresh_id: null`; queued and running work
-does not replace the latest terminal selection. The frozen manifest has this shape:
+At evaluation creation, active configured and robots-discovered sitemap roots are represented in
+deterministic Source-ID order. Sitemap-index-discovered descendants enter only through their exact
+parent refresh tree; mutable descendant activation cannot make stale membership current. A root's
+selected refresh is its latest terminal refresh by `finished_at, id` when completed or completed
+with errors. A latest failed or cancelled root has a null tree; queued and running work does not
+replace the latest terminal selection. The frozen manifest recursively records exact refresh IDs:
 
 ```json
 {
   "schema": "finding-evidence-manifest-v1",
   "static": {"scan_id": 123},
-  "sitemap_sources": [
-    {"url_source_id": 4, "source_refresh_id": 91},
-    {"url_source_id": 7, "source_refresh_id": null}
+  "sitemap_roots": [
+    {
+      "url_source_id": 4,
+      "refresh_tree": {
+        "url_source_id": 4,
+        "source_refresh_id": 91,
+        "sitemap_document_type": "sitemapindex",
+        "status": "completed",
+        "membership_materialized": false,
+        "children": [
+          {
+            "url_source_id": 5,
+            "source_refresh_id": 92,
+            "sitemap_document_type": "urlset",
+            "status": "completed",
+            "membership_materialized": true,
+            "children": []
+          }
+        ]
+      }
+    },
+    {"url_source_id": 7, "refresh_tree": null}
   ]
 }
 ```
 
-A valid, resource-bound observation in any usable selected Source proves membership. Absence is
-clear only when every active sitemap Source has usable frozen membership evidence. Otherwise
-absence is unknown. With no active sitemap Sources, sitemap detectors are clear/not applicable.
+A valid, resource-bound observation in any usable selected leaf proves membership even when a
+sibling is unavailable. Absence is clear only when every frozen root branch reaches usable
+`urlset` membership evidence; index containers are not membership leaves. Otherwise absence is
+unknown. With no active sitemap roots, sitemap detectors are clear/not applicable.
 Duplicate declarations and multiple Sources still produce one logical Page Finding; assessments
 retain exact Source and observation totals and at most 20 deterministic membership pointers with an
 explicit truncation flag.
