@@ -151,8 +151,11 @@ ResourceSnapshot followed by the evaluation-horizon Scan. A canonical-target ass
 
 Evidence deletion preserves Finding and assessment history while reads report that the referenced
 source is no longer retained. Raw evidence is never copied into Finding tables. Detail reads batch
-assessment, evaluation, job, Scan, and ResourceSnapshot resolution so multi-snapshot provenance does
-not introduce N+1 queries.
+assessment, evaluation, job, Scan, ResourceSnapshot, and ResourceOccurrence resolution so typed
+provenance does not introduce N+1 queries. Downgrading migration `202609020031` to `202609010030`
+intentionally deletes only `resource_occurrence` evidence-reference rows because the older CHECK
+constraint cannot represent them. Findings, assessments, `resource_snapshot` references, and `scan`
+references remain; retained evidence positions may therefore be non-contiguous.
 
 Current lists and Site Intelligence use active Site Pages by default. Suppression hides a Finding
 from that operational view but neither resolves nor deletes it. Direct history remains available.
