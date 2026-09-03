@@ -105,9 +105,9 @@ def test_finding_evaluation_scales_with_operational_issues_not_page_selects(db_s
     assert result.assessments == 250
     assert result.resolved_findings == 50
     assert result.detected == 150
-    assert result.clear == 32_350
+    assert result.clear == 41_350
     assert result.unknown == 500
-    assert result.detected + result.clear + result.unknown == page_count * 11
+    assert result.detected + result.clear + result.unknown == page_count * 14
     assert db_session.query(Finding).count() == 250
     assert db_session.query(FindingAssessment).count() == 450
     assert selects <= 12
@@ -117,7 +117,7 @@ def test_finding_evaluation_scales_with_operational_issues_not_page_selects(db_s
         evaluation.detector_summary_json, sort_keys=True, separators=(",", ":")
     ).encode()
     print(
-        f"finding benchmark: pages={page_count} detectors=11 outcomes={page_count * 11} "
+        f"finding benchmark: pages={page_count} detectors=14 outcomes={page_count * 14} "
         f"persisted_findings=250 assessments={result.assessments} sql={statements} "
         f"selects={selects} duration={duration:.3f}s "
         f"detector_summary_bytes={len(summary_payload)}"

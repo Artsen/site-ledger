@@ -12,7 +12,7 @@ from app.crawler.url_normalizer import (
     UrlNormalizationError,
     normalize_url_for_version,
 )
-from app.models import ResourceOccurrence, ResourceSnapshot, Scan
+from app.models import ResourceOccurrence, ResourceSnapshot, Scan, SourceEntryObservation
 
 FindingOutcome = Literal["detected", "clear", "unknown"]
 FindingSeverity = Literal["medium", "high"]
@@ -50,7 +50,17 @@ PAGE_BROKEN_INTERNAL_LINKS_DETECTOR_IDENTITY = "page-broken-internal-links-v1"
 PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE = "page_internal_links_to_redirects"
 PAGE_INTERNAL_LINKS_TO_REDIRECTS_KEY_VERSION = "page-internal-links-to-redirects-key-v1"
 PAGE_INTERNAL_LINKS_TO_REDIRECTS_DETECTOR_IDENTITY = "page-internal-links-to-redirects-v1"
+SITEMAP_PAGE_HTTP_ERROR_TYPE = "sitemap_page_http_error"
+SITEMAP_PAGE_HTTP_ERROR_KEY_VERSION = "sitemap-page-http-error-key-v1"
+SITEMAP_PAGE_HTTP_ERROR_DETECTOR_IDENTITY = "sitemap-page-http-error-v1"
+SITEMAP_PAGE_NOINDEX_TYPE = "sitemap_page_noindex"
+SITEMAP_PAGE_NOINDEX_KEY_VERSION = "sitemap-page-noindex-key-v1"
+SITEMAP_PAGE_NOINDEX_DETECTOR_IDENTITY = "sitemap-page-noindex-v1"
+SITEMAP_PAGE_REDIRECT_TYPE = "sitemap_page_redirect"
+SITEMAP_PAGE_REDIRECT_KEY_VERSION = "sitemap-page-redirect-key-v1"
+SITEMAP_PAGE_REDIRECT_DETECTOR_IDENTITY = "sitemap-page-redirect-v1"
 TOPOLOGY_EVIDENCE_SAMPLE_LIMIT = 20
+SITEMAP_MEMBERSHIP_EVIDENCE_SAMPLE_LIMIT = 20
 
 FINDING_TYPE_LABELS = {
     PAGE_HTTP_ERROR_TYPE: "Page HTTP error",
@@ -64,6 +74,9 @@ FINDING_TYPE_LABELS = {
     PAGE_NON_HTML_REPRESENTATION_TYPE: "Page returns a non-HTML representation",
     PAGE_BROKEN_INTERNAL_LINKS_TYPE: "Broken internal links",
     PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE: "Internal links to redirects",
+    SITEMAP_PAGE_HTTP_ERROR_TYPE: "Sitemap Page HTTP error",
+    SITEMAP_PAGE_NOINDEX_TYPE: "Sitemap Page is noindex",
+    SITEMAP_PAGE_REDIRECT_TYPE: "Sitemap Page redirects",
 }
 
 STATIC_FETCH_FAILURE_ERROR_TYPES = frozenset(
@@ -91,6 +104,15 @@ class DetectorEvidence:
     role: str
     snapshot: ResourceSnapshot | None = None
     occurrence: ResourceOccurrence | None = None
+    source_entry_observation: SourceEntryObservation | None = None
+
+
+@dataclass(frozen=True)
+class SitemapMembershipEvidence:
+    observation: SourceEntryObservation
+    url_source_id: int
+    source_refresh_id: int
+    source_refresh_finished_at: str
 
 
 @dataclass(frozen=True)
@@ -110,6 +132,12 @@ class DetectorContext:
     occurrences_by_source_resource_id: Mapping[int, tuple[ResourceOccurrence, ...]] = field(
         default_factory=dict
     )
+    active_sitemap_source_ids: tuple[int, ...] = ()
+    usable_sitemap_refresh_ids_by_source_id: Mapping[int, int] = field(default_factory=dict)
+    sitemap_membership_by_resource_id: Mapping[int, tuple[SitemapMembershipEvidence, ...]] = field(
+        default_factory=dict
+    )
+    subject_resource_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -708,6 +736,185 @@ def build_snapshot_url_index(
     return result
 
 
+def _sitemap_page_http_error(
+    snapshot: ResourceSnapshot | None, context: DetectorContext
+) -> DetectorResult:
+    membership_state, details, membership_evidence = _sitemap_membership(snapshot, context)
+    evidence = _sitemap_evidence(snapshot, membership_evidence)
+    if membership_state != "present":
+        return DetectorResult(
+            "clear" if membership_state in {"absent", "not_applicable"} else "unknown",
+            None,
+            details,
+            evidence,
+            _sitemap_membership_reason(membership_state),
+        )
+    details.update(
+        {
+            "fetch_state": snapshot.fetch_state if snapshot else None,
+            "http_status": snapshot.http_status if snapshot else None,
+        }
+    )
+    if not _usable_static(snapshot):
+        return DetectorResult("unknown", None, details, evidence, _unusable_reason(snapshot))
+    assert snapshot is not None and snapshot.http_status is not None
+    if 500 <= snapshot.http_status <= 599:
+        return DetectorResult("detected", "high", details, evidence)
+    if 400 <= snapshot.http_status <= 499:
+        return DetectorResult("detected", "medium", details, evidence)
+    return DetectorResult("clear", None, details, evidence)
+
+
+def _sitemap_page_noindex(
+    snapshot: ResourceSnapshot | None, context: DetectorContext
+) -> DetectorResult:
+    membership_state, details, membership_evidence = _sitemap_membership(snapshot, context)
+    evidence = _sitemap_evidence(snapshot, membership_evidence)
+    if membership_state != "present":
+        return DetectorResult(
+            "clear" if membership_state in {"absent", "not_applicable"} else "unknown",
+            None,
+            details,
+            evidence,
+            _sitemap_membership_reason(membership_state),
+        )
+    if not _usable_html(snapshot):
+        details["fetch_state"] = snapshot.fetch_state if snapshot else None
+        return DetectorResult("unknown", None, details, evidence, _html_unusable_reason(snapshot))
+    assert snapshot is not None
+    directives = parse_robots_directives(snapshot)
+    details.update(directives.details())
+    matched_sources = []
+    if "noindex" in directives.meta_directives:
+        matched_sources.append("meta_robots")
+    if "noindex" in directives.x_robots_tag_directives:
+        matched_sources.append("x_robots_tag")
+    details["matched_sources"] = matched_sources
+    if "noindex" in directives.applicable_directives:
+        return DetectorResult("detected", "medium", details, evidence)
+    if directives.ambiguous:
+        return DetectorResult("unknown", None, details, evidence, "ambiguous_agent_scope")
+    return DetectorResult("clear", None, details, evidence)
+
+
+def _sitemap_page_redirect(
+    snapshot: ResourceSnapshot | None, context: DetectorContext
+) -> DetectorResult:
+    membership_state, details, membership_evidence = _sitemap_membership(snapshot, context)
+    evidence = _sitemap_evidence(snapshot, membership_evidence)
+    if membership_state != "present":
+        return DetectorResult(
+            "clear" if membership_state in {"absent", "not_applicable"} else "unknown",
+            None,
+            details,
+            evidence,
+            _sitemap_membership_reason(membership_state),
+        )
+    details.update(
+        {
+            "requested_url": snapshot.requested_url if snapshot else None,
+            "final_url": snapshot.final_url if snapshot else None,
+            "redirect_hop_count": len(snapshot.redirect_chain or []) if snapshot else 0,
+            "effective_http_status": snapshot.http_status if snapshot else None,
+        }
+    )
+    if not _usable_static(snapshot):
+        return DetectorResult("unknown", None, details, evidence, _unusable_reason(snapshot))
+    assert snapshot is not None
+    if not snapshot.redirect_chain:
+        return DetectorResult("clear", None, details, evidence)
+    declared_url = membership_evidence[0].observation.normalized_url
+    details["declared_sitemap_url"] = membership_evidence[0].observation.raw_url
+    if not declared_url or not snapshot.final_url:
+        return DetectorResult("unknown", None, details, evidence, "redirect_target_unresolvable")
+    try:
+        final_url = normalize_url_for_version(
+            snapshot.final_url,
+            normalization_version=membership_evidence[0].observation.normalization_version,
+            drop_query_params=context.scan.scope_config.get("drop_query_parameters", []),
+        ).normalized_url
+    except (UrlNormalizationError, ValueError):
+        return DetectorResult("unknown", None, details, evidence, "redirect_target_unresolvable")
+    details["normalized_final_url"] = final_url
+    return DetectorResult(
+        "detected" if final_url != declared_url else "clear",
+        "medium" if final_url != declared_url else None,
+        details,
+        evidence,
+    )
+
+
+def _sitemap_membership(
+    snapshot: ResourceSnapshot | None, context: DetectorContext
+) -> tuple[str, dict[str, Any], tuple[SitemapMembershipEvidence, ...]]:
+    resource_id = snapshot.resource_id if snapshot is not None else context.subject_resource_id
+    memberships = (
+        context.sitemap_membership_by_resource_id.get(resource_id, ())
+        if resource_id is not None
+        else ()
+    )
+    ordered = tuple(
+        sorted(
+            memberships,
+            key=lambda item: (
+                item.url_source_id,
+                item.observation.position,
+                item.observation.id or 0,
+            ),
+        )
+    )
+    sampled = ordered[:SITEMAP_MEMBERSHIP_EVIDENCE_SAMPLE_LIMIT]
+    source_ids = sorted({item.url_source_id for item in ordered})
+    details: dict[str, Any] = {
+        "sitemap_source_count": len(source_ids),
+        "membership_observation_count": len(ordered),
+        "membership_sample_count": len(sampled),
+        "membership_evidence_truncated": len(ordered) > len(sampled),
+        "active_sitemap_source_count": len(context.active_sitemap_source_ids),
+        "usable_sitemap_source_count": len(context.usable_sitemap_refresh_ids_by_source_id),
+        "sitemap_membership_samples": [
+            {
+                "source_entry_observation_id": item.observation.id,
+                "url_source_id": item.url_source_id,
+                "source_refresh_id": item.source_refresh_id,
+                "source_refresh_finished_at": item.source_refresh_finished_at,
+                "raw_url": item.observation.raw_url,
+                "normalized_url": item.observation.normalized_url,
+            }
+            for item in sampled
+        ],
+    }
+    if not context.active_sitemap_source_ids:
+        return "not_applicable", details, sampled
+    if ordered:
+        return "present", details, sampled
+    if len(context.usable_sitemap_refresh_ids_by_source_id) == len(
+        context.active_sitemap_source_ids
+    ):
+        return "absent", details, sampled
+    return "unknown", details, sampled
+
+
+def _sitemap_membership_reason(state: str) -> str:
+    return {
+        "not_applicable": "no_active_sitemap_sources",
+        "absent": "sitemap_membership_not_present",
+        "unknown": "sitemap_source_evidence_unavailable",
+    }[state]
+
+
+def _sitemap_evidence(
+    snapshot: ResourceSnapshot | None,
+    memberships: Sequence[SitemapMembershipEvidence],
+) -> tuple[DetectorEvidence, ...]:
+    evidence = list(_primary(snapshot))
+    evidence.extend(
+        DetectorEvidence("sitemap_membership", source_entry_observation=item.observation)
+        for item in memberships
+    )
+    return tuple(evidence)
+
+
 CURRENT_FINDING_DETECTORS = (
     FindingDetector(
         PAGE_HTTP_ERROR_DETECTOR_IDENTITY,
@@ -796,6 +1003,30 @@ CURRENT_FINDING_DETECTORS = (
         FINDING_TYPE_LABELS[PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE],
         "web_resource",
         _internal_links_to_redirects,
+    ),
+    FindingDetector(
+        SITEMAP_PAGE_HTTP_ERROR_DETECTOR_IDENTITY,
+        SITEMAP_PAGE_HTTP_ERROR_TYPE,
+        SITEMAP_PAGE_HTTP_ERROR_KEY_VERSION,
+        FINDING_TYPE_LABELS[SITEMAP_PAGE_HTTP_ERROR_TYPE],
+        "web_resource",
+        _sitemap_page_http_error,
+    ),
+    FindingDetector(
+        SITEMAP_PAGE_NOINDEX_DETECTOR_IDENTITY,
+        SITEMAP_PAGE_NOINDEX_TYPE,
+        SITEMAP_PAGE_NOINDEX_KEY_VERSION,
+        FINDING_TYPE_LABELS[SITEMAP_PAGE_NOINDEX_TYPE],
+        "web_resource",
+        _sitemap_page_noindex,
+    ),
+    FindingDetector(
+        SITEMAP_PAGE_REDIRECT_DETECTOR_IDENTITY,
+        SITEMAP_PAGE_REDIRECT_TYPE,
+        SITEMAP_PAGE_REDIRECT_KEY_VERSION,
+        FINDING_TYPE_LABELS[SITEMAP_PAGE_REDIRECT_TYPE],
+        "web_resource",
+        _sitemap_page_redirect,
     ),
 )
 

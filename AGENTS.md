@@ -29,6 +29,8 @@ Python app package.
 - **Source:** A sitemap, robots-discovered sitemap, manual URL source, or AI Document Source.
 - **Inventory:** Current URL candidates declared by Sources; this is input provenance, not observed
   Resource evidence.
+- **Source entry observation:** One immutable, duplicate-preserving URL declaration from an exact
+  sitemap Source refresh, including URL-normalization provenance.
 - **Resource Inventory:** Observed or HTML-referenced non-HTML WebResource evidence and references.
 - **Graph:** A scan-specific representation of observed Pages and stored links.
 - **Activity:** Durable background execution and worker status.
@@ -64,6 +66,8 @@ Implemented capabilities include:
 - Static HTML scans.
 - Durable background jobs.
 - Sitemap, robots-discovered sitemap, and manual URL Sources.
+- Immutable refresh-scoped sitemap membership evidence and composite Scan + sitemap Finding
+  manifests.
 - Nested AI Document Sources with immutable refresh, reference, and exact text evidence.
 - URL Inventory and scan-seed provenance.
 - Persistent Pages and Page observation history.
@@ -522,6 +526,9 @@ Do not disable checks or weaken tests to force passing results.
   Scan Comparison, Category Rule, Structured Content, Performance, Accessibility, and Render
   persistence fence each job-owned transaction. Finding evaluation uses its equivalent guarded
   single-transaction ownership check. New durable job handlers must preserve one of these patterns.
+- Keep `UrlSourceEntry` as mutable current Inventory state. Historical Source evidence must use an
+  immutable refresh-scoped observation and a frozen evaluation manifest; never present a current
+  Inventory row as evidence for an earlier refresh.
 - Queued native cancellation must commit BackgroundJob and native terminal state together. Required
   post-success work may use an idempotent recovery protocol when its domain terminal commit is an
   earlier transaction; recovery must ensure that work before reconciling the BackgroundJob.

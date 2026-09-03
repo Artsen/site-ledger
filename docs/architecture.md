@@ -172,6 +172,18 @@ for the server-derived grouped Inventory identity non-current. It never physical
 `UrlSourceEntry`, so historical `ScanSeedOrigin.url_source_entry_id` provenance remains resolvable;
 a later refresh can reactivate the same row.
 
+`SourceRefresh` is the immutable collection envelope for one Source execution.
+`SourceEntryObservation` records each declaration from a successfully materialized sitemap
+`urlset` refresh at its deterministic position, preserving duplicate declarations, raw URLs,
+validation/scope results, optional WebResource identity, and the exact normalization version.
+These rows are historical evidence and are not reconstructed for pre-migration refreshes.
+`UrlSourceEntry` remains only the mutable current Inventory projection.
+
+Finding evaluator V3 freezes the selected static Scan and exact eligible sitemap refresh for every
+active sitemap Source in `finding-evidence-manifest-v1`. Scan fetch times and Source refresh finish
+times remain independent evidence clocks. Cross-stream Findings use typed immutable observation
+pointers; they never use current Inventory rows as historical proof.
+
 AI Document refreshes reuse Source jobs, safe fetching, Site scope, `WebResource`, and current
 Inventory origins. Dedicated compressed blobs preserve exact accepted text. They never create
 `ResourceSnapshot` rows, affect Scan counters, trigger rendering, or add graph edges. See

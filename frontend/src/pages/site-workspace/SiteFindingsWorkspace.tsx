@@ -77,7 +77,7 @@ function EvaluationHistory({ site }: { site: Site }) {
   if (query.error) return <ErrorBanner error={query.error} title="Could not load Finding evaluations"/>;
   const data = query.data!;
   if (!data.items.length) return <EmptyState title="No evaluations" message="Run an evaluation after a terminal Scan is available."/>;
-  return <div className="space-y-4"><PaginatedTableControls total={data.total} limit={data.limit} offset={data.offset} itemLabel="evaluation" onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize}/><div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="px-3 py-2">Evaluation</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Bundle</th><th className="px-3 py-2">Evidence horizon</th><th className="px-3 py-2">Active Pages</th><th className="px-3 py-2">Detector outcomes</th><th className="px-3 py-2">Transitions</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id} className="border-t border-stone-100 align-top"><td className="px-3 py-2 font-medium">#{item.id}</td><td className="px-3 py-2"><StatusBadge status={item.status}/></td><td className="whitespace-nowrap px-3 py-2 font-mono text-xs">{item.detector_bundle_identity}</td><td className="px-3 py-2">{formatDate(item.evidence_horizon_at, { timeZone: site.display_timezone })}</td><td className="px-3 py-2">{item.active_page_count}</td><td className="min-w-96 px-3 py-2"><DetectorSummary evaluation={item}/></td><td className="px-3 py-2">{item.created_finding_count} new, {item.resolved_finding_count} resolved, {item.reopened_finding_count} reopened</td></tr>)}</tbody></table></div><p className="text-xs text-stone-500">Detector counts cover every active Page, including clear and unknown outcomes that are intentionally not persisted as Findings.</p></div>;
+  return <div className="space-y-4"><PaginatedTableControls total={data.total} limit={data.limit} offset={data.offset} itemLabel="evaluation" onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize}/><div className="overflow-x-auto rounded-md border border-stone-200 bg-white"><table className="min-w-full text-left text-sm"><thead className="bg-stone-100 text-xs uppercase text-stone-500"><tr><th className="px-3 py-2">Evaluation</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Bundle</th><th className="px-3 py-2">Evidence selection</th><th className="px-3 py-2">Evidence horizon</th><th className="px-3 py-2">Active Pages</th><th className="px-3 py-2">Detector outcomes</th><th className="px-3 py-2">Transitions</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id} className="border-t border-stone-100 align-top"><td className="px-3 py-2 font-medium">#{item.id}</td><td className="px-3 py-2"><StatusBadge status={item.status}/></td><td className="whitespace-nowrap px-3 py-2 font-mono text-xs">{item.detector_bundle_identity}</td><td className="whitespace-nowrap px-3 py-2 text-xs"><EvidenceManifestSummary evaluation={item}/></td><td className="px-3 py-2">{formatDate(item.evidence_horizon_at, { timeZone: site.display_timezone })}</td><td className="px-3 py-2">{item.active_page_count}</td><td className="min-w-96 px-3 py-2"><DetectorSummary evaluation={item}/></td><td className="px-3 py-2">{item.created_finding_count} new, {item.resolved_finding_count} resolved, {item.reopened_finding_count} reopened</td></tr>)}</tbody></table></div><p className="text-xs text-stone-500">Detector counts cover every active Page, including clear and unknown outcomes that are intentionally not persisted as Findings.</p></div>;
 }
 
 const detectorLabels: Record<string, string> = {
@@ -92,6 +92,9 @@ const detectorLabels: Record<string, string> = {
   page_non_html_representation: "Non-HTML representations",
   page_broken_internal_links: "Broken internal links",
   page_internal_links_to_redirects: "Internal links to redirects",
+  sitemap_page_http_error: "Sitemap Page HTTP error",
+  sitemap_page_noindex: "Sitemap Page is noindex",
+  sitemap_page_redirect: "Sitemap Page redirects",
 };
 
 function FindingLabel({ finding }: { finding: Finding }) {
@@ -102,7 +105,22 @@ function FindingLabel({ finding }: { finding: Finding }) {
 function findingListSummary(findingType: string, details: Record<string, unknown>) {
   if (findingType === "page_broken_internal_links") return `${String(details.broken_target_count ?? 0)} broken targets`;
   if (findingType === "page_internal_links_to_redirects") return `${String(details.redirect_target_count ?? 0)} redirect targets`;
+  if (findingType === "sitemap_page_http_error") return `HTTP ${String(details.http_status ?? "unknown")} · declared in ${sitemapSourceLabel(details)}`;
+  if (findingType === "sitemap_page_noindex") return `noindex · declared in ${sitemapSourceLabel(details)}`;
+  if (findingType === "sitemap_page_redirect") return `redirects to ${String(details.normalized_final_url ?? details.final_url ?? "unknown")} · declared in ${sitemapSourceLabel(details)}`;
   return null;
+}
+
+function sitemapSourceLabel(details: Record<string, unknown>) {
+  const count = Number(details.sitemap_source_count ?? 0);
+  return count === 1 ? "1 sitemap Source" : `${count} sitemap Sources`;
+}
+
+function EvidenceManifestSummary({ evaluation }: { evaluation: FindingEvaluation }) {
+  const sources = evaluation.evidence_manifest_json?.sitemap_sources;
+  if (!sources) return <span className="text-stone-500">Scan #{evaluation.source_scan_id ?? "not retained"}</span>;
+  const selected = sources.filter((item) => item.source_refresh_id != null).length;
+  return <span>Scan #{evaluation.source_scan_id ?? "not retained"} · {sources.length} sitemap Sources · {selected} usable refreshes</span>;
 }
 
 function DetectorSummary({ evaluation }: { evaluation: FindingEvaluation }) {
@@ -119,7 +137,7 @@ export function SiteFindingDetailPage({ site }: { site: Site }) {
   if (query.isLoading) return <LoadingBlock label="Loading Finding history..."/>;
   if (query.error) return <ErrorBanner error={query.error} title="Could not load Finding"/>;
   const finding = query.data!;
-  return <div className="space-y-6"><div><Link to={`/sites/${site.id}/findings`} className="text-sm underline">Findings</Link><p className="mt-2 text-sm font-medium text-stone-600">{finding.finding_label || formatStatus(finding.finding_type)}</p><h2 className="mt-1 break-all text-lg font-semibold">{finding.page_url}</h2><div className="mt-2 flex flex-wrap gap-2"><StatusBadge status={finding.condition_state}/><StatusBadge status={finding.current_severity ?? "none"}/><StatusBadge status={finding.acknowledged_at ? "acknowledged" : "unacknowledged"}/></div></div><div className="flex gap-2">{finding.acknowledged_at ? <Button loading={workflow.isPending} onClick={() => workflow.mutate(false)}><Undo2 className="mr-2 size-4"/>Unacknowledge</Button> : <Button loading={workflow.isPending} onClick={() => workflow.mutate(true)}><Check className="mr-2 size-4"/>Acknowledge</Button>}<Link className="inline-flex min-h-9 items-center rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium" to={`/sites/${site.id}/pages/${finding.web_resource_id}`}>Open Page</Link></div><section><h3 className="text-base font-semibold">Assessment history</h3><div className="mt-3 divide-y divide-stone-200 rounded-md border border-stone-200 bg-white">{finding.assessments.map((assessment) => <article key={assessment.id} className="p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex gap-2"><StatusBadge status={assessment.outcome}/>{assessment.severity ? <StatusBadge status={assessment.severity}/> : null}</div><time className="text-xs text-stone-500">{formatDate(assessment.evidence_observed_at, { timeZone: site.display_timezone, showTimeZone: true })}</time></div><p className="mt-2 text-sm">{assessmentSummary(finding.finding_type, assessment)}</p><TopologyTargetSamples findingType={finding.finding_type} assessment={assessment}/><p className="mt-1 text-xs text-stone-500">{formatStatus(String(assessment.details_json.transition ?? assessment.outcome))}</p><p className="mt-1 font-mono text-xs text-stone-500">{assessment.evaluation.evaluator_version} / {assessment.evaluation.detector_bundle_identity} / evaluation {assessment.finding_evaluation_id}</p><ul className="mt-3 space-y-1 text-sm">{assessment.evidence_references.map((reference) => <li key={reference.id}>{reference.retained && reference.href ? <Link className="underline" to={reference.href}>{formatStatus(reference.role)}: {formatStatus(reference.evidence_kind)} {reference.evidence_id}</Link> : <span>{formatStatus(reference.role)}: {formatStatus(reference.evidence_kind)} {reference.evidence_id} (no longer retained)</span>}</li>)}</ul></article>)}</div></section><section className="border-t border-stone-200 pt-4 text-xs text-stone-500"><p>Logical identity: {finding.finding_type} / {finding.logical_key_version}</p><p className="mt-1 break-all font-mono">{finding.fingerprint_sha256}</p></section></div>;
+  return <div className="space-y-6"><div><Link to={`/sites/${site.id}/findings`} className="text-sm underline">Findings</Link><p className="mt-2 text-sm font-medium text-stone-600">{finding.finding_label || formatStatus(finding.finding_type)}</p><h2 className="mt-1 break-all text-lg font-semibold">{finding.page_url}</h2><div className="mt-2 flex flex-wrap gap-2"><StatusBadge status={finding.condition_state}/><StatusBadge status={finding.current_severity ?? "none"}/><StatusBadge status={finding.acknowledged_at ? "acknowledged" : "unacknowledged"}/></div></div><div className="flex gap-2">{finding.acknowledged_at ? <Button loading={workflow.isPending} onClick={() => workflow.mutate(false)}><Undo2 className="mr-2 size-4"/>Unacknowledge</Button> : <Button loading={workflow.isPending} onClick={() => workflow.mutate(true)}><Check className="mr-2 size-4"/>Acknowledge</Button>}<Link className="inline-flex min-h-9 items-center rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium" to={`/sites/${site.id}/pages/${finding.web_resource_id}`}>Open Page</Link></div><section><h3 className="text-base font-semibold">Assessment history</h3><div className="mt-3 divide-y divide-stone-200 rounded-md border border-stone-200 bg-white">{finding.assessments.map((assessment) => <article key={assessment.id} className="p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex gap-2"><StatusBadge status={assessment.outcome}/>{assessment.severity ? <StatusBadge status={assessment.severity}/> : null}</div><time className="text-xs text-stone-500">{formatDate(assessment.evidence_observed_at, { timeZone: site.display_timezone, showTimeZone: true })}</time></div><p className="mt-2 text-sm">{assessmentSummary(finding.finding_type, assessment)}</p><SitemapMembershipSamples findingType={finding.finding_type} assessment={assessment}/><TopologyTargetSamples findingType={finding.finding_type} assessment={assessment}/><p className="mt-1 text-xs text-stone-500">{formatStatus(String(assessment.details_json.transition ?? assessment.outcome))}</p><p className="mt-1 font-mono text-xs text-stone-500">{assessment.evaluation.evaluator_version} / {assessment.evaluation.detector_bundle_identity} / evaluation {assessment.finding_evaluation_id}</p><ul className="mt-3 space-y-1 text-sm">{assessment.evidence_references.map((reference) => <li key={reference.id}>{reference.retained && reference.href ? <Link className="underline" to={reference.href}>{formatStatus(reference.role)}: {formatStatus(reference.evidence_kind)} {reference.evidence_id}</Link> : <span>{formatStatus(reference.role)}: {formatStatus(reference.evidence_kind)} {reference.evidence_id} (no longer retained)</span>}<time className="ml-2 text-xs text-stone-500">{formatDate(reference.evidence_observed_at, { timeZone: site.display_timezone, showTimeZone: true })}</time></li>)}</ul></article>)}</div></section><section className="border-t border-stone-200 pt-4 text-xs text-stone-500"><p>Logical identity: {finding.finding_type} / {finding.logical_key_version}</p><p className="mt-1 break-all font-mono">{finding.fingerprint_sha256}</p></section></div>;
 }
 
 function TopologyTargetSamples({ findingType, assessment }: { findingType: string; assessment: FindingAssessment }) {
@@ -131,6 +149,15 @@ function TopologyTargetSamples({ findingType, assessment }: { findingType: strin
     const result = findingType === "page_broken_internal_links" ? `HTTP ${String(sample.http_status ?? "unknown")}` : String(sample.final_url ?? "Unknown final URL");
     return <li key={`${requested}-${index}`} className="break-all font-mono text-xs">{requested} -&gt; {result}</li>;
   })}</ul> : null}{assessment.details_json.evidence_truncated ? <p className="mt-2 text-xs text-stone-500">Evidence sample limited to {String(assessment.details_json.evidence_sample_count)} occurrences.</p> : null}</>;
+}
+
+function SitemapMembershipSamples({ findingType, assessment, timeZone }: { findingType: string; assessment: FindingAssessment; timeZone?: string | null }) {
+  if (!findingType.startsWith("sitemap_page_")) return null;
+  const samples = Array.isArray(assessment.details_json.sitemap_membership_samples) ? assessment.details_json.sitemap_membership_samples : [];
+  return <>{samples.length ? <ul className="mt-2 space-y-1 text-xs text-stone-600">{samples.map((value, index) => {
+    const sample = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    return <li key={`${String(sample.source_entry_observation_id)}-${index}`}><span className="break-all font-mono">{String(sample.raw_url ?? sample.normalized_url ?? "Unknown sitemap URL")}</span> · Source #{String(sample.url_source_id)} · refresh #{String(sample.source_refresh_id)} · {formatDate(String(sample.source_refresh_finished_at), { timeZone, showTimeZone: true })}</li>;
+  })}</ul> : null}{assessment.details_json.membership_evidence_truncated ? <p className="mt-2 text-xs text-stone-500">Membership evidence sample limited to {String(assessment.details_json.membership_sample_count)} declarations.</p> : null}</>;
 }
 
 function assessmentSummary(findingType: string, assessment: FindingAssessment) {
@@ -164,5 +191,11 @@ function assessmentSummary(findingType: string, assessment: FindingAssessment) {
     const targets = Number(details.redirect_target_count ?? 0);
     return `${String(details.redirect_occurrence_count ?? 0)} internal link occurrences point to ${targets} redirecting Page${targets === 1 ? "" : "s"}`;
   }
+  if (findingType === "sitemap_page_http_error") return `HTTP ${String(details.http_status ?? "unknown")} · declared in ${sitemapSourceLabel(details)}`;
+  if (findingType === "sitemap_page_noindex") {
+    const sources = Array.isArray(details.matched_sources) ? details.matched_sources.map((source) => formatStatus(String(source))).join(" and ") : "";
+    return `${sources ? `noindex via ${sources}` : "Indexability unavailable"} · declared in ${sitemapSourceLabel(details)}`;
+  }
+  if (findingType === "sitemap_page_redirect") return `${String(details.requested_url ?? "Sitemap Page")} redirects to ${String(details.normalized_final_url ?? details.final_url ?? "unknown")} · declared in ${sitemapSourceLabel(details)}`;
   return formatStatus(String(details.transition ?? assessment.outcome));
 }

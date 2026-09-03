@@ -10,6 +10,7 @@ from app.models import (
     ScanSeed,
     ScanSeedOrigin,
     SiteInventorySuppression,
+    SourceEntryObservation,
     SourceRefresh,
     UrlSourceEntry,
     WebResource,
@@ -33,20 +34,26 @@ from app.services.inventory_lifecycle import (
     delete_inventory_suppression,
     remove_manual_source_entry,
 )
+from app.services.job_types import ExecutionOwnershipLost
 from app.services.scan_deletion import delete_scan
 from app.services.site_management import create_scan_from_site, create_site, delete_site
 from app.services.source_management import (
     DuplicateSourceError,
+    _delete_unreferenced_source_resources,
     add_manual_urls,
     create_source,
+    delete_source,
     upsert_source_entry,
 )
 from app.services.source_queries import list_inventory, list_scan_seeds, list_sources
 from app.services.source_refresh import (
+    create_source_refresh,
     discover_from_robots,
     enqueue_bulk_source_refreshes,
+    execute_source_refresh,
     refresh_source,
 )
+from app.services.url_identity import active_url_normalization_version
 from app.storage.content_store import LocalContentStore
 
 
@@ -152,6 +159,167 @@ async def test_sitemap_refresh_persists_entries_and_current_membership(db_sessio
     assert entries[0].validation_state == "valid"
     assert entries[1].scope_decision == "external"
     assert entries[2].validation_state == "invalid"
+    observations = list(
+        db_session.scalars(select(SourceEntryObservation).order_by(SourceEntryObservation.position))
+    )
+    assert [item.position for item in observations] == [0, 1, 2]
+    assert [item.raw_url for item in observations] == [
+        "https://example.com/a?utm_source=x",
+        "https://outside.example/b",
+        "ftp://example.com/file",
+    ]
+    assert all(item.source_refresh_id == refresh.id for item in observations)
+    assert all(
+        item.normalization_version == active_url_normalization_version(db_session)
+        for item in observations
+    )
+    assert refresh.membership_materialized is True
+
+
+@pytest.mark.asyncio
+async def test_sitemap_observations_preserve_duplicate_declarations(db_session: Session) -> None:
+    site = create_site(db_session, _site_payload())
+    source = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Duplicates", source_url="https://example.com/sitemap.xml"),
+    )
+    assert source is not None
+    body = b"""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://example.com/a</loc></url>
+      <url><loc>https://example.com/a</loc></url>
+    </urlset>"""
+    refresh = await refresh_source(
+        db_session,
+        site.id,
+        source.id,
+        httpx.MockTransport(lambda _request: httpx.Response(200, content=body)),
+    )
+    assert refresh is not None and refresh.membership_materialized
+    assert db_session.query(UrlSourceEntry).filter_by(url_source_id=source.id).count() == 1
+    observations = list(
+        db_session.scalars(select(SourceEntryObservation).order_by(SourceEntryObservation.position))
+    )
+    assert [item.position for item in observations] == [0, 1]
+    assert observations[0].resource_id == observations[1].resource_id
+    assert observations[0].id != observations[1].id
+
+
+@pytest.mark.asyncio
+async def test_recursive_sitemap_observation_has_exact_child_refresh_provenance(
+    db_session: Session,
+) -> None:
+    site = create_site(db_session, _site_payload())
+    root = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Index", source_url="https://example.com/index.xml"),
+    )
+    assert root is not None
+
+    def response(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/index.xml":
+            return httpx.Response(
+                200,
+                content=(
+                    b'<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                    b"<sitemap><loc>https://example.com/child.xml</loc></sitemap>"
+                    b"</sitemapindex>"
+                ),
+            )
+        return httpx.Response(
+            200,
+            content=(
+                b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                b"<url><loc>https://example.com/child-page</loc></url></urlset>"
+            ),
+        )
+
+    root_refresh = await refresh_source(db_session, site.id, root.id, httpx.MockTransport(response))
+    assert root_refresh is not None and not root_refresh.membership_materialized
+    observation = db_session.scalar(select(SourceEntryObservation))
+    assert observation is not None
+    child_refresh = db_session.get(SourceRefresh, observation.source_refresh_id)
+    assert child_refresh is not None and child_refresh.membership_materialized
+    assert child_refresh.url_source_id != root.id
+    assert child_refresh.url_source.parent_source_id == root.id
+    assert child_refresh.url_source.root_source_id == root.id
+
+
+@pytest.mark.asyncio
+async def test_source_refresh_ownership_loss_rolls_back_immutable_observations(
+    db_session: Session,
+) -> None:
+    site = create_site(db_session, _site_payload())
+    source = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Owned", source_url="https://example.com/sitemap.xml"),
+    )
+    assert source is not None
+    refresh = create_source_refresh(db_session, site.id, source.id)
+    assert refresh is not None
+    calls = 0
+
+    def fence(_db: Session) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ExecutionOwnershipLost("lease lost")
+
+    with pytest.raises(ExecutionOwnershipLost):
+        await execute_source_refresh(
+            db_session,
+            refresh.id,
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    200,
+                    content=b"<urlset><url><loc>https://example.com/a</loc></url></urlset>",
+                )
+            ),
+            fence_domain_mutation=fence,
+        )
+    db_session.expire_all()
+    retained_refresh = db_session.get(SourceRefresh, refresh.id)
+    assert retained_refresh is not None and retained_refresh.status == "running"
+    assert retained_refresh.membership_materialized is False
+    assert db_session.query(SourceEntryObservation).count() == 0
+    assert db_session.query(UrlSourceEntry).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_source_observation_owns_resource_until_source_deletion(db_session: Session) -> None:
+    site = create_site(db_session, _site_payload())
+    source = create_source(
+        db_session,
+        site.id,
+        UrlSourceCreate(name="Evidence", source_url="https://example.com/sitemap.xml"),
+    )
+    assert source is not None
+    await refresh_source(
+        db_session,
+        site.id,
+        source.id,
+        httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                content=b"<urlset><url><loc>https://example.com/evidence</loc></url></urlset>",
+            )
+        ),
+    )
+    observation = db_session.scalar(select(SourceEntryObservation))
+    entry = db_session.scalar(select(UrlSourceEntry))
+    assert observation is not None and observation.resource_id is not None and entry is not None
+    resource_id = observation.resource_id
+    db_session.delete(entry)
+    db_session.flush()
+    _delete_unreferenced_source_resources(db_session, [resource_id])
+    assert db_session.get(WebResource, resource_id) is not None
+    db_session.commit()
+
+    assert delete_source(db_session, site.id, source.id) == source.id
+    assert db_session.get(SourceEntryObservation, observation.id) is None
+    assert db_session.get(WebResource, resource_id) is None
 
 
 def test_bulk_source_refresh_is_deduplicated_atomic_and_queued(db_session: Session) -> None:

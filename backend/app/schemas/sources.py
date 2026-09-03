@@ -73,6 +73,7 @@ class SourceRefreshRead(BaseModel):
     accepted_entry_count: int
     rejected_entry_count: int
     child_source_count: int
+    membership_materialized: bool
     entries_added: int
     entries_updated: int
     entries_no_longer_current: int

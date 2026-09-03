@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TypedDict
 
@@ -19,6 +19,9 @@ from app.models import (
     ResourceSnapshot,
     Scan,
     SitePage,
+    SourceEntryObservation,
+    SourceRefresh,
+    UrlSource,
     WebsiteProperty,
 )
 from app.services.finding_detectors import (
@@ -30,12 +33,15 @@ from app.services.finding_detectors import (
     DetectorEvidence,
     DetectorResult,
     FindingDetector,
+    SitemapMembershipEvidence,
     build_snapshot_url_index,
 )
 from app.services.scan_projections import TERMINAL_SCAN_STATUSES
 
-FINDING_EVALUATOR_VERSION = "finding-evaluator-v2"
-FINDING_DETECTOR_BUNDLE_IDENTITY = "finding-detectors-v4"
+FINDING_EVALUATOR_VERSION = "finding-evaluator-v3"
+FINDING_DETECTOR_BUNDLE_IDENTITY = "finding-detectors-v5"
+FINDING_EVIDENCE_MANIFEST_SCHEMA = "finding-evidence-manifest-v1"
+ELIGIBLE_MEMBERSHIP_REFRESH_STATUSES = frozenset({"completed", "completed_with_errors"})
 
 
 class DetectorSummary(TypedDict):
@@ -118,13 +124,15 @@ def create_evaluation(db: Session, site_id: int) -> tuple[FindingEvaluation, boo
         )
     )
     universe_hash = _hash(resource_ids)
-    horizon = scan.finished_at or scan.created_at
+    evidence_manifest, source_horizons = _build_evidence_manifest(db, site_id, scan.id)
+    horizon = max([scan.finished_at or scan.created_at, *source_horizons])
     fingerprint = _hash(
         {
             "active_page_universe_sha256": universe_hash,
             "detector_bundle_identity": FINDING_DETECTOR_BUNDLE_IDENTITY,
             "detector_bundle_manifest_sha256": CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
             "evaluator_version": FINDING_EVALUATOR_VERSION,
+            "evidence_manifest": evidence_manifest,
             "site_id": site_id,
             "source_scan_id": scan.id,
         }
@@ -144,6 +152,7 @@ def create_evaluation(db: Session, site_id: int) -> tuple[FindingEvaluation, boo
         active_page_count=len(resource_ids),
         active_page_universe_sha256=universe_hash,
         active_page_resource_ids_json=resource_ids,
+        evidence_manifest_json=evidence_manifest,
         status="queued",
     )
     db.add(evaluation)
@@ -175,17 +184,72 @@ def execute_evaluation(
             FindingEvaluation.website_property_id == evaluation.website_property_id,
             FindingEvaluation.detector_bundle_identity == evaluation.detector_bundle_identity,
             FindingEvaluation.status == "completed",
-            FindingEvaluation.evidence_horizon_at > evaluation.evidence_horizon_at,
+            FindingEvaluation.id > evaluation.id,
         )
         .limit(1)
     )
     if newer is not None:
         raise FindingEvaluationChronologyError(
-            "A newer evidence horizon has already been applied to this Site."
+            "A newer frozen evidence manifest has already been applied to this Site."
         )
     scan = db.get(Scan, evaluation.source_scan_id)
     if scan is None:
         raise ValueError("The source Scan is no longer retained.")
+    manifest = evaluation.evidence_manifest_json or {}
+    static_manifest = manifest.get("static") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(static_manifest, dict)
+        or static_manifest.get("scan_id") != evaluation.source_scan_id
+        or manifest.get("schema") != FINDING_EVIDENCE_MANIFEST_SCHEMA
+    ):
+        raise ValueError("The frozen Finding evidence manifest is invalid.")
+    source_selections = _manifest_source_selections(manifest)
+    selected_refresh_ids = [
+        refresh_id for _source_id, refresh_id in source_selections if refresh_id is not None
+    ]
+    selected_refreshes = {
+        item.id: item
+        for item in db.scalars(
+            select(SourceRefresh).where(SourceRefresh.id.in_(selected_refresh_ids or {-1}))
+        )
+    }
+    usable_refresh_ids_by_source_id = {
+        source_id: refresh_id
+        for source_id, refresh_id in source_selections
+        if refresh_id is not None
+        and (refresh := selected_refreshes.get(refresh_id)) is not None
+        and refresh.url_source_id == source_id
+        and refresh.status in ELIGIBLE_MEMBERSHIP_REFRESH_STATUSES
+        and refresh.membership_materialized
+        and refresh.finished_at is not None
+    }
+    membership_by_resource_id: dict[int, list[SitemapMembershipEvidence]] = {}
+    for observation in db.scalars(
+        select(SourceEntryObservation)
+        .where(
+            SourceEntryObservation.source_refresh_id.in_(
+                list(usable_refresh_ids_by_source_id.values()) or {-1}
+            ),
+            SourceEntryObservation.resource_id.is_not(None),
+            SourceEntryObservation.validation_state == "valid",
+        )
+        .order_by(
+            SourceEntryObservation.source_refresh_id,
+            SourceEntryObservation.position,
+            SourceEntryObservation.id,
+        )
+    ):
+        assert observation.resource_id is not None
+        refresh = selected_refreshes[observation.source_refresh_id]
+        assert refresh.finished_at is not None
+        membership_by_resource_id.setdefault(observation.resource_id, []).append(
+            SitemapMembershipEvidence(
+                observation=observation,
+                url_source_id=refresh.url_source_id,
+                source_refresh_id=refresh.id,
+                source_refresh_finished_at=refresh.finished_at.isoformat(),
+            )
+        )
     if check_ownership:
         check_ownership()
     evaluation.status = "running"
@@ -217,6 +281,11 @@ def execute_evaluation(
         occurrences_by_source_resource_id={
             resource_id: tuple(items)
             for resource_id, items in occurrences_by_source_resource_id.items()
+        },
+        active_sitemap_source_ids=tuple(source_id for source_id, _refresh_id in source_selections),
+        usable_sitemap_refresh_ids_by_source_id=usable_refresh_ids_by_source_id,
+        sitemap_membership_by_resource_id={
+            resource_id: tuple(items) for resource_id, items in membership_by_resource_id.items()
         },
     )
     detector_keys = [
@@ -255,15 +324,23 @@ def execute_evaluation(
     candidates: list[_Candidate] = []
     outcome_hashes: list[str] = []
     new_findings: list[Finding] = []
+    usable_sitemap_refresh_ids = frozenset(usable_refresh_ids_by_source_id.values())
     for resource_id in evaluation.active_page_resource_ids_json:
         subject_snapshot = all_snapshots.get(resource_id)
-        observed_at = (
-            subject_snapshot.fetched_at
-            if subject_snapshot is not None and subject_snapshot.fetched_at is not None
-            else evaluation.evidence_horizon_at
-        )
+        subject_context = replace(context, subject_resource_id=resource_id)
         for detector in CURRENT_FINDING_DETECTORS:
-            detector_result = detector.evaluate(subject_snapshot, context)
+            detector_result = detector.evaluate(subject_snapshot, subject_context)
+            observed_at = _detector_observed_at(
+                detector_result,
+                subject_snapshot,
+                selected_refreshes,
+                evaluation.evidence_horizon_at,
+                sitemap_refresh_ids=(
+                    usable_sitemap_refresh_ids
+                    if detector.finding_type.startswith("sitemap_")
+                    else frozenset()
+                ),
+            )
             counts[detector_result.outcome] += 1
             summary = detector_summary[detector.finding_type]
             summary[detector_result.outcome] += 1
@@ -416,6 +493,19 @@ def execute_evaluation(
                     "target_resource_id": item.occurrence.target_resource_id,
                     "normalized_target_url": item.occurrence.normalized_target_url,
                 }
+            elif item.source_entry_observation is not None:
+                observation = item.source_entry_observation
+                refresh = selected_refreshes.get(observation.source_refresh_id)
+                if refresh is not None and refresh.finished_at is not None:
+                    observed_at = refresh.finished_at
+                metadata = {
+                    "source_refresh_id": observation.source_refresh_id,
+                    "url_source_id": refresh.url_source_id if refresh is not None else None,
+                    "resource_id": observation.resource_id,
+                    "raw_url": observation.raw_url,
+                    "normalized_url": observation.normalized_url,
+                    "normalization_version": observation.normalization_version,
+                }
             db.add(
                 FindingEvidenceReference(
                     finding_assessment_id=assessment.id,
@@ -459,18 +549,121 @@ def execute_evaluation(
 
 
 def _detector_evidence_kind(item: DetectorEvidence) -> str:
-    if item.snapshot is not None and item.occurrence is None:
+    populated = sum(
+        evidence is not None
+        for evidence in (item.snapshot, item.occurrence, item.source_entry_observation)
+    )
+    if populated != 1:
+        raise ValueError("Detector evidence must contain exactly one typed evidence object.")
+    if item.snapshot is not None:
         return "resource_snapshot"
-    if item.occurrence is not None and item.snapshot is None:
+    if item.occurrence is not None:
         return "resource_occurrence"
-    raise ValueError("Detector evidence must contain exactly one typed evidence object.")
+    return "source_entry_observation"
 
 
 def _detector_evidence_id(item: DetectorEvidence) -> int:
-    evidence = item.snapshot or item.occurrence
+    evidence = item.snapshot or item.occurrence or item.source_entry_observation
     if evidence is None or evidence.id is None:
         raise ValueError("Detector evidence must be persisted before evaluation.")
     return evidence.id
+
+
+def _build_evidence_manifest(
+    db: Session, site_id: int, scan_id: int
+) -> tuple[dict[str, object], list[datetime]]:
+    source_ids = list(
+        db.scalars(
+            select(UrlSource.id)
+            .where(
+                UrlSource.website_property_id == site_id,
+                UrlSource.source_type == "sitemap",
+                UrlSource.is_active.is_(True),
+            )
+            .order_by(UrlSource.id)
+        )
+    )
+    latest_terminal_by_source: dict[int, SourceRefresh] = {}
+    for refresh in db.scalars(
+        select(SourceRefresh)
+        .where(
+            SourceRefresh.url_source_id.in_(source_ids or {-1}),
+            SourceRefresh.finished_at.is_not(None),
+        )
+        .order_by(
+            SourceRefresh.url_source_id,
+            SourceRefresh.finished_at.desc(),
+            SourceRefresh.id.desc(),
+        )
+    ):
+        latest_terminal_by_source.setdefault(refresh.url_source_id, refresh)
+    selected_by_source = {
+        source_id: refresh
+        for source_id, refresh in latest_terminal_by_source.items()
+        if refresh.status in ELIGIBLE_MEMBERSHIP_REFRESH_STATUSES
+        and refresh.membership_materialized
+    }
+    manifest: dict[str, object] = {
+        "schema": FINDING_EVIDENCE_MANIFEST_SCHEMA,
+        "static": {"scan_id": scan_id},
+        "sitemap_sources": [
+            {
+                "url_source_id": source_id,
+                "source_refresh_id": (
+                    selected_by_source[source_id].id if source_id in selected_by_source else None
+                ),
+            }
+            for source_id in source_ids
+        ],
+    }
+    horizons = [
+        refresh.finished_at
+        for refresh in selected_by_source.values()
+        if refresh.finished_at is not None
+    ]
+    return manifest, horizons
+
+
+def _manifest_source_selections(manifest: dict[str, object]) -> list[tuple[int, int | None]]:
+    raw = manifest.get("sitemap_sources")
+    if not isinstance(raw, list):
+        raise ValueError("The frozen sitemap Source manifest is invalid.")
+    selections: list[tuple[int, int | None]] = []
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("url_source_id"), int):
+            raise ValueError("The frozen sitemap Source manifest is invalid.")
+        refresh_id = item.get("source_refresh_id")
+        if refresh_id is not None and not isinstance(refresh_id, int):
+            raise ValueError("The frozen sitemap Source manifest is invalid.")
+        selections.append((item["url_source_id"], refresh_id))
+    source_ids = [item[0] for item in selections]
+    if source_ids != sorted(source_ids) or len(set(source_ids)) != len(source_ids):
+        raise ValueError("The frozen sitemap Source manifest is not canonical.")
+    return selections
+
+
+def _detector_observed_at(
+    result: DetectorResult,
+    snapshot: ResourceSnapshot | None,
+    refreshes: dict[int, SourceRefresh],
+    fallback: datetime,
+    *,
+    sitemap_refresh_ids: frozenset[int],
+) -> datetime:
+    timestamps = [snapshot.fetched_at] if snapshot is not None and snapshot.fetched_at else []
+    timestamps.extend(
+        refresh.finished_at
+        for refresh_id in sitemap_refresh_ids
+        if (refresh := refreshes.get(refresh_id)) is not None and refresh.finished_at is not None
+    )
+    timestamps.extend(
+        refresh.finished_at
+        for item in result.evidence
+        if item.source_entry_observation is not None
+        and (refresh := refreshes.get(item.source_entry_observation.source_refresh_id)) is not None
+        and refresh.finished_at is not None
+    )
+    return max(timestamps) if timestamps else fallback
 
 
 def mark_evaluation_terminal(

@@ -156,6 +156,9 @@ class WebResource(Base):
 
     snapshots: Mapped[list["ResourceSnapshot"]] = relationship(back_populates="resource")
     source_entries: Mapped[list["UrlSourceEntry"]] = relationship(back_populates="resource")
+    source_entry_observations: Mapped[list["SourceEntryObservation"]] = relationship(
+        back_populates="resource"
+    )
     scan_seeds: Mapped[list["ScanSeed"]] = relationship(back_populates="resource")
     site_pages: Mapped[list["SitePage"]] = relationship(back_populates="resource")
     resource_reference_occurrences: Mapped[list["ResourceReferenceOccurrence"]] = relationship(
@@ -960,6 +963,7 @@ class SourceRefresh(Base):
     error_type: Mapped[str | None] = mapped_column(String(64), index=True)
     error_message: Mapped[str | None] = mapped_column(Text)
     warnings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    membership_materialized: Mapped[bool] = mapped_column(default=False, index=True)
 
     url_source: Mapped[UrlSource] = relationship(back_populates="refreshes")
     jobs: Mapped[list["BackgroundJob"]] = relationship(
@@ -967,6 +971,43 @@ class SourceRefresh(Base):
     )
     ai_document_refresh: Mapped["AiDocumentRefresh | None"] = relationship(
         back_populates="source_refresh", cascade="all, delete-orphan", uselist=False
+    )
+    entry_observations: Mapped[list["SourceEntryObservation"]] = relationship(
+        back_populates="source_refresh", cascade="all, delete-orphan"
+    )
+
+
+class SourceEntryObservation(Base):
+    """One immutable URL declaration observed in an exact sitemap refresh."""
+
+    __tablename__ = "source_entry_observations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_refresh_id: Mapped[int] = mapped_column(
+        ForeignKey("source_refreshes.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    resource_id: Mapped[int | None] = mapped_column(ForeignKey("web_resources.id"), index=True)
+    raw_url: Mapped[str] = mapped_column(Text)
+    normalized_url: Mapped[str | None] = mapped_column(Text, index=True)
+    normalization_version: Mapped[str] = mapped_column(String(64), index=True)
+    sitemap_lastmod: Mapped[str | None] = mapped_column(Text)
+    sitemap_changefreq: Mapped[str | None] = mapped_column(String(32))
+    sitemap_priority: Mapped[str | None] = mapped_column(String(32))
+    source_metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    validation_state: Mapped[str] = mapped_column(String(32), index=True)
+    validation_message: Mapped[str | None] = mapped_column(Text)
+    scope_decision: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    source_refresh: Mapped[SourceRefresh] = relationship(back_populates="entry_observations")
+    resource: Mapped[WebResource | None] = relationship(back_populates="source_entry_observations")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_refresh_id", "position", name="uq_source_entry_observation_position"
+        ),
+        Index("ix_source_entry_observation_refresh_resource", "source_refresh_id", "resource_id"),
     )
 
 

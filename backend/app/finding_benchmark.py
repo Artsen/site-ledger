@@ -19,6 +19,9 @@ from app.models import (
     ResourceSnapshot,
     Scan,
     SitePage,
+    SourceEntryObservation,
+    SourceRefresh,
+    UrlSource,
     WebResource,
     WebsiteProperty,
 )
@@ -68,6 +71,11 @@ def run_benchmark(
             report = {
                 "page_count": page_count,
                 "resource_occurrence_count": page_count * links_per_page,
+                "source_count": db.scalar(select(func.count(UrlSource.id))) or 0,
+                "source_entry_observation_count": db.scalar(
+                    select(func.count(SourceEntryObservation.id))
+                )
+                or 0,
                 "detector_count": len(CURRENT_FINDING_DETECTORS),
                 "outcome_count": result.detected + result.clear + result.unknown,
                 "select_count": selects,
@@ -79,6 +87,13 @@ def run_benchmark(
                     select(func.count(FindingEvidenceReference.id))
                 )
                 or 0,
+                "evidence_manifest_bytes": len(
+                    json.dumps(
+                        evaluation.evidence_manifest_json,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ),
             }
         engine.dispose()
     return report
@@ -140,6 +155,57 @@ def _build_fixture(db: Session, page_count: int, links_per_page: int) -> None:
             for index in range(1, page_count + 1)
         ],
     )
+    db.bulk_insert_mappings(
+        UrlSource,
+        [
+            {
+                "id": source_id,
+                "website_property_id": 1,
+                "source_type": "sitemap",
+                "name": f"Sitemap {source_id}",
+                "source_url": f"https://benchmark.test/sitemap-{source_id}.xml",
+                "normalized_source_url": f"https://benchmark.test/sitemap-{source_id}.xml",
+                "is_active": True,
+                "discovery_mode": "configured",
+                "settings_json": {},
+            }
+            for source_id in range(1, 4)
+        ],
+    )
+    db.bulk_insert_mappings(
+        SourceRefresh,
+        [
+            {
+                "id": source_id,
+                "url_source_id": source_id,
+                "status": "completed",
+                "started_at": moment,
+                "finished_at": moment,
+                "membership_materialized": True,
+            }
+            for source_id in range(1, 4)
+        ],
+    )
+    observation_rows = []
+    observation_id = 1
+    for source_id, stride in ((1, 1), (2, 2), (3, 10)):
+        for position, resource_id in enumerate(range(1, page_count + 1, stride)):
+            observation_rows.append(
+                {
+                    "id": observation_id,
+                    "source_refresh_id": source_id,
+                    "position": position,
+                    "resource_id": resource_id,
+                    "raw_url": f"https://benchmark.test/page/{resource_id}",
+                    "normalized_url": f"https://benchmark.test/page/{resource_id}",
+                    "normalization_version": "url-normalization-v2",
+                    "source_metadata_json": {"document_type": "urlset"},
+                    "validation_state": "valid",
+                    "scope_decision": "crawlable",
+                }
+            )
+            observation_id += 1
+    db.bulk_insert_mappings(SourceEntryObservation, observation_rows)
     db.bulk_insert_mappings(
         ResourceSnapshot,
         [

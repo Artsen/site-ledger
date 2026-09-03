@@ -25,6 +25,7 @@ const evaluation = {
   detector_summary_json: {
     page_http_error: { detector_identity: "page-http-error-v1", detected: 1, clear: 8, unknown: 1, reason_counts: { subject_fetch_unusable: 1 } },
   },
+  evidence_manifest_json: {},
   reopened_finding_count: 0, assessment_count: 1, evaluation_checksum_sha256: "c".repeat(64),
   created_at: "2026-08-28T02:00:00Z", started_at: "2026-08-28T02:00:00Z",
   finished_at: "2026-08-28T02:00:01Z", failed_at: null, error_type: null,
@@ -201,6 +202,69 @@ describe("Findings workspace", () => {
     expect(await screen.findByText("Internal links to redirects")).toBeInTheDocument();
     expect(screen.getByText("8 internal link occurrences point to 1 redirecting Page")).toBeInTheDocument();
     expect(screen.getByText("https://example.test/old -> https://example.test/new")).toBeInTheDocument();
+  });
+
+  it("presents sitemap correlation summaries, independent clocks, and manifest selection", async () => {
+    const current = {
+      ...(await api.listFindings()).items[0],
+      finding_type: "sitemap_page_http_error",
+      finding_label: "Sitemap Page HTTP error",
+      logical_key_version: "sitemap-page-http-error-key-v1",
+      current_evidence_summary: { http_status: 404, sitemap_source_count: 2 },
+    };
+    api.listFindings.mockResolvedValue({ items: [current], total: 1, limit: 50, offset: 0 });
+    const workspace = renderWorkspace();
+    expect(await screen.findByText("HTTP 404 · declared in 2 sitemap Sources")).toBeInTheDocument();
+    workspace.unmount();
+
+    const v5Evaluation = {
+      ...evaluation,
+      evaluator_version: "finding-evaluator-v3",
+      detector_bundle_identity: "finding-detectors-v5",
+      evidence_manifest_json: {
+        schema: "finding-evidence-manifest-v1",
+        static: { scan_id: 9 },
+        sitemap_sources: [
+          { url_source_id: 4, source_refresh_id: 91 },
+          { url_source_id: 7, source_refresh_id: null },
+        ],
+      },
+    };
+    api.listFindingEvaluations.mockResolvedValue({ items: [v5Evaluation], total: 1, limit: 25, offset: 0 });
+    renderWorkspace("/?view=evaluations");
+    expect(await screen.findByText("Scan #9 · 2 sitemap Sources · 1 usable refreshes")).toBeInTheDocument();
+    cleanup();
+
+    api.getFinding.mockResolvedValue({
+      ...current,
+      website_property_id: 3,
+      created_at: "2026-09-03T01:00:00Z",
+      updated_at: "2026-09-03T02:00:00Z",
+      assessments: [{
+        id: 19, finding_evaluation_id: 7, outcome: "detected", severity: "medium",
+        evidence_observed_at: "2026-09-03T02:00:00Z", assessment_sha256: "f".repeat(64),
+        created_at: "2026-09-03T02:00:00Z", evaluation: v5Evaluation,
+        details_json: {
+          http_status: 404, sitemap_source_count: 1, membership_sample_count: 1,
+          membership_evidence_truncated: false, transition: "detected->detected",
+          sitemap_membership_samples: [{
+            source_entry_observation_id: 31, url_source_id: 4, source_refresh_id: 91,
+            source_refresh_finished_at: "2026-09-03T02:00:00Z",
+            raw_url: "https://example.test/missing",
+          }],
+        },
+        evidence_references: [
+          { id: 1, position: 0, role: "primary", evidence_kind: "resource_snapshot", evidence_id: 20, evidence_observed_at: "2026-09-03T01:00:00Z", metadata_json: {}, retained: true, href: "/scans/9/pages/20" },
+          { id: 2, position: 1, role: "sitemap_membership", evidence_kind: "source_entry_observation", evidence_id: 31, evidence_observed_at: "2026-09-03T02:00:00Z", metadata_json: { source_refresh_id: 91 }, retained: true, href: "/sites/3/sources?source_id=4&refresh_id=91" },
+        ],
+      }],
+    });
+    renderDetail();
+    expect(await screen.findByText("HTTP 404 · declared in 1 sitemap Source")).toBeInTheDocument();
+    expect(screen.getByText(/Source #4 · refresh #91/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Sitemap Membership: Source Entry Observation 31" })).toHaveAttribute("href", "/sites/3/sources?source_id=4&refresh_id=91");
+    expect(screen.getByText(/Sep 3, 1:00 AM UTC/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Sep 3, 2:00 AM UTC/).length).toBeGreaterThan(0);
   });
 });
 
