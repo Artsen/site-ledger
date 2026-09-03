@@ -111,6 +111,13 @@ nonterminal evaluation with explicit provenance. Failed or cancelled exact input
 requeued by an explicit Finding run request; the same evaluation and job retain attempt/event
 history, and completed inputs never rerun. See [Findings](findings.md).
 
+Administrative Finding deletion/reset independently checks both Site-scoped FindingEvaluation and
+`finding_evaluation` BackgroundJob active state. Queued/running work blocks deletion; reset never
+cancels or removes work under a worker. A successful full reset removes only terminal
+Finding-evaluation jobs and their events, in the same transaction as the rebuildable Finding layer,
+so the old dedupe keys cannot block an intentional rerun from retained evidence. Other job types
+and their activity history are preserved.
+
 Execution ownership governs authority to mutate durable domain state, not only authority to
 terminalize a BackgroundJob. Work that can block outside the database follows the transactional
 shape `external work -> ownership fence -> domain mutation -> commit`. The fence renews and verifies

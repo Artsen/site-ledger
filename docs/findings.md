@@ -241,3 +241,25 @@ Comparison, or AI interpretation.
 
 Current lists and Site Intelligence use active Site Pages by default. Suppression hides a Finding
 from that operational view but neither resolves nor deletes it. Direct history remains available.
+
+## Administrative Deletion And Reset
+
+Finding history is durable by default. Normal evidence deletion, Page suppression, and later
+evaluations preserve lifecycle and assessment history. Two explicit destructive operations define
+a narrow administrative/testing boundary:
+
+- `DELETE /api/sites/{site_id}/findings/{finding_id}` removes one logical Finding, its assessments,
+  typed evidence references, lifecycle timestamps, and acknowledgement. The completed frozen
+  `FindingEvaluation`, detector summary, and Finding-evaluation job history remain unchanged. The
+  same frozen input therefore still deduplicates; individual deletion is not a clean rerun.
+- `POST /api/sites/{site_id}/findings/reset` with `{"confirm": true}` atomically removes all
+  Site-scoped Findings, assessments, typed references, Finding evaluations, and terminal
+  `finding_evaluation` BackgroundJobs/JobEvents. It preserves every collected evidence domain,
+  including Scans, snapshots, occurrences, content, recursive Source refresh topology, and
+  `SourceEntryObservation` rows. Removing the evaluation fingerprint and terminal job dedupe state
+  allows the same retained evidence to be evaluated again deterministically.
+
+Both operations return conflict while either a Site FindingEvaluation or its BackgroundJob is
+queued/running. They never cancel active work implicitly. Site reset does not delete collected
+website evidence, recollect evidence, change detector/evaluator identities, or rewrite historical
+evaluation counters.

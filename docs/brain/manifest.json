@@ -1,0 +1,34 @@
+{
+  "name": "Site Ledger Second Brain",
+  "schema": "site-ledger-second-brain-v1.2",
+  "repository": "Artsen/site-ledger",
+  "base_commit": "6e17e08e641b48660a7ed7a13d9227b288fcafc6",
+  "updated_in": "PR #52: Findings reset/delete workflow and maintenance contract",
+  "generated_at": "2026-09-03",
+  "recommended_path": "docs/brain",
+  "canonical_semantic_source": "graph.json",
+  "generated_views": [
+    "GRAPH.md",
+    "DOMAINS.md"
+  ],
+  "canonical_files": [
+    "README.md",
+    "GRAPH.md",
+    "graph.json",
+    "DOMAINS.md",
+    "INVARIANTS.md",
+    "WORKFLOWS.md",
+    "CONTEXT_PACKS.md",
+    "AGENT_GUIDE.md",
+    "FRONTIER.md",
+    "DESIGN_NOTES.md",
+    "manifest.json",
+    "generate_views.py",
+    "validate_graph.py",
+    "impact_map.py",
+    "ROOT_AGENTS_SNIPPET.md"
+  ],
+  "validation": "python docs/brain/validate_graph.py --repo-root .",
+  "generation": "python docs/brain/generate_views.py",
+  "impact_map": "python docs/brain/impact_map.py --base origin/main --head HEAD"
+}

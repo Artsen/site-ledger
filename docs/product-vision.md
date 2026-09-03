@@ -175,9 +175,10 @@ The deterministic static Finding evaluator covers Page HTTP/fetch failures, noin
 indexability conflicts, missing titles, canonical validity/cardinality/observed-target failures,
 and active Pages currently returning non-HTML representations. Per-detector evaluation diagnostics
 make clear and unknown outcomes observable without expanding sparse Finding persistence.
-Cross-domain detector packs, semantic analysis, and AI
-explanations remain future direction. Automated Accessibility and Performance collection are
-evidence domains, not automatically Finding or compliance conclusions.
+The current bundle correlates static Scan evidence with immutable refresh-scoped sitemap Source
+evidence. Additional cross-domain packs for Render, Accessibility, Performance, analytics,
+semantic analysis, and AI explanations remain future direction. Automated Accessibility and
+Performance collection are evidence domains, not automatically Finding or compliance conclusions.
 
 ### Workflow
 
@@ -187,8 +188,8 @@ investigations, permissions, and richer resolution workflow remain future direct
 
 ## Roadmap
 
-Planned areas include Resource-body analysis, environment comparisons,
-cross-domain Finding evidence, performance regression interpretation, analytics
+Planned areas include Resource-body analysis, environment comparisons, additional cross-domain
+Finding evidence beyond the implemented static+sitemap contract, performance regression interpretation, analytics
 integrations, semantic analysis, and investigation workflow.
 
 New work should preserve the separation between evidence, deterministic comparison, interpretation,
@@ -199,9 +200,9 @@ and workflow. Interpretation must remain traceable to the observations that supp
 - Browser rendering is bounded optional Page evidence, not browser-only crawling or Resource discovery.
 - Cross-Site and environment comparison are not implemented. Same-Site Scan comparison is
   documented in [Deterministic Scan comparisons](scan-comparisons.md).
-- Resource-body storage and analysis, cross-domain Finding evidence, analytics, semantic embeddings,
-  and AI summaries are not implemented. Static technical/indexability Findings and Automated
-  Accessibility and Performance evidence collection are current.
+- Resource-body storage and analysis, Render/Accessibility/Performance/analytics Finding evidence,
+  semantic embeddings, and AI summaries are not implemented. Static technical/indexability,
+  internal-link topology, and sitemap/static cross-stream Findings are current.
 - Authenticated crawling is not supported. Private-network crawling is blocked by default and is
   available only through the explicit trusted `allow_private_networks=true` scope setting.
 - Robots.txt enforcement and within-crawl concurrency remain deferred.
