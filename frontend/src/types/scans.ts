@@ -200,6 +200,9 @@ export type SourceRefresh = {
   error_type: string | null;
   error_message: string | null;
   warnings_json: Array<Record<string, unknown>>;
+  membership_materialized: boolean;
+  sitemap_document_type: "urlset" | "sitemapindex" | null;
+  child_refresh_ids_json: number[];
 };
 
 export type UrlSourceEntry = {

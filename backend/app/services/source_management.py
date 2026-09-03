@@ -8,6 +8,7 @@ from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.url_normalizer import UrlNormalizationError
 from app.models import (
     BackgroundJob,
+    SourceEntryObservation,
     SourceRefresh,
     UrlSource,
     UrlSourceEntry,
@@ -95,18 +96,34 @@ def delete_source(db: Session, site_id: int, source_id: int) -> int | None:
     )
     if active_job is not None:
         raise SourceHasActiveJobError("The source has an active refresh job.")
-    resource_ids = [
-        resource_id
-        for resource_id in db.scalars(
+    source_tree = select(UrlSource.id).where(UrlSource.id == source.id).cte(recursive=True)
+    source_tree = source_tree.union_all(
+        select(UrlSource.id).where(UrlSource.parent_source_id == source_tree.c.id)
+    )
+    source_ids = select(source_tree.c.id)
+    resource_ids = set(
+        db.scalars(
             select(UrlSourceEntry.resource_id).where(
-                UrlSourceEntry.url_source_id == source.id,
+                UrlSourceEntry.url_source_id.in_(source_ids),
                 UrlSourceEntry.resource_id.is_not(None),
             )
         )
-        if resource_id is not None
-    ]
+    )
+    resource_ids.update(
+        db.scalars(
+            select(SourceEntryObservation.resource_id)
+            .join(SourceRefresh)
+            .where(
+                SourceRefresh.url_source_id.in_(source_ids),
+                SourceEntryObservation.resource_id.is_not(None),
+            )
+        )
+    )
     db.delete(source)
-    _delete_unreferenced_source_resources(db, resource_ids)
+    db.flush()
+    _delete_unreferenced_source_resources(
+        db, sorted(resource_id for resource_id in resource_ids if resource_id is not None)
+    )
     db.commit()
     return source_id
 
@@ -181,9 +198,10 @@ def upsert_source_entry(
     sitemap_changefreq: str | None = None,
     sitemap_priority: str | None = None,
     policy_index: dict[str, UrlSourceEntry] | None = None,
+    normalization_version: str | None = None,
 ) -> tuple[UrlSourceEntry, str]:
     config = ScopeConfig.from_dict(site.scope_config)
-    normalization_version = active_url_normalization_version(db)
+    normalization_version = normalization_version or active_url_normalization_version(db)
     try:
         scope_result = ScopeEngine(config, site.base_url, normalization_version).evaluate(
             raw_url, site.base_url
@@ -363,6 +381,12 @@ def _delete_unreferenced_source_resources(db: Session, resource_ids: list[int]) 
                 | (
                     select(func.count(UrlSourceEntry.id))
                     .where(UrlSourceEntry.resource_id == WebResource.id)
+                    .scalar_subquery()
+                    > 0
+                )
+                | (
+                    select(func.count(SourceEntryObservation.id))
+                    .where(SourceEntryObservation.resource_id == WebResource.id)
                     .scalar_subquery()
                     > 0
                 )

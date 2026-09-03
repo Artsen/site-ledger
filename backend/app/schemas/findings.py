@@ -6,7 +6,9 @@ from pydantic import BaseModel, Field
 FindingState = Literal["detected", "unknown", "resolved"]
 FindingSeverity = Literal["medium", "high"]
 AssessmentOutcome = Literal["detected", "clear", "unknown"]
-FindingEvidenceKind = Literal["resource_snapshot", "resource_occurrence", "scan"]
+FindingEvidenceKind = Literal[
+    "resource_snapshot", "resource_occurrence", "source_entry_observation", "scan"
+]
 
 
 class FindingDetectorSummary(BaseModel):
@@ -27,6 +29,7 @@ class FindingEvaluationRead(BaseModel):
     evidence_horizon_at: datetime
     active_page_count: int
     active_page_universe_sha256: str
+    evidence_manifest_json: dict[str, Any] = Field(default_factory=dict)
     status: str
     detected_count: int
     clear_count: int

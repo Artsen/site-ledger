@@ -10,7 +10,7 @@ from app.crawler.url_normalizer import (
     URL_NORMALIZATION_V1_VERSION,
     URL_NORMALIZATION_V2_VERSION,
 )
-from app.models import ResourceOccurrence, ResourceSnapshot, Scan
+from app.models import ResourceOccurrence, ResourceSnapshot, Scan, SourceEntryObservation
 from app.services.finding_detectors import (
     CURRENT_FINDING_DETECTOR_MANIFEST,
     CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
@@ -21,7 +21,11 @@ from app.services.finding_detectors import (
     PAGE_INDEXABILITY_CONFLICT_TYPE,
     PAGE_INTERNAL_LINKS_TO_REDIRECTS_TYPE,
     PAGE_NOINDEX_TYPE,
+    SITEMAP_PAGE_HTTP_ERROR_TYPE,
+    SITEMAP_PAGE_NOINDEX_TYPE,
+    SITEMAP_PAGE_REDIRECT_TYPE,
     DetectorContext,
+    SitemapMembershipEvidence,
     build_snapshot_url_index,
     finding_detector_manifest_sha256,
 )
@@ -97,6 +101,11 @@ def _context(
     version: str = URL_NORMALIZATION_V2_VERSION,
     drop_query_parameters: list[str] | None = None,
     occurrences: list[ResourceOccurrence] | None = None,
+    memberships: list[SitemapMembershipEvidence] | None = None,
+    active_sitemap_source_ids: tuple[int, ...] = (),
+    usable_sitemap_refresh_ids_by_source_id: dict[int, int] | None = None,
+    sitemap_membership_complete: bool | None = None,
+    subject_resource_id: int | None = None,
 ) -> DetectorContext:
     scan = Scan(
         id=1,
@@ -111,11 +120,58 @@ def _context(
     for occurrence in occurrences or []:
         source_resource_id = resources_by_snapshot[occurrence.source_snapshot_id]
         by_source.setdefault(source_resource_id, []).append(occurrence)
+    membership_by_resource: dict[int, list[SitemapMembershipEvidence]] = {}
+    for membership in memberships or []:
+        assert membership.observation.resource_id is not None
+        membership_by_resource.setdefault(membership.observation.resource_id, []).append(membership)
+    usable = usable_sitemap_refresh_ids_by_source_id or {}
     return DetectorContext(
-        scan,
-        by_resource,
-        build_snapshot_url_index(scan, by_resource),
-        {resource_id: tuple(items) for resource_id, items in by_source.items()},
+        scan=scan,
+        snapshots_by_resource_id=by_resource,
+        snapshots_by_normalized_url=build_snapshot_url_index(scan, by_resource),
+        occurrences_by_source_resource_id={
+            resource_id: tuple(items) for resource_id, items in by_source.items()
+        },
+        active_sitemap_source_ids=active_sitemap_source_ids,
+        usable_sitemap_refresh_ids=tuple(usable.values()),
+        sitemap_membership_complete=(
+            len(usable) == len(active_sitemap_source_ids)
+            if sitemap_membership_complete is None
+            else sitemap_membership_complete
+        ),
+        sitemap_membership_by_resource_id={
+            resource_id: tuple(items) for resource_id, items in membership_by_resource.items()
+        },
+        subject_resource_id=subject_resource_id,
+    )
+
+
+def _membership(
+    observation_id: int,
+    *,
+    resource_id: int = 1,
+    source_id: int = 10,
+    refresh_id: int = 20,
+    position: int = 0,
+    raw_url: str = "https://example.test/page",
+) -> SitemapMembershipEvidence:
+    observation = SourceEntryObservation(
+        id=observation_id,
+        source_refresh_id=refresh_id,
+        position=position,
+        resource_id=resource_id,
+        raw_url=raw_url,
+        normalized_url=raw_url,
+        normalization_version=URL_NORMALIZATION_V2_VERSION,
+        source_metadata_json={"document_type": "urlset"},
+        validation_state="valid",
+        scope_decision="crawlable",
+    )
+    return SitemapMembershipEvidence(
+        observation=observation,
+        url_source_id=source_id,
+        source_refresh_id=refresh_id,
+        source_refresh_finished_at="2026-09-03T01:00:00+00:00",
     )
 
 
@@ -444,8 +500,107 @@ def test_general_fingerprint_preserves_exact_v1_http_identity() -> None:
     assert finding_fingerprint(18, 29) != finding_fingerprint(17, 29)
 
 
+def test_sitemap_http_error_uses_exact_duplicate_membership_evidence() -> None:
+    snapshot = _snapshot(status=404)
+    memberships = [
+        _membership(100, position=0),
+        _membership(101, position=1),
+        _membership(102, source_id=11, refresh_id=21),
+    ]
+    context = _context(
+        [snapshot],
+        memberships=memberships,
+        active_sitemap_source_ids=(10, 11),
+        usable_sitemap_refresh_ids_by_source_id={10: 20, 11: 21},
+    )
+    result = _detector(SITEMAP_PAGE_HTTP_ERROR_TYPE).evaluate(snapshot, context)
+    assert (result.outcome, result.severity) == ("detected", "medium")
+    assert result.details["sitemap_source_count"] == 2
+    assert result.details["membership_observation_count"] == 3
+    assert result.details["membership_sample_count"] == 3
+    assert result.details["membership_evidence_truncated"] is False
+    assert [item.source_entry_observation.id for item in result.evidence[1:]] == [100, 101, 102]
+
+
+def test_sitemap_noindex_reuses_static_directive_semantics() -> None:
+    snapshot = _snapshot(meta_robots="noindex")
+    context = _context(
+        [snapshot],
+        memberships=[_membership(100)],
+        active_sitemap_source_ids=(10,),
+        usable_sitemap_refresh_ids_by_source_id={10: 20},
+    )
+    result = _detector(SITEMAP_PAGE_NOINDEX_TYPE).evaluate(snapshot, context)
+    assert (result.outcome, result.severity) == ("detected", "medium")
+    assert result.details["matched_sources"] == ["meta_robots"]
+
+
+def test_sitemap_redirect_requires_retained_chain_and_distinct_final_identity() -> None:
+    membership = _membership(100)
+    direct = _snapshot(final_url="https://example.test/new", redirect_chain=[])
+    redirected = _snapshot(
+        final_url="https://example.test/new",
+        redirect_chain=[{"status": 301, "url": "https://example.test/page"}],
+    )
+    context = _context(
+        [redirected],
+        memberships=[membership],
+        active_sitemap_source_ids=(10,),
+        usable_sitemap_refresh_ids_by_source_id={10: 20},
+    )
+    assert _detector(SITEMAP_PAGE_REDIRECT_TYPE).evaluate(direct, context).outcome == "clear"
+    result = _detector(SITEMAP_PAGE_REDIRECT_TYPE).evaluate(redirected, context)
+    assert (result.outcome, result.severity) == ("detected", "medium")
+    assert result.details["declared_sitemap_url"] == "https://example.test/page"
+    assert result.details["normalized_final_url"] == "https://example.test/new"
+    assert result.details["redirect_hop_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("active", "usable", "expected", "reason"),
+    [
+        ((), {}, "clear", "no_active_sitemap_sources"),
+        ((10,), {}, "unknown", "sitemap_source_evidence_unavailable"),
+        ((10,), {10: 20}, "clear", "sitemap_membership_not_present"),
+        ((10, 11), {10: 20}, "unknown", "sitemap_source_evidence_unavailable"),
+    ],
+)
+def test_sitemap_membership_three_state_absence_contract(
+    active: tuple[int, ...], usable: dict[int, int], expected: str, reason: str
+) -> None:
+    snapshot = _snapshot(status=404)
+    result = _detector(SITEMAP_PAGE_HTTP_ERROR_TYPE).evaluate(
+        snapshot,
+        _context(
+            [snapshot],
+            active_sitemap_source_ids=active,
+            usable_sitemap_refresh_ids_by_source_id=usable,
+        ),
+    )
+    assert result.outcome == expected
+    assert result.reason_code == reason
+
+
+def test_sitemap_membership_remains_known_when_static_snapshot_is_missing() -> None:
+    membership = _membership(100, resource_id=1, source_id=10, refresh_id=20)
+    context = _context(
+        [],
+        subject_resource_id=1,
+        active_sitemap_source_ids=(10,),
+        usable_sitemap_refresh_ids_by_source_id={10: 20},
+        memberships=[membership],
+    )
+
+    result = _detector(SITEMAP_PAGE_HTTP_ERROR_TYPE).evaluate(None, context)
+
+    assert result.outcome == "unknown"
+    assert result.reason_code == "missing_subject_evidence"
+    assert result.details["sitemap_source_count"] == 1
+    assert [item.source_entry_observation.id for item in result.evidence] == [100]
+
+
 def test_detector_manifest_is_deterministic_and_covers_registry_contract() -> None:
-    assert len(CURRENT_FINDING_DETECTOR_MANIFEST) == len(CURRENT_FINDING_DETECTORS) == 11
+    assert len(CURRENT_FINDING_DETECTOR_MANIFEST) == len(CURRENT_FINDING_DETECTORS) == 14
     assert CURRENT_FINDING_DETECTOR_MANIFEST[0] == {
         "finding_type": "page_http_error",
         "detector_identity": "page-http-error-v1",
@@ -460,14 +615,18 @@ def test_detector_manifest_is_deterministic_and_covers_registry_contract() -> No
     ).encode()
     assert (
         CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
-        == "bc8459b5780ae48740a13e9b2b3a153143518a13e20edd9d31b545d325993948"
+        == "c0c8f3db2532677fb6650a248cefe4eb610df632b8241da88b996e18d6332c96"
     )
     assert hashlib.sha256(payload).hexdigest() == CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
     assert (
         finding_detector_manifest_sha256(CURRENT_FINDING_DETECTORS)
         == CURRENT_FINDING_DETECTOR_MANIFEST_SHA256
     )
-    v3_manifest_sha256 = finding_detector_manifest_sha256(CURRENT_FINDING_DETECTORS[:-2])
+    v4_manifest_sha256 = finding_detector_manifest_sha256(CURRENT_FINDING_DETECTORS[:-3])
+    assert v4_manifest_sha256 == (
+        "bc8459b5780ae48740a13e9b2b3a153143518a13e20edd9d31b545d325993948"
+    )
+    v3_manifest_sha256 = finding_detector_manifest_sha256(CURRENT_FINDING_DETECTORS[:-5])
     assert v3_manifest_sha256 == (
         "8d413eb1d494beb84be11c682d058c9a6ee474beabd4e77fa78be084414b99db"
     )

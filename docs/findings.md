@@ -8,11 +8,12 @@ Evidence -> deterministic derivatives -> deterministic Finding evaluation
          -> persistent Findings -> Site Intelligence and workflow -> future AI interpretation
 ```
 
-## V4 Detector Bundle Contract
+## V5 Detector Bundle Contract
 
-`finding-evaluator-v2` runs the fixed `finding-detectors-v4` bundle over one frozen ordered
-universe of active Site Page resource IDs and one server-selected terminal static Scan. It contains
-exactly these production detectors:
+`finding-evaluator-v3` runs the fixed `finding-detectors-v5` bundle over one frozen ordered
+universe of active Site Page resource IDs and a composite `finding-evidence-manifest-v1`. The
+manifest pins one server-selected terminal static Scan and the exact current membership selection
+for every active sitemap Source. It contains exactly these 14 production detectors:
 
 - `page-http-error-v1` (`page_http_error`, `page-http-error-key-v1`): a usable fetched
   ResourceSnapshot with HTTP 400-499 is detected at medium severity and HTTP 500-599 is detected at
@@ -59,11 +60,81 @@ exactly these production detectors:
   `page-internal-links-to-redirects-key-v1`): a source Page with an eligible internal anchor whose
   same-Scan target has an actual retained redirect chain ending at a different normalized URL is
   detected at medium severity. Normalization-equivalent spelling changes alone are clear.
+- `sitemap-page-http-error-v1` (`sitemap_page_http_error`,
+  `sitemap-page-http-error-key-v1`): proven frozen sitemap membership plus a usable same-manifest
+  static response with HTTP 4xx is medium and HTTP 5xx is high.
+- `sitemap-page-noindex-v1` (`sitemap_page_noindex`, `sitemap-page-noindex-key-v1`): proven frozen
+  sitemap membership plus applicable explicit `noindex` evidence is medium. It reuses the Page
+  robots-directive parser exactly.
+- `sitemap-page-redirect-v1` (`sitemap_page_redirect`, `sitemap-page-redirect-key-v1`): proven
+  frozen sitemap membership plus an actual retained redirect chain ending at a different normalized
+  URL is medium. URL spelling or normalization differences alone are not redirects.
 
-All detectors use only retained `ResourceSnapshot`, `ResourceOccurrence`, and `Scan` evidence.
-Render, Performance, Accessibility, Structured Content, Sources, analytics, and Comparison are not
-first-class Finding evidence in this contract. That boundary is deliberate and requires a later
-typed evidence-contract evolution rather than hidden provenance in assessment JSON.
+All detectors use only retained `ResourceSnapshot`, `ResourceOccurrence`, `Scan`, and
+`SourceEntryObservation` evidence. Render, Performance, Accessibility, Structured Content,
+analytics, and Comparison are not first-class Finding evidence in this contract. No detector
+fetches external evidence during evaluation.
+
+## Sitemap Evidence
+
+`SourceRefresh` is the collection envelope. For a sitemap `urlset`, each declaration creates one
+immutable `SourceEntryObservation` at its deterministic source position, including duplicates,
+raw and normalized URLs, the exact normalization version, sitemap metadata, validation state, scope
+decision, and optional WebResource identity. The rows are staged and committed in the owning
+Source-refresh transaction. Recursive sitemap observations belong to the exact child Source and
+child refresh that declared them. Every sitemap refresh also records its document type. A
+`sitemapindex` refresh stores the ordered IDs of the exact child refreshes produced by that
+execution, while a `urlset` stores an empty child list and materializes Page membership directly.
+
+`UrlSourceEntry` is different: it is the mutable current Inventory projection. Refresh can update
+or reactivate that row, so a Finding assessment never points to it as historical evidence. Existing
+pre-`202609030032` refreshes are not backfilled because current Inventory cannot reconstruct their
+historical declarations. Their immutable sitemap evidence is explicitly unavailable.
+
+At evaluation creation, active configured and robots-discovered sitemap roots are represented in
+deterministic Source-ID order. Sitemap-index-discovered descendants enter only through their exact
+parent refresh tree; mutable descendant activation cannot make stale membership current. A root's
+selected refresh is its latest terminal refresh by `finished_at, id` when completed or completed
+with errors. A latest failed or cancelled root has a null tree; queued and running work does not
+replace the latest terminal selection. The frozen manifest recursively records exact refresh IDs:
+
+```json
+{
+  "schema": "finding-evidence-manifest-v1",
+  "static": {"scan_id": 123},
+  "sitemap_roots": [
+    {
+      "url_source_id": 4,
+      "refresh_tree": {
+        "url_source_id": 4,
+        "source_refresh_id": 91,
+        "sitemap_document_type": "sitemapindex",
+        "status": "completed",
+        "membership_materialized": false,
+        "children": [
+          {
+            "url_source_id": 5,
+            "source_refresh_id": 92,
+            "sitemap_document_type": "urlset",
+            "status": "completed",
+            "membership_materialized": true,
+            "children": []
+          }
+        ]
+      }
+    },
+    {"url_source_id": 7, "refresh_tree": null}
+  ]
+}
+```
+
+A valid, resource-bound observation in any usable selected leaf proves membership even when a
+sibling is unavailable. Absence is clear only when every frozen root branch reaches usable
+`urlset` membership evidence; index containers are not membership leaves. Otherwise absence is
+unknown. With no active sitemap roots, sitemap detectors are clear/not applicable.
+Duplicate declarations and multiple Sources still produce one logical Page Finding; assessments
+retain exact Source and observation totals and at most 20 deterministic membership pointers with an
+explicit truncation flag.
 
 ## Identity And Evaluation
 
@@ -72,12 +143,14 @@ WebResource ID. Scan, snapshot, status, severity, timestamps, and database Findi
 The V1 HTTP payload is preserved byte-for-byte, so V2 continues an existing HTTP Finding rather
 than duplicating it.
 
-The current evaluation input fingerprint includes `finding-evaluator-v2`, `finding-detectors-v4`,
-the deterministic detector-manifest checksum, Site, source Scan, and the frozen
-active-Page-universe checksum. A V4 bundle evaluation can therefore evaluate a Scan that previously
-received a V1, V2, or V3 bundle evaluation. Historical terminal evaluations remain readable;
-nonterminal historical evaluations do not execute through newer detector code. Within one bundle,
-an older evidence horizon fails closed after a newer completed evaluation.
+The current evaluation input fingerprint includes `finding-evaluator-v3`, `finding-detectors-v5`,
+the deterministic detector-manifest checksum, Site, source Scan, frozen composite evidence manifest,
+and active-Page-universe checksum. A new Scan with unchanged Sources or a new eligible Source
+refresh with the same Scan therefore creates a new evaluation. Historical terminal evaluations
+remain readable; nonterminal historical evaluators do not execute through V3 code. Within one
+bundle, the monotonic FindingEvaluation ID is the evidence-selection generation guard: after a
+later evaluation completes, an older queued manifest fails closed and cannot mutate current
+Findings. Job completion time is not treated as evidence time.
 
 The manifest is derived in registry order from each production detector's `finding_type`,
 `detector_identity`, `logical_key_version`, and `subject_kind`, then hashed as canonical JSON with
@@ -91,7 +164,7 @@ new `detector_bundle_identity`. Evaluator execution-contract changes require a n
 `evaluator_version`. Reusing any of these semantic identities after changing its contract is a
 compatibility bug, even when implementation code alone changed.
 
-Counts cover detector-subject outcomes. Eleven detectors over 100 active Pages produce 1,100 outcomes,
+Counts cover detector-subject outcomes. Fourteen detectors over 100 active Pages produce 1,400 outcomes,
 while `active_page_count` remains 100. The evaluation checksum hashes the complete deterministic
 outcome set, including clean and unknown outcomes, plus the persisted per-detector summary.
 
@@ -129,10 +202,12 @@ resolved condition back to detected. Only trustworthy clear evidence resolves a 
 failed, deleted, insufficient, ambiguous, or unresolvable evidence is unknown and never proves
 resolution.
 
-Finding lifecycle timestamps use evidence observation time. Evaluation execution timestamps and
-mutable acknowledgement timestamps remain separate clocks. Acknowledgement never changes condition
-state. Resolution retains acknowledgement; reopening clears it and records the prior acknowledgement
-timestamp in the assessment.
+Finding lifecycle timestamps use evidence observation time. Cross-stream assessments preserve the
+static snapshot `fetched_at` and each Source refresh `finished_at` independently; they do not imply
+simultaneous collection. Evaluation execution timestamps and mutable acknowledgement timestamps
+remain separate clocks. Acknowledgement never changes condition state. Resolution retains
+acknowledgement; reopening clears it and records the prior acknowledgement timestamp in the
+assessment.
 
 Each evaluation stages every detector's Findings, assessments, typed evidence references, and
 lifecycle transitions in the guarded BackgroundJob transaction. Ownership loss or terminal job
@@ -151,11 +226,18 @@ ResourceSnapshot followed by the evaluation-horizon Scan. A canonical-target ass
 
 Evidence deletion preserves Finding and assessment history while reads report that the referenced
 source is no longer retained. Raw evidence is never copied into Finding tables. Detail reads batch
-assessment, evaluation, job, Scan, ResourceSnapshot, and ResourceOccurrence resolution so typed
+assessment, evaluation, job, Scan, ResourceSnapshot, ResourceOccurrence, and
+SourceEntryObservation resolution so typed
 provenance does not introduce N+1 queries. Downgrading migration `202609020031` to `202609010030`
 intentionally deletes only `resource_occurrence` evidence-reference rows because the older CHECK
 constraint cannot represent them. Findings, assessments, `resource_snapshot` references, and `scan`
 references remain; retained evidence positions may therefore be non-contiguous.
+
+Downgrading `202609030032` to `202609020031` similarly deletes only unsupported
+`source_entry_observation` evidence-reference rows before dropping immutable Source observations
+and evaluation manifests. Compatible Findings, assessments, snapshot/occurrence/Scan references,
+and non-contiguous positions remain. A Finding is not evidence, a mutable current Inventory row, a
+Comparison, or AI interpretation.
 
 Current lists and Site Intelligence use active Site Pages by default. Suppression hides a Finding
 from that operational view but neither resolves nor deletes it. Direct history remains available.

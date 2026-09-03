@@ -19,7 +19,14 @@ from app.crawler.safe_fetch import (
 from app.crawler.scope import ScopeConfig, ScopeEngine
 from app.crawler.security import DestinationResolutionError, UnsafeDestinationError
 from app.crawler.url_normalizer import normalize_url_for_version
-from app.models import BackgroundJob, SourceRefresh, UrlSource, UrlSourceEntry, WebsiteProperty
+from app.models import (
+    BackgroundJob,
+    SourceEntryObservation,
+    SourceRefresh,
+    UrlSource,
+    UrlSourceEntry,
+    WebsiteProperty,
+)
 from app.parsers.compression import (
     DecompressedResponseTooLargeError,
     InvalidGzipError,
@@ -186,9 +193,13 @@ async def execute_source_refresh(
         refresh.error_type = _error_type(exc)
         refresh.error_message = str(exc)
         refresh.finished_at = datetime.now(UTC)
-    _finish_source(source, refresh)
-    _fence(db, fence_domain_mutation)
-    db.commit()
+    try:
+        _finish_source(source, refresh)
+        _fence(db, fence_domain_mutation)
+        db.commit()
+    except ExecutionOwnershipLost:
+        db.rollback()
+        raise
     db.refresh(refresh)
     return refresh
 
@@ -355,11 +366,13 @@ async def _refresh_sitemap(
         max_decompressed_bytes=limits.max_decompressed_bytes,
     )
     parsed = parse_sitemap_xml(content)
+    refresh.sitemap_document_type = parsed.document_type
+    refresh.child_refresh_ids_json = []
     if parsed.document_type == "urlset":
         seen_entries: set[str] = set()
         policy_index = _source_policy_index(db, source, source.website_property)
         added = updated = accepted = rejected = 0
-        for sitemap_url in parsed.urls:
+        for position, sitemap_url in enumerate(parsed.urls):
             _raise_if_cancelled(should_cancel)
             entry, state = upsert_source_entry(
                 db,
@@ -373,6 +386,24 @@ async def _refresh_sitemap(
                 sitemap_changefreq=sitemap_url.changefreq,
                 sitemap_priority=sitemap_url.priority,
                 policy_index=policy_index,
+                normalization_version=normalization_version,
+            )
+            db.add(
+                SourceEntryObservation(
+                    source_refresh_id=refresh.id,
+                    position=position,
+                    resource_id=entry.resource_id,
+                    raw_url=sitemap_url.loc,
+                    normalized_url=entry.normalized_url,
+                    normalization_version=normalization_version,
+                    sitemap_lastmod=sitemap_url.lastmod,
+                    sitemap_changefreq=sitemap_url.changefreq,
+                    sitemap_priority=sitemap_url.priority,
+                    source_metadata_json={"document_type": "urlset"},
+                    validation_state=entry.validation_state,
+                    validation_message=entry.validation_message,
+                    scope_decision=entry.scope_decision,
+                )
             )
             if entry.normalized_url:
                 seen_entries.add(entry.normalized_url)
@@ -391,11 +422,13 @@ async def _refresh_sitemap(
         refresh.entries_added = added
         refresh.entries_updated = updated
         refresh.entries_no_longer_current = no_longer
+        refresh.membership_materialized = True
         refresh.status = "completed" if rejected == 0 else "completed_with_errors"
         refresh.finished_at = datetime.now(UTC)
         _progress(progress_callback, refresh)
         return
     child_count = 0
+    child_refresh_ids: list[int] = []
     warnings: list[dict[str, Any]] = []
     for child in parsed.children[: limits.max_child_sources]:
         _raise_if_cancelled(should_cancel)
@@ -427,6 +460,8 @@ async def _refresh_sitemap(
             db.flush()
         child_count += 1
         child_refresh = _start_refresh(db, child_source)
+        child_refresh_ids.append(child_refresh.id)
+        refresh.child_refresh_ids_json = list(child_refresh_ids)
         try:
             await _refresh_sitemap(
                 db,
@@ -448,6 +483,7 @@ async def _refresh_sitemap(
             child_refresh.finished_at = datetime.now(UTC)
             warnings.append({"source_url": normalized, "error_type": child_refresh.error_type})
         _finish_source(child_source, child_refresh)
+    refresh.child_refresh_ids_json = child_refresh_ids
     refresh.child_source_count = child_count
     refresh.discovered_entry_count = len(parsed.children)
     refresh.accepted_entry_count = child_count

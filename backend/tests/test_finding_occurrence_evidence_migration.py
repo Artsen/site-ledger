@@ -53,6 +53,11 @@ def test_occurrence_evidence_kind_migration_round_trip(tmp_path: Path, monkeypat
                 )
             assert list(connection.execute("PRAGMA foreign_key_check")) == []
 
+        command.upgrade(config, "head")
+        command.check(config)
+        assert "resource_occurrence" in _table_sql(database_path)
+        with sqlite3.connect(database_path) as connection:
+            assert list(connection.execute("PRAGMA foreign_key_check")) == []
         engine = create_engine(f"sqlite:///{database_path.as_posix()}")
         try:
             with Session(engine) as session:
@@ -63,12 +68,6 @@ def test_occurrence_evidence_kind_migration_round_trip(tmp_path: Path, monkeypat
                 ] == [0, 2]
         finally:
             engine.dispose()
-
-        command.upgrade(config, "head")
-        command.check(config)
-        assert "resource_occurrence" in _table_sql(database_path)
-        with sqlite3.connect(database_path) as connection:
-            assert list(connection.execute("PRAGMA foreign_key_check")) == []
     finally:
         get_settings.cache_clear()
 

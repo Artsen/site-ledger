@@ -54,13 +54,35 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return
         if path == "/sitemap.xml":
             port = self.server.server_address[1]
+            paths = ["/inventory-only/"]
+            if self.server.state.version() == 2:
+                paths.extend(["/sitemap-error", "/sitemap-noindex", "/sitemap-redirect"])
+            declarations = "".join(
+                f"<url><loc>http://127.0.0.1:{port}{item}</loc></url>" for item in paths
+            )
             body = (
                 '<?xml version="1.0" encoding="UTF-8"?>\n'
                 '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-                f"<url><loc>http://127.0.0.1:{port}/inventory-only/</loc></url>"
-                "</urlset>\n"
+                f"{declarations}</urlset>\n"
             )
             self._send(HTTPStatus.OK, body.encode("utf-8"), "application/xml; charset=utf-8")
+            return
+        if path == "/sitemap-error":
+            self._send(
+                HTTPStatus.NOT_FOUND,
+                _document(
+                    "Sitemap Error",
+                    "<main><h1>Sitemap Error</h1><p>Retained 404 evidence.</p></main>",
+                ).encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
+            return
+        if path == "/sitemap-redirect":
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("Location", "/new/")
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
             return
         html = fixture_page(path, self.server.state.version())
         if html is None:
@@ -71,7 +93,11 @@ class FixtureHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
         self.server.state.log_request("POST", path, self.headers.get("User-Agent", ""))
-        if path not in {"/__fixture__/version/1", "/__fixture__/version/2"}:
+        if path not in {
+            "/__fixture__/version/1",
+            "/__fixture__/version/2",
+            "/__fixture__/version/3",
+        }:
             self._send(HTTPStatus.NOT_FOUND, b"Not found\n", "text/plain; charset=utf-8")
             return
         version = int(path.rsplit("/", 1)[1])
@@ -133,6 +159,12 @@ def fixture_page(path: str, version: int) -> str | None:
         return _document(
             "Stable Page",
             "<main><h1>Stable Page</h1><p>This page does not change.</p></main>",
+            head='<meta name="robots" content="noindex">',
+        )
+    if path == "/sitemap-noindex":
+        return _document(
+            "Sitemap Noindex",
+            "<main><h1>Sitemap Noindex</h1><p>Retained static evidence.</p></main>",
             head='<meta name="robots" content="noindex">',
         )
     if path == "/new/" and version == 2:

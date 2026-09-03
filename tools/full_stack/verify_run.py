@@ -37,6 +37,8 @@ from app.models import (
     ScanSeedOrigin,
     SiteInventorySuppression,
     SitePage,
+    SourceEntryObservation,
+    SourceRefresh,
     UrlSourceEntry,
     WebResource,
     WebsiteProperty,
@@ -177,7 +179,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         snapshot_count = db.scalar(
             select(func.count(ResourceSnapshot.id)).where(ResourceSnapshot.scan_id.in_(scan_ids))
         )
-        assert active_site_pages == 5
+        assert active_site_pages == 8
         assert inventory_suppressions == 0
         assert current_source_entries == 1
         assert snapshot_count == 9
@@ -263,14 +265,58 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         )
         assert active_jobs == 0
         finding_evaluation = db.get(FindingEvaluation, int(result["finding_evaluation_id"]))
+        first_finding_evaluation = db.get(
+            FindingEvaluation, int(result["first_finding_evaluation_id"])
+        )
+        assert first_finding_evaluation is not None
+        assert first_finding_evaluation.source_scan_id == lifecycle_scan_id
+        assert first_finding_evaluation.evaluator_version == "finding-evaluator-v3"
+        assert first_finding_evaluation.detector_bundle_identity == "finding-detectors-v5"
+        assert first_finding_evaluation.evidence_manifest_json == {
+            "schema": "finding-evidence-manifest-v1",
+            "static": {"scan_id": lifecycle_scan_id},
+            "sitemap_roots": [
+                {
+                    "url_source_id": int(result["lifecycle_source_id"]),
+                    "refresh_tree": {
+                        "url_source_id": int(result["lifecycle_source_id"]),
+                        "source_refresh_id": int(result["first_source_refresh_id"]),
+                        "sitemap_document_type": "urlset",
+                        "status": "completed",
+                        "membership_materialized": True,
+                        "children": [],
+                    },
+                }
+            ],
+        }
         assert finding_evaluation is not None
         assert finding_evaluation.status == "completed"
         assert finding_evaluation.source_scan_id == lifecycle_scan_id
-        assert finding_evaluation.evaluator_version == "finding-evaluator-v2"
-        assert finding_evaluation.detector_bundle_identity == "finding-detectors-v4"
-        assert len(finding_evaluation.detector_summary_json) == 11
-        assert finding_evaluation.detector_summary_json["page_noindex"]["detected"] == 1
+        assert finding_evaluation.evaluator_version == "finding-evaluator-v3"
+        assert finding_evaluation.detector_bundle_identity == "finding-detectors-v5"
+        assert len(finding_evaluation.detector_summary_json) == 14
+        assert finding_evaluation.evidence_manifest_json == {
+            "schema": "finding-evidence-manifest-v1",
+            "static": {"scan_id": lifecycle_scan_id},
+            "sitemap_roots": [
+                {
+                    "url_source_id": int(result["lifecycle_source_id"]),
+                    "refresh_tree": {
+                        "url_source_id": int(result["lifecycle_source_id"]),
+                        "source_refresh_id": int(result["second_source_refresh_id"]),
+                        "sitemap_document_type": "urlset",
+                        "status": "completed",
+                        "membership_materialized": True,
+                        "children": [],
+                    },
+                }
+            ],
+        }
+        assert finding_evaluation.detector_summary_json["page_noindex"]["detected"] == 2
         assert finding_evaluation.detector_summary_json["page_noindex"]["unknown"] == 0
+        assert finding_evaluation.detector_summary_json["sitemap_page_http_error"]["detected"] == 0
+        assert finding_evaluation.detector_summary_json["sitemap_page_noindex"]["detected"] == 0
+        assert finding_evaluation.detector_summary_json["sitemap_page_redirect"]["detected"] == 0
         finding = db.get(Finding, int(result["finding_id"]))
         assert finding is not None
         assert finding.website_property_id == site.id
@@ -293,10 +339,62 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
             ("primary", "resource_snapshot"),
             ("evaluation_horizon", "scan"),
         ]
-        assert (
-            db.scalar(select(func.count(Finding.id)).where(Finding.website_property_id == site.id))
-            == 1
+        sitemap_redirect = db.get(Finding, int(result["sitemap_redirect_finding_id"]))
+        assert sitemap_redirect is not None
+        assert sitemap_redirect.finding_type == "sitemap_page_redirect"
+        assert sitemap_redirect.condition_state == "resolved"
+        first_refresh = db.get(SourceRefresh, int(result["first_source_refresh_id"]))
+        second_refresh = db.get(SourceRefresh, int(result["second_source_refresh_id"]))
+        assert first_refresh is not None and first_refresh.membership_materialized
+        assert second_refresh is not None and second_refresh.membership_materialized
+        source_observations = list(
+            db.scalars(
+                select(SourceEntryObservation)
+                .where(
+                    SourceEntryObservation.source_refresh_id.in_(
+                        [first_refresh.id, second_refresh.id]
+                    )
+                )
+                .order_by(
+                    SourceEntryObservation.source_refresh_id,
+                    SourceEntryObservation.position,
+                )
+            )
         )
+        assert len(source_observations) == 5
+        assert [item.position for item in source_observations] == [0, 1, 2, 3, 0]
+        redirect_assessment = db.get(FindingAssessment, sitemap_redirect.current_assessment_id)
+        assert redirect_assessment is not None
+        assert redirect_assessment.outcome == "clear"
+        detected_redirect_assessment = db.scalar(
+            select(FindingAssessment)
+            .where(
+                FindingAssessment.finding_id == sitemap_redirect.id,
+                FindingAssessment.outcome == "detected",
+            )
+            .order_by(FindingAssessment.id)
+        )
+        assert detected_redirect_assessment is not None
+        redirect_references = list(
+            db.scalars(
+                select(FindingEvidenceReference)
+                .where(
+                    FindingEvidenceReference.finding_assessment_id
+                    == detected_redirect_assessment.id
+                )
+                .order_by(FindingEvidenceReference.position)
+            )
+        )
+        assert [item.evidence_kind for item in redirect_references] == [
+            "resource_snapshot",
+            "source_entry_observation",
+            "scan",
+        ]
+        finding_count = (
+            db.scalar(select(func.count(Finding.id)).where(Finding.website_property_id == site.id))
+            or 0
+        )
+        assert finding_count >= 6
         all_jobs = list(db.scalars(select(BackgroundJob)))
         assert all_jobs
         assert all(job.status == "completed" for job in all_jobs)
@@ -412,11 +510,14 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "/unchanged/",
         "/new/",
         "/inventory-only/",
+        "/sitemap-error",
+        "/sitemap-noindex",
+        "/sitemap-redirect",
         "/sitemap.xml",
     }
     assert crawler_requests
     assert {entry["path"] for entry in crawler_requests} <= allowed_paths
-    assert {entry["version"] for entry in crawler_requests} == {1, 2}
+    assert {entry["version"] for entry in crawler_requests} == {1, 2, 3}
     return {
         **result,
         "active_job_count": active_jobs,
@@ -433,7 +534,7 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         "duplicate_current_source_identity_count": 0,
         "duplicate_site_page_identity_count": 0,
         "foreign_key_violation_count": 0,
-        "finding_count": 1,
+        "finding_count": finding_count,
         "finding_type": finding.finding_type,
         "render_run_count": db.scalar(select(func.count(RenderRun.id))) or 0,
         "rendered_observation_count": db.scalar(select(func.count(RenderedObservation.id))) or 0,

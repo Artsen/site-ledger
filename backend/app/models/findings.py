@@ -35,6 +35,7 @@ class FindingEvaluation(Base):
     active_page_count: Mapped[int] = mapped_column(Integer)
     active_page_universe_sha256: Mapped[str] = mapped_column(String(64))
     active_page_resource_ids_json: Mapped[list[int]] = mapped_column(JSON)
+    evidence_manifest_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
     detected_count: Mapped[int] = mapped_column(Integer, default=0)
     clear_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -160,7 +161,8 @@ class FindingEvidenceReference(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "evidence_kind IN ('resource_snapshot', 'resource_occurrence', 'scan')",
+            "evidence_kind IN ('resource_snapshot', 'resource_occurrence', "
+            "'source_entry_observation', 'scan')",
             name="ck_finding_evidence_kind",
         ),
         UniqueConstraint("finding_assessment_id", "position", name="uq_finding_evidence_position"),

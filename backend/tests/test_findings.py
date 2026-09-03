@@ -20,6 +20,9 @@ from app.models import (
     ResourceSnapshot,
     Scan,
     SitePage,
+    SourceEntryObservation,
+    SourceRefresh,
+    UrlSource,
     WebResource,
     WebsiteProperty,
 )
@@ -84,6 +87,8 @@ def _scan(
     representation_kind="html_page",
     error_type=None,
     error_message=None,
+    final_url=None,
+    redirect_chain=None,
 ):
     scan = Scan(
         website_property_id=site.id,
@@ -111,6 +116,8 @@ def _scan(
         representation_kind=representation_kind,
         error_type=error_type,
         error_message=error_message,
+        final_url=final_url or resource.normalized_url,
+        redirect_chain=redirect_chain,
     )
     db.add(snapshot)
     db.flush()
@@ -123,6 +130,107 @@ def _evaluate(db, site):
     result = execute_evaluation(db, evaluation.id)
     db.commit()
     return evaluation, result
+
+
+def _sitemap_refresh(
+    db,
+    site,
+    resource,
+    moment,
+    *,
+    source=None,
+    status="completed",
+    materialized=True,
+    present=True,
+    duplicates=1,
+):
+    if source is None:
+        source = UrlSource(
+            website_property_id=site.id,
+            source_type="sitemap",
+            name="Sitemap",
+            source_url="https://example.test/sitemap.xml",
+            normalized_source_url="https://example.test/sitemap.xml",
+            is_active=True,
+            discovery_mode="configured",
+            settings_json={},
+        )
+        db.add(source)
+        db.flush()
+    refresh = SourceRefresh(
+        url_source_id=source.id,
+        status=status,
+        started_at=moment - timedelta(minutes=1),
+        finished_at=moment,
+        membership_materialized=materialized,
+        sitemap_document_type="urlset" if materialized else None,
+        child_refresh_ids_json=[],
+    )
+    db.add(refresh)
+    db.flush()
+    if present:
+        for position in range(duplicates):
+            db.add(
+                SourceEntryObservation(
+                    source_refresh_id=refresh.id,
+                    position=position,
+                    resource_id=resource.id,
+                    raw_url=resource.normalized_url,
+                    normalized_url=resource.normalized_url,
+                    normalization_version="url-normalization-v1",
+                    source_metadata_json={"document_type": "urlset"},
+                    validation_state="valid",
+                    scope_decision="crawlable",
+                )
+            )
+    db.flush()
+    return source, refresh
+
+
+def _manifest_leaf(source, refresh):
+    return {
+        "url_source_id": source.id,
+        "refresh_tree": {
+            "url_source_id": source.id,
+            "source_refresh_id": refresh.id,
+            "sitemap_document_type": "urlset",
+            "status": refresh.status,
+            "membership_materialized": True,
+            "children": [],
+        },
+    }
+
+
+def _sitemap_source(db, site, name, path, *, discovery_mode="sitemap_index_discovered"):
+    source = UrlSource(
+        website_property_id=site.id,
+        source_type="sitemap",
+        name=name,
+        source_url=f"https://example.test/{path}",
+        normalized_source_url=f"https://example.test/{path}",
+        is_active=True,
+        discovery_mode=discovery_mode,
+        settings_json={},
+    )
+    db.add(source)
+    db.flush()
+    return source
+
+
+def _sitemap_index_refresh(db, source, moment, children, *, status="completed"):
+    refresh = SourceRefresh(
+        url_source_id=source.id,
+        status=status,
+        started_at=moment - timedelta(minutes=1),
+        finished_at=moment,
+        sitemap_document_type="sitemapindex",
+        membership_materialized=False,
+        child_refresh_ids_json=[child.id for child in children],
+        child_source_count=len(children),
+    )
+    db.add(refresh)
+    db.flush()
+    return refresh
 
 
 def _findings_client(db_session) -> TestClient:
@@ -301,7 +409,7 @@ def test_multi_detector_counts_identity_and_sparse_persistence(db_session) -> No
         "page_noindex",
     ]
     assert len({item.fingerprint_sha256 for item in findings}) == 3
-    assert (result.detected, result.clear, result.unknown) == (3, 8, 0)
+    assert (result.detected, result.clear, result.unknown) == (3, 11, 0)
     assert evaluation.active_page_count == 1
     assert evaluation.assessment_count == 3
     assert evaluation.detector_summary_json["page_http_error"] == {
@@ -311,7 +419,7 @@ def test_multi_detector_counts_identity_and_sparse_persistence(db_session) -> No
         "unknown": 0,
         "reason_counts": {},
     }
-    assert len(evaluation.detector_summary_json) == 11
+    assert len(evaluation.detector_summary_json) == 14
     assert db_session.query(FindingAssessment).count() == 3
 
 
@@ -471,18 +579,23 @@ def test_v4_reevaluates_same_retained_scan_and_preserves_v3_finding_continuity(
     http_finding.current_assessment_id = historical_assessment.id
     db_session.commit()
 
-    current_v4, created = create_evaluation(db_session, site.id)
+    current_v5, created = create_evaluation(db_session, site.id)
     assert created is True
-    assert current_v4.source_scan_id == historical_v3.source_scan_id == scan.id
-    assert current_v4.active_page_universe_sha256 == historical_v3.active_page_universe_sha256
-    assert current_v4.evaluator_version == "finding-evaluator-v2"
-    assert current_v4.detector_bundle_identity == "finding-detectors-v4"
+    assert current_v5.source_scan_id == historical_v3.source_scan_id == scan.id
+    assert current_v5.active_page_universe_sha256 == historical_v3.active_page_universe_sha256
+    assert current_v5.evaluator_version == "finding-evaluator-v3"
+    assert current_v5.detector_bundle_identity == "finding-detectors-v5"
     expected_fingerprint_payload = json.dumps(
         {
             "active_page_universe_sha256": universe_hash,
-            "detector_bundle_identity": "finding-detectors-v4",
+            "detector_bundle_identity": "finding-detectors-v5",
             "detector_bundle_manifest_sha256": CURRENT_FINDING_DETECTOR_MANIFEST_SHA256,
-            "evaluator_version": "finding-evaluator-v2",
+            "evaluator_version": "finding-evaluator-v3",
+            "evidence_manifest": {
+                "schema": "finding-evidence-manifest-v1",
+                "static": {"scan_id": scan.id},
+                "sitemap_roots": [],
+            },
             "site_id": site.id,
             "source_scan_id": scan.id,
         },
@@ -491,10 +604,10 @@ def test_v4_reevaluates_same_retained_scan_and_preserves_v3_finding_continuity(
         ensure_ascii=True,
     ).encode()
     assert (
-        current_v4.input_fingerprint_sha256
+        current_v5.input_fingerprint_sha256
         == hashlib.sha256(expected_fingerprint_payload).hexdigest()
     )
-    execute_evaluation(db_session, current_v4.id)
+    execute_evaluation(db_session, current_v5.id)
     db_session.commit()
 
     http_rows = list(
@@ -514,13 +627,13 @@ def test_v4_reevaluates_same_retained_scan_and_preserves_v3_finding_continuity(
     assert missing_title is not None
     assert missing_title.id != http_finding.id
 
-    repeated_v4, repeated_created = create_evaluation(db_session, site.id)
+    repeated_v5, repeated_created = create_evaluation(db_session, site.id)
     assert repeated_created is False
-    assert repeated_v4.id == current_v4.id
+    assert repeated_v5.id == current_v5.id
     history = list_evaluations(db_session, site.id, 10, 0)
     assert history is not None
     assert [item.detector_bundle_identity for item in history.items] == [
-        "finding-detectors-v4",
+        "finding-detectors-v5",
         "finding-detectors-v3",
     ]
 
@@ -557,7 +670,550 @@ def test_v4_chronology_ignores_v3_but_blocks_older_pending_v4(db_session) -> Non
     db_session.rollback()
     assert historical_v3.status == "completed"
     assert historical_v3.detector_bundle_identity == "finding-detectors-v3"
-    assert FINDING_DETECTOR_BUNDLE_IDENTITY == "finding-detectors-v4"
+    assert FINDING_DETECTOR_BUNDLE_IDENTITY == "finding-detectors-v5"
+
+
+def test_v5_freezes_manifest_and_reevaluates_same_scan_for_new_source_refresh(
+    db_session,
+) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, _snapshot = _scan(db_session, site, resource, datetime(2026, 9, 3, 1, tzinfo=UTC), 404)
+    source, refresh_a = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 3, 2, tzinfo=UTC)
+    )
+    evaluation_a, created = create_evaluation(db_session, site.id)
+    assert created
+    assert evaluation_a.evidence_manifest_json == {
+        "schema": "finding-evidence-manifest-v1",
+        "static": {"scan_id": scan.id},
+        "sitemap_roots": [_manifest_leaf(source, refresh_a)],
+    }
+    execute_evaluation(db_session, evaluation_a.id)
+    db_session.commit()
+    sitemap_finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert sitemap_finding is not None
+    assessment = db_session.get(FindingAssessment, sitemap_finding.current_assessment_id)
+    assert assessment is not None
+    references = list(
+        db_session.scalars(
+            select(FindingEvidenceReference)
+            .where(FindingEvidenceReference.finding_assessment_id == assessment.id)
+            .order_by(FindingEvidenceReference.position)
+        )
+    )
+    assert [item.evidence_kind for item in references] == [
+        "resource_snapshot",
+        "source_entry_observation",
+        "scan",
+    ]
+
+    _source, refresh_b = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 3, 3, tzinfo=UTC),
+        source=source,
+        present=False,
+    )
+    evaluation_b, created = create_evaluation(db_session, site.id)
+    assert created and evaluation_b.source_scan_id == scan.id
+    assert evaluation_b.id != evaluation_a.id
+    assert evaluation_b.input_fingerprint_sha256 != evaluation_a.input_fingerprint_sha256
+    assert evaluation_b.evidence_manifest_json["sitemap_roots"] == [
+        _manifest_leaf(source, refresh_b)
+    ]
+    execute_evaluation(db_session, evaluation_b.id)
+    db_session.commit()
+    resolved = db_session.get(Finding, sitemap_finding.id)
+    assert resolved.condition_state == "resolved"
+    assert resolved.resolved_at == refresh_b.finished_at
+    resolved_assessment = db_session.get(FindingAssessment, resolved.current_assessment_id)
+    assert resolved_assessment is not None
+    assert resolved_assessment.evidence_observed_at == refresh_b.finished_at
+
+
+def test_v5_new_scan_reuses_same_source_refresh_and_changes_fingerprint(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    source, refresh = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 3, 1, tzinfo=UTC)
+    )
+    scan_a, _ = _scan(db_session, site, resource, datetime(2026, 9, 3, 2, tzinfo=UTC), 404)
+    evaluation_a, _created = create_evaluation(db_session, site.id)
+    execute_evaluation(db_session, evaluation_a.id)
+    db_session.commit()
+    scan_b, _ = _scan(db_session, site, resource, datetime(2026, 9, 3, 3, tzinfo=UTC), 200)
+    evaluation_b, created = create_evaluation(db_session, site.id)
+    assert created and evaluation_b.source_scan_id == scan_b.id
+    assert evaluation_b.source_scan_id != scan_a.id
+    assert evaluation_b.evidence_manifest_json["sitemap_roots"] == [_manifest_leaf(source, refresh)]
+    assert evaluation_b.input_fingerprint_sha256 != evaluation_a.input_fingerprint_sha256
+
+
+def test_v5_older_queued_manifest_cannot_overwrite_newer_completed_manifest(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, _ = _scan(db_session, site, resource, datetime(2026, 9, 3, 1, tzinfo=UTC), 404)
+    source, _refresh_a = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 3, 2, tzinfo=UTC)
+    )
+    older, _created = create_evaluation(db_session, site.id)
+    _source, refresh_b = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 3, 3, tzinfo=UTC), source=source
+    )
+    newer, created = create_evaluation(db_session, site.id)
+    assert created and newer.source_scan_id == older.source_scan_id == scan.id
+    assert (
+        newer.evidence_manifest_json["sitemap_roots"][0]["refresh_tree"]["source_refresh_id"]
+        == refresh_b.id
+    )
+    execute_evaluation(db_session, newer.id)
+    db_session.commit()
+    with pytest.raises(FindingEvaluationChronologyError, match="newer frozen evidence manifest"):
+        execute_evaluation(db_session, older.id)
+    db_session.rollback()
+
+
+def test_v5_source_add_remove_and_failed_latest_refresh_are_manifest_aware(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 9, 3, 1, tzinfo=UTC), 404)
+    source_a, refresh_a = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 3, 2, tzinfo=UTC)
+    )
+    first, _ = create_evaluation(db_session, site.id)
+    source_b = UrlSource(
+        website_property_id=site.id,
+        source_type="sitemap",
+        name="Unrefreshed",
+        source_url="https://example.test/second.xml",
+        normalized_source_url="https://example.test/second.xml",
+        is_active=True,
+        discovery_mode="configured",
+        settings_json={},
+    )
+    db_session.add(source_b)
+    db_session.flush()
+    added, created = create_evaluation(db_session, site.id)
+    assert created
+    assert added.evidence_manifest_json["sitemap_roots"] == [
+        _manifest_leaf(source_a, refresh_a),
+        {"url_source_id": source_b.id, "refresh_tree": None},
+    ]
+    execute_evaluation(db_session, added.id)
+    db_session.commit()
+    assert added.detector_summary_json["sitemap_page_http_error"]["detected"] == 1
+
+    _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 3, 3, tzinfo=UTC),
+        source=source_a,
+        status="failed",
+        materialized=False,
+        present=False,
+    )
+    failed, created = create_evaluation(db_session, site.id)
+    assert created
+    assert failed.evidence_manifest_json["sitemap_roots"][0]["refresh_tree"] is None
+    execute_evaluation(db_session, failed.id)
+    db_session.commit()
+    assert failed.detector_summary_json["sitemap_page_http_error"]["unknown"] == 1
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert finding is not None and finding.condition_state == "unknown"
+
+    source_b.is_active = False
+    db_session.commit()
+    removed, created = create_evaluation(db_session, site.id)
+    assert created
+    assert [item["url_source_id"] for item in removed.evidence_manifest_json["sitemap_roots"]] == [
+        source_a.id
+    ]
+    assert first.input_fingerprint_sha256 != removed.input_fingerprint_sha256
+
+
+def test_recursive_root_index_does_not_poison_known_absence(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 9, 4, 1, tzinfo=UTC), 404)
+    root = _sitemap_source(db_session, site, "Root", "index.xml", discovery_mode="configured")
+    source_a = _sitemap_source(db_session, site, "A", "a.xml")
+    source_b = _sitemap_source(db_session, site, "B", "b.xml")
+    _unused, leaf_a = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 4, 2, tzinfo=UTC),
+        source=source_a,
+        present=False,
+    )
+    _unused, leaf_b = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 4, 2, tzinfo=UTC),
+        source=source_b,
+        present=False,
+    )
+    _sitemap_index_refresh(
+        db_session, root, datetime(2026, 9, 4, 2, 1, tzinfo=UTC), [leaf_a, leaf_b]
+    )
+
+    evaluation = _evaluate(db_session, site)[0]
+
+    assert evaluation.detector_summary_json["sitemap_page_http_error"]["clear"] == 1
+    assert evaluation.detector_summary_json["sitemap_page_http_error"]["reason_counts"] == {
+        "sitemap_membership_not_present": 1
+    }
+
+
+def test_recursive_sitemap_detects_then_resolves_on_same_scan(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, _ = _scan(db_session, site, resource, datetime(2026, 9, 4, 1, tzinfo=UTC), 404)
+    root = _sitemap_source(db_session, site, "Root", "index.xml", discovery_mode="configured")
+    child = _sitemap_source(db_session, site, "Child", "child.xml")
+    _unused, child_r1 = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 4, 2, tzinfo=UTC), source=child
+    )
+    _sitemap_index_refresh(db_session, root, datetime(2026, 9, 4, 2, 1, tzinfo=UTC), [child_r1])
+    first = _evaluate(db_session, site)[0]
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert finding is not None and finding.condition_state == "detected"
+
+    _unused, child_r2 = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 4, 3, tzinfo=UTC),
+        source=child,
+        present=False,
+    )
+    root_r2 = _sitemap_index_refresh(
+        db_session, root, datetime(2026, 9, 4, 3, 1, tzinfo=UTC), [child_r2]
+    )
+    second = _evaluate(db_session, site)[0]
+
+    assert first.source_scan_id == second.source_scan_id == scan.id
+    assert first.input_fingerprint_sha256 != second.input_fingerprint_sha256
+    assert finding.condition_state == "resolved"
+    assert finding.resolved_at == root_r2.finished_at
+
+
+def test_removed_discovered_child_cannot_contribute_stale_membership(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 9, 4, 1, tzinfo=UTC), 404)
+    root = _sitemap_source(db_session, site, "Root", "index.xml", discovery_mode="configured")
+    source_a = _sitemap_source(db_session, site, "A", "a.xml")
+    source_b = _sitemap_source(db_session, site, "B", "b.xml")
+    _unused, a_r1 = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 4, 2, tzinfo=UTC),
+        source=source_a,
+        present=False,
+    )
+    _unused, b_r1 = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 4, 2, tzinfo=UTC), source=source_b
+    )
+    _sitemap_index_refresh(db_session, root, datetime(2026, 9, 4, 2, 1, tzinfo=UTC), [a_r1, b_r1])
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert finding is not None and finding.condition_state == "detected"
+
+    _unused, a_r2 = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 4, 3, tzinfo=UTC),
+        source=source_a,
+        present=False,
+    )
+    _sitemap_index_refresh(db_session, root, datetime(2026, 9, 4, 3, 1, tzinfo=UTC), [a_r2])
+    evaluation = _evaluate(db_session, site)[0]
+
+    assert source_b.is_active is True
+    assert finding.condition_state == "resolved"
+    tree = evaluation.evidence_manifest_json["sitemap_roots"][0]["refresh_tree"]
+    assert [item["url_source_id"] for item in tree["children"]] == [source_a.id]
+
+
+def test_failed_child_keeps_absence_unknown_and_does_not_resolve(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 9, 4, 1, tzinfo=UTC), 404)
+    root = _sitemap_source(db_session, site, "Root", "index.xml", discovery_mode="configured")
+    source_a = _sitemap_source(db_session, site, "A", "a.xml")
+    source_b = _sitemap_source(db_session, site, "B", "b.xml")
+    _unused, b_r1 = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 4, 2, tzinfo=UTC), source=source_b
+    )
+    _sitemap_index_refresh(db_session, root, datetime(2026, 9, 4, 2, 1, tzinfo=UTC), [b_r1])
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert finding is not None and finding.condition_state == "detected"
+
+    _unused, a_r2 = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 4, 3, tzinfo=UTC),
+        source=source_a,
+        present=False,
+    )
+    _unused, b_failed = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 4, 3, tzinfo=UTC),
+        source=source_b,
+        status="failed",
+        materialized=False,
+        present=False,
+    )
+    _sitemap_index_refresh(
+        db_session,
+        root,
+        datetime(2026, 9, 4, 3, 1, tzinfo=UTC),
+        [a_r2, b_failed],
+        status="completed_with_errors",
+    )
+    evaluation = _evaluate(db_session, site)[0]
+
+    assert evaluation.detector_summary_json["sitemap_page_http_error"]["unknown"] == 1
+    assert finding.condition_state == "unknown"
+    assert finding.resolved_at is None
+
+
+def test_recursive_presence_dominates_failed_sibling(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 9, 4, 1, tzinfo=UTC), 404)
+    root = _sitemap_source(db_session, site, "Root", "index.xml", discovery_mode="configured")
+    source_a = _sitemap_source(db_session, site, "A", "a.xml")
+    source_b = _sitemap_source(db_session, site, "B", "b.xml")
+    _unused, a_refresh = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 4, 2, tzinfo=UTC), source=source_a
+    )
+    _unused, b_failed = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 4, 2, tzinfo=UTC),
+        source=source_b,
+        status="failed",
+        materialized=False,
+        present=False,
+    )
+    _sitemap_index_refresh(
+        db_session,
+        root,
+        datetime(2026, 9, 4, 2, 1, tzinfo=UTC),
+        [a_refresh, b_failed],
+        status="completed_with_errors",
+    )
+
+    evaluation = _evaluate(db_session, site)[0]
+
+    assert evaluation.detector_summary_json["sitemap_page_http_error"]["detected"] == 1
+
+
+def test_created_evaluation_keeps_exact_recursive_refresh_tree(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 9, 4, 1, tzinfo=UTC), 404)
+    root = _sitemap_source(db_session, site, "Root", "index.xml", discovery_mode="configured")
+    child = _sitemap_source(db_session, site, "Child", "child.xml")
+    _unused, child_r1 = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 4, 2, tzinfo=UTC), source=child
+    )
+    root_r1 = _sitemap_index_refresh(
+        db_session, root, datetime(2026, 9, 4, 2, 1, tzinfo=UTC), [child_r1]
+    )
+    frozen, created = create_evaluation(db_session, site.id)
+    assert created
+    _unused, child_r2 = _sitemap_refresh(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 4, 3, tzinfo=UTC),
+        source=child,
+        present=False,
+    )
+    root_r2 = _sitemap_index_refresh(
+        db_session, root, datetime(2026, 9, 4, 3, 1, tzinfo=UTC), [child_r2]
+    )
+    newer, created = create_evaluation(db_session, site.id)
+    assert created and frozen.input_fingerprint_sha256 != newer.input_fingerprint_sha256
+
+    execute_evaluation(db_session, frozen.id)
+    db_session.commit()
+
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert finding is not None and finding.condition_state == "detected"
+    old_tree = frozen.evidence_manifest_json["sitemap_roots"][0]["refresh_tree"]
+    new_tree = newer.evidence_manifest_json["sitemap_roots"][0]["refresh_tree"]
+    assert old_tree["source_refresh_id"] == root_r1.id
+    assert old_tree["children"][0]["source_refresh_id"] == child_r1.id
+    assert new_tree["source_refresh_id"] == root_r2.id
+    assert new_tree["children"][0]["source_refresh_id"] == child_r2.id
+
+
+def test_nested_sitemap_index_retains_recursive_provenance(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _scan(db_session, site, resource, datetime(2026, 9, 4, 1, tzinfo=UTC), 404)
+    root = _sitemap_source(db_session, site, "Root", "root.xml", discovery_mode="configured")
+    nested = _sitemap_source(db_session, site, "Nested", "nested.xml")
+    leaf = _sitemap_source(db_session, site, "Leaf", "leaf.xml")
+    _unused, leaf_refresh = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 4, 2, tzinfo=UTC), source=leaf
+    )
+    nested_refresh = _sitemap_index_refresh(
+        db_session, nested, datetime(2026, 9, 4, 2, 1, tzinfo=UTC), [leaf_refresh]
+    )
+    root_refresh = _sitemap_index_refresh(
+        db_session, root, datetime(2026, 9, 4, 2, 2, tzinfo=UTC), [nested_refresh]
+    )
+
+    evaluation = _evaluate(db_session, site)[0]
+
+    assert evaluation.detector_summary_json["sitemap_page_http_error"]["detected"] == 1
+    tree = evaluation.evidence_manifest_json["sitemap_roots"][0]["refresh_tree"]
+    assert tree["source_refresh_id"] == root_refresh.id
+    assert tree["children"][0]["source_refresh_id"] == nested_refresh.id
+    assert tree["children"][0]["children"][0]["source_refresh_id"] == leaf_refresh.id
+
+
+def test_sitemap_finding_streams_can_be_deleted_independently(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, _ = _scan(db_session, site, resource, datetime(2026, 9, 3, 1, tzinfo=UTC), 404)
+    source, _refresh = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 3, 2, tzinfo=UTC)
+    )
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert finding is not None
+
+    db_session.delete(source)
+    db_session.commit()
+    source_deleted = get_finding(db_session, site.id, finding.id)
+    assert source_deleted is not None
+    source_refs = [
+        item
+        for item in source_deleted.assessments[0].evidence_references
+        if item.evidence_kind == "source_entry_observation"
+    ]
+    assert source_refs and all(not item.retained for item in source_refs)
+    assert any(
+        item.evidence_kind == "resource_snapshot" and item.retained
+        for item in source_deleted.assessments[0].evidence_references
+    )
+
+    db_session.execute(delete(ResourceSnapshot).where(ResourceSnapshot.scan_id == scan.id))
+    db_session.execute(delete(Scan).where(Scan.id == scan.id))
+    db_session.commit()
+    both_deleted = get_finding(db_session, site.id, finding.id)
+    assert both_deleted is not None
+    assert all(not item.retained for item in both_deleted.assessments[0].evidence_references)
+
+
+def test_sitemap_evidence_remains_when_scan_is_deleted_first(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    scan, _ = _scan(db_session, site, resource, datetime(2026, 9, 3, 1, tzinfo=UTC), 404)
+    _source, _refresh = _sitemap_refresh(
+        db_session, site, resource, datetime(2026, 9, 3, 2, tzinfo=UTC)
+    )
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert finding is not None
+    db_session.execute(delete(ResourceSnapshot).where(ResourceSnapshot.scan_id == scan.id))
+    db_session.execute(delete(Scan).where(Scan.id == scan.id))
+    db_session.commit()
+
+    detail = get_finding(db_session, site.id, finding.id)
+    assert detail is not None
+    references = detail.assessments[0].evidence_references
+    assert any(
+        item.evidence_kind == "source_entry_observation" and item.retained for item in references
+    )
+    assert all(
+        not item.retained
+        for item in references
+        if item.evidence_kind in {"resource_snapshot", "scan"}
+    )
+
+
+def test_sitemap_http_error_scan_lifecycle_detects_resolves_and_reopens(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _sitemap_refresh(db_session, site, resource, datetime(2026, 9, 3, 1, tzinfo=UTC))
+    _scan(db_session, site, resource, datetime(2026, 9, 3, 2, tzinfo=UTC), 404)
+    _evaluate(db_session, site)
+    finding = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_http_error")
+    )
+    assert finding is not None and finding.current_severity == "medium"
+
+    _scan(db_session, site, resource, datetime(2026, 9, 3, 3, tzinfo=UTC), 200)
+    _evaluate(db_session, site)
+    assert finding.condition_state == "resolved"
+
+    _scan(db_session, site, resource, datetime(2026, 9, 3, 4, tzinfo=UTC), 500)
+    _evaluate(db_session, site)
+    assert finding.condition_state == "detected"
+    assert finding.current_severity == "high"
+    assert finding.reopened_at is not None
+    assert (
+        db_session.query(FindingAssessment)
+        .filter(FindingAssessment.finding_id == finding.id)
+        .count()
+        == 3
+    )
+
+
+def test_sitemap_noindex_and_redirect_complete_lifecycles(db_session) -> None:
+    site, resource, _page = _site_page(db_session)
+    _sitemap_refresh(db_session, site, resource, datetime(2026, 9, 3, 1, tzinfo=UTC))
+    _scan(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 3, 2, tzinfo=UTC),
+        200,
+        meta_robots="noindex",
+        final_url="https://example.test/new",
+        redirect_chain=[{"status": 301, "url": resource.normalized_url}],
+    )
+    _evaluate(db_session, site)
+    noindex = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_noindex")
+    )
+    redirect = db_session.scalar(
+        select(Finding).where(Finding.finding_type == "sitemap_page_redirect")
+    )
+    assert noindex is not None and noindex.condition_state == "detected"
+    assert redirect is not None and redirect.condition_state == "detected"
+
+    _scan(
+        db_session,
+        site,
+        resource,
+        datetime(2026, 9, 3, 3, tzinfo=UTC),
+        200,
+        meta_robots="index",
+    )
+    _evaluate(db_session, site)
+    assert noindex.condition_state == "resolved"
+    assert redirect.condition_state == "resolved"
 
 
 def test_suppression_and_evidence_deletion_do_not_resolve_or_delete_history(db_session) -> None:
@@ -824,7 +1480,7 @@ def test_topology_findings_run_through_api_worker_database_and_detail(db_session
     assert all(not item.retained for item in surviving.assessments[0].evidence_references)
 
 
-def test_api_runs_v4_against_same_scan_after_completed_v3_without_recrawl(db_session) -> None:
+def test_api_runs_current_v5_bundle_against_same_scan_without_recrawl(db_session) -> None:
     site, resource, _page = _site_page(db_session)
     scan, _snapshot = _scan(
         db_session,
@@ -856,8 +1512,8 @@ def test_api_runs_v4_against_same_scan_after_completed_v3_without_recrawl(db_ses
         assert payload["id"] != historical_v3.id
         assert payload["source_scan_id"] == historical_v3.source_scan_id == scan.id
         assert payload["active_page_universe_sha256"] == (historical_v3.active_page_universe_sha256)
-        assert payload["evaluator_version"] == "finding-evaluator-v2"
-        assert payload["detector_bundle_identity"] == "finding-detectors-v4"
+        assert payload["evaluator_version"] == "finding-evaluator-v3"
+        assert payload["detector_bundle_identity"] == "finding-detectors-v5"
 
         claimed = background_jobs.claim_next_job(
             db_session, worker_id="v4-same-scan-worker", lease_seconds=30
@@ -1023,8 +1679,8 @@ def test_manual_product_fixture_exposes_distinct_static_pack_rows_through_worker
             evaluation_payload["detected_count"],
             evaluation_payload["clear_count"],
             evaluation_payload["unknown_count"],
-        ) == (7, 58, 12)
-        assert len(evaluation_payload["detector_summary_json"]) == 11
+        ) == (7, 79, 12)
+        assert len(evaluation_payload["detector_summary_json"]) == 14
 
 
 def test_static_fetch_failure_clears_after_successful_fetch(db_session) -> None:

@@ -236,19 +236,24 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     settings_json: {}
   });
   const firstRefresh = await postJson(request, `${apiUrl}/api/sites/${site.id}/sources/${source.id}/refresh`);
-  await waitForSourceRefresh(request, site.id, source.id, firstRefresh.id);
-  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(1);
+  const completedFirstRefresh = await waitForSourceRefresh(request, site.id, source.id, firstRefresh.id);
+  expect(completedFirstRefresh.membership_materialized).toBe(true);
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(4);
   const inventoryBeforeDelete = await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`);
-  const inventoryEntryId = inventoryBeforeDelete.items[0].sources[0].entry_id as number;
+  const inventoryOnly = inventoryBeforeDelete.items.find(
+    (item) => new URL(String(item.normalized_url)).pathname === "/inventory-only/",
+  );
+  if (!inventoryOnly) throw new Error("Golden Path inventory-only Source entry was not found");
+  const inventoryEntryId = inventoryOnly.sources[0].entry_id as number;
   const suppression = await postJson(request, `${apiUrl}/api/sites/${site.id}/inventory/suppressions`, {
     entry_id: inventoryEntryId
   });
-  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(0);
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(3);
   const removedInventory = await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=suppressed&limit=50`);
   expect(removedInventory.total).toBe(1);
   expect(removedInventory.items[0].source_count).toBe(1);
   await deleteJson(request, `${apiUrl}/api/sites/${site.id}/inventory/suppressions/${suppression.id}`);
-  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(1);
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`)).total).toBe(4);
 
   await postJson(request, `${apiUrl}/api/sites/${site.id}/pages/bulk-delete`, {
     resource_ids: [pricingPage.resource_id]
@@ -267,12 +272,63 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(recreatedPricing.page.workflow_status).toBe("unreviewed");
   expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${pricingPage.resource_id}/observations?limit=100`)).total).toBe(3);
 
+  const firstQueuedFindingEvaluation = await postJson(request, `${apiUrl}/api/sites/${site.id}/findings/evaluations`);
+  const firstFindingEvaluation = await waitForFindingEvaluation(
+    request,
+    site.id,
+    firstQueuedFindingEvaluation.id,
+  );
+  expect(firstFindingEvaluation.source_scan_id).toBe(scan3Id);
+  expect(firstFindingEvaluation.evaluator_version).toBe("finding-evaluator-v3");
+  expect(firstFindingEvaluation.detector_bundle_identity).toBe("finding-detectors-v5");
+  const firstManifest = firstFindingEvaluation.evidence_manifest_json as Json;
+  expect(firstManifest.static).toEqual({ scan_id: scan3Id });
+  expect(firstManifest.sitemap_roots).toEqual([
+    {
+      url_source_id: source.id,
+      refresh_tree: {
+        url_source_id: source.id,
+        source_refresh_id: firstRefresh.id,
+        sitemap_document_type: "urlset",
+        status: "completed",
+        membership_materialized: true,
+        children: [],
+      },
+    },
+  ]);
+  const firstFindings = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings?limit=100`);
+  const firstFindingTypes = new Set(firstFindings.items.map((item) => item.finding_type));
+  for (const findingType of [
+    "sitemap_page_http_error",
+    "sitemap_page_noindex",
+    "sitemap_page_redirect",
+  ]) {
+    expect(firstFindingTypes.has(findingType)).toBe(true);
+  }
+  const sitemapRedirectFinding = firstFindings.items.find(
+    (item) => item.finding_type === "sitemap_page_redirect",
+  );
+  if (!sitemapRedirectFinding) throw new Error("Sitemap redirect Finding was not created");
+  const sitemapRedirectDetail = await getJson(
+    request,
+    `${apiUrl}/api/sites/${site.id}/findings/${sitemapRedirectFinding.id}`,
+  );
+  const sitemapRedirectAssessment = (sitemapRedirectDetail.assessments as Json[])[0];
+  expect((sitemapRedirectAssessment.evidence_references as Json[]).map((item) => item.evidence_kind)).toEqual([
+    "resource_snapshot",
+    "source_entry_observation",
+    "scan",
+  ]);
+
   await postJson(request, `${apiUrl}/api/sites/${site.id}/inventory/bulk-delete`, {
     entry_ids: [inventoryEntryId]
   });
-  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=all&limit=50`)).total).toBe(0);
+  expect((await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=all&limit=50`)).total).toBe(3);
+  const membershipSwitch = await request.post(`${fixtureUrl}/__fixture__/version/3`);
+  expect(membershipSwitch.ok()).toBe(true);
   const secondRefresh = await postJson(request, `${apiUrl}/api/sites/${site.id}/sources/${source.id}/refresh`);
-  await waitForSourceRefresh(request, site.id, source.id, secondRefresh.id);
+  const completedSecondRefresh = await waitForSourceRefresh(request, site.id, source.id, secondRefresh.id);
+  expect(completedSecondRefresh.membership_materialized).toBe(true);
   const inventoryAfterRefresh = await getJson(request, `${apiUrl}/api/sites/${site.id}/inventory?visibility=active&limit=50`);
   expect(inventoryAfterRefresh.total).toBe(1);
   expect(inventoryAfterRefresh.items[0].sources[0].entry_id).toBe(inventoryEntryId);
@@ -280,20 +336,48 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   const queuedFindingEvaluation = await postJson(request, `${apiUrl}/api/sites/${site.id}/findings/evaluations`);
   const findingEvaluation = await waitForFindingEvaluation(request, site.id, queuedFindingEvaluation.id);
   expect(findingEvaluation.source_scan_id).toBe(scan3Id);
-  expect(findingEvaluation.evaluator_version).toBe("finding-evaluator-v2");
-  expect(findingEvaluation.detector_bundle_identity).toBe("finding-detectors-v4");
-  const findings = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings?limit=50`);
-  expect(findings.total).toBe(1);
-  expect(findings.items[0].finding_type).toBe("page_noindex");
-  expect(findings.items[0].finding_label).toBe("Page is noindex");
-  const findingDetail = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings/${findings.items[0].id}`);
+  expect(findingEvaluation.evaluator_version).toBe("finding-evaluator-v3");
+  expect(findingEvaluation.detector_bundle_identity).toBe("finding-detectors-v5");
+  expect(findingEvaluation.id).not.toBe(firstFindingEvaluation.id);
+  const secondManifest = findingEvaluation.evidence_manifest_json as Json;
+  expect(secondManifest.static).toEqual({ scan_id: scan3Id });
+  expect(secondManifest.sitemap_roots).toEqual([
+    {
+      url_source_id: source.id,
+      refresh_tree: {
+        url_source_id: source.id,
+        source_refresh_id: secondRefresh.id,
+        sitemap_document_type: "urlset",
+        status: "completed",
+        membership_materialized: true,
+        children: [],
+      },
+    },
+  ]);
+  const findings = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings?limit=100`);
+  for (const findingType of [
+    "sitemap_page_http_error",
+    "sitemap_page_noindex",
+    "sitemap_page_redirect",
+  ]) {
+    expect(findings.items.some(
+      (item) => item.finding_type === findingType && item.condition_state === "resolved",
+    )).toBe(true);
+  }
+  const pageNoindexFinding = findings.items.find(
+    (item) => item.finding_type === "page_noindex"
+      && new URL(String(item.page_url)).pathname === "/unchanged/",
+  );
+  if (!pageNoindexFinding) throw new Error("Golden Path Page noindex Finding was not found");
+  expect(pageNoindexFinding.finding_label).toBe("Page is noindex");
+  const findingDetail = await getJson(request, `${apiUrl}/api/sites/${site.id}/findings/${pageNoindexFinding.id}`);
   const findingAssessments = findingDetail.assessments as Json[];
   expect((findingAssessments[0].details_json as Json).detector_identity).toBe("page-noindex-v1");
   expect((findingAssessments[0].evidence_references as Json[]).map((item) => item.role)).toEqual(["primary", "evaluation_horizon"]);
   const intelligenceWithFindings = await getJson(request, `${apiUrl}/api/sites/${site.id}/intelligence`);
   const findingIntelligence = intelligenceWithFindings.findings as Json;
   expect(findingIntelligence.latest_evaluation_id).toBe(findingEvaluation.id);
-  expect(findingIntelligence.detected).toBe(1);
+  expect(findingIntelligence.detected).toBe(3);
   expect((intelligenceWithFindings.activity as Record<string, number>).active_job_count).toBe(0);
 
   await page.goto(`/sites/${site.id}/comparisons?comparison_id=${comparisonId}`);
@@ -325,7 +409,11 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     lifecycle_source_id: source.id,
     comparison_id: comparisonId,
     finding_evaluation_id: findingEvaluation.id,
-    finding_id: findings.items[0].id,
+    first_finding_evaluation_id: firstFindingEvaluation.id,
+    first_source_refresh_id: firstRefresh.id,
+    second_source_refresh_id: secondRefresh.id,
+    sitemap_redirect_finding_id: sitemapRedirectFinding.id,
+    finding_id: pageNoindexFinding.id,
     deleted_scan_render_run_id: scan1RenderRun.id,
     standalone_render_run_id: completedStandaloneRenderRun.id,
     rerender_render_run_id: completedRerenderRun.id,
