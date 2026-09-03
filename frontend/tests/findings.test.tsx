@@ -8,9 +8,11 @@ import type { Site } from "../src/types/scans";
 
 const api = vi.hoisted(() => ({
   createFindingEvaluation: vi.fn(),
+  deleteFinding: vi.fn(),
   getFinding: vi.fn(),
   listFindingEvaluations: vi.fn(),
   listFindings: vi.fn(),
+  resetSiteFindings: vi.fn(),
   setFindingAcknowledged: vi.fn(),
 }));
 vi.mock("../src/api/findings", () => api);
@@ -47,6 +49,12 @@ describe("Findings workspace", () => {
     }], total: 1, limit: 50, offset: 0 });
     api.listFindingEvaluations.mockResolvedValue({ items: [evaluation], total: 1, limit: 25, offset: 0 });
     api.createFindingEvaluation.mockResolvedValue(evaluation);
+    api.deleteFinding.mockResolvedValue(undefined);
+    api.resetSiteFindings.mockResolvedValue({
+      site_id: 3, deleted_finding_count: 1, deleted_assessment_count: 1,
+      deleted_evidence_reference_count: 2, deleted_evaluation_count: 1,
+      deleted_job_count: 1, deleted_job_event_count: 2,
+    });
   });
 
   it("shows current lifecycle state and links to durable Finding history", async () => {
@@ -272,6 +280,49 @@ describe("Findings workspace", () => {
     expect(screen.getByText(/Sep 3, 1:00 AM UTC/)).toBeInTheDocument();
     expect(screen.getAllByText(/Sep 3, 2:00 AM UTC/).length).toBeGreaterThan(0);
   });
+
+  it("requires deliberate confirmation and preserves rebuild access when resetting", async () => {
+    renderWorkspace("/?view=evaluations");
+    expect(await screen.findByRole("button", { name: "Reset Findings..." })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Run evaluation/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reset Findings..." }));
+    expect(screen.getByText(/Collected website evidence is not deleted/)).toBeInTheDocument();
+    const remove = screen.getByRole("button", { name: "Delete permanently" });
+    expect(remove).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Type RESET to confirm"), { target: { value: "RESET" } });
+    expect(remove).toBeEnabled();
+    fireEvent.click(remove);
+    await waitFor(() => expect(api.resetSiteFindings).toHaveBeenCalledWith(3));
+    await waitFor(() => expect(api.listFindings).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: /Run evaluation/ })).toBeInTheDocument();
+  });
+
+  it("shows an active-evaluation reset conflict without clearing the workspace", async () => {
+    api.resetSiteFindings.mockRejectedValue(new Error("Finding deletion is unavailable while a Finding evaluation is queued or running."));
+    renderWorkspace();
+    fireEvent.click(await screen.findByRole("button", { name: "Reset Findings..." }));
+    fireEvent.change(screen.getByLabelText("Type RESET to confirm"), { target: { value: "RESET" } });
+    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+    expect(await screen.findByText("Could not complete Finding deletion")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "https://example.test/missing" })).toBeInTheDocument();
+  });
+
+  it("deletes one Finding only after confirmation and returns to the list", async () => {
+    api.getFinding.mockResolvedValue({
+      ...(await api.listFindings()).items[0],
+      website_property_id: 3,
+      created_at: "2026-08-28T01:00:00Z",
+      updated_at: "2026-08-28T01:00:00Z",
+      assessments: [],
+    });
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Finding..." }));
+    expect(screen.getByText(/completed evaluation that produced this Finding is not reset/)).toBeInTheDocument();
+    expect(screen.getByText(/Collected website evidence is preserved/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+    await waitFor(() => expect(api.deleteFinding).toHaveBeenCalledWith(3, "4"));
+    expect(await screen.findByText("findings-list-destination")).toBeInTheDocument();
+  });
 });
 
 function renderWorkspace(initialEntry = "/") {
@@ -281,5 +332,5 @@ function renderWorkspace(initialEntry = "/") {
 
 function renderDetail() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/sites/3/findings/4"]}><Routes><Route path="/sites/:siteId/findings/:findingId" element={<SiteFindingDetailPage site={site} />} /></Routes></MemoryRouter></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/sites/3/findings/4"]}><Routes><Route path="/sites/:siteId/findings/:findingId" element={<SiteFindingDetailPage site={site} />} /><Route path="/sites/:siteId/findings" element={<p>findings-list-destination</p>} /></Routes></MemoryRouter></QueryClientProvider>);
 }
