@@ -11,12 +11,22 @@ from sqlalchemy.orm import sessionmaker
 from app.api.findings_routes import router as findings_router
 from app.database import get_db
 from app.models import (
+    AccessibilityObservation,
+    AccessibilityRun,
     BackgroundJob,
+    CollectionPlan,
+    ContentBlob,
     Finding,
     FindingAssessment,
     FindingEvaluation,
     FindingEvidenceReference,
+    HtmlStructuredContentArtifact,
+    HtmlStructuredContentNode,
     JobEvent,
+    PerformanceObservation,
+    PerformanceRun,
+    RenderedObservation,
+    RenderRun,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -2341,6 +2351,167 @@ def test_site_reset_rebuilds_same_static_topology_and_recursive_sitemap_evidence
     )
     root_refresh = _sitemap_index_refresh(db_session, root, moment + timedelta(minutes=2), [leaf])
     evaluation, _result = _evaluate(db_session, site)
+    content_blob = ContentBlob(
+        sha256="a" * 64,
+        storage_key="content/pr52-reset-fixture.html.gz",
+        compression_type="gzip",
+        content_type="text/html",
+        encoding="utf-8",
+        raw_byte_size=64,
+        stored_byte_size=32,
+    )
+    render_run = RenderRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=1,
+        attempted_count=1,
+        completed_count=1,
+    )
+    performance_run = PerformanceRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=1,
+        request_count=1,
+        completed_count=1,
+        ready_count=1,
+    )
+    accessibility_run = AccessibilityRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=1,
+        observation_count=1,
+        completed_count=1,
+        ready_count=1,
+        axe_core_version="fixture-v1",
+        detector_bundle_sha256="b" * 64,
+        integration_version="fixture-v1",
+        normalization_version="fixture-v1",
+        ruleset_profile="fixture",
+        ruleset_rule_count=0,
+        ruleset_sha256="c" * 64,
+    )
+    collection_plan = CollectionPlan(
+        website_property_id=site.id,
+        planner_version="collection-planner-v1",
+        evidence_domain="render",
+        target_mode="missing_current",
+        context_identity="fixture",
+        context_json={},
+        active_page_count=1,
+        active_page_universe_sha256="d" * 64,
+        eligible_count=1,
+        covered_count_at_creation=0,
+        in_flight_count_at_creation=0,
+        ineligible_count_at_creation=0,
+        target_count=1,
+        batch_size=1,
+        batch_count=1,
+        target_selection_sha256="e" * 64,
+    )
+    db_session.add_all(
+        [content_blob, render_run, performance_run, accessibility_run, collection_plan]
+    )
+    db_session.flush()
+    structured_artifact = HtmlStructuredContentArtifact(
+        content_blob_id=content_blob.id,
+        extractor_version="structured-content-v2",
+        extractor_config_version="default-v2",
+        extraction_state="ready",
+        document_profile="headed",
+        section_count=1,
+        heading_count=1,
+        heading_counts_json={"h1": 1},
+        document_word_count=2,
+        document_character_count=12,
+        document_text_sha256="f" * 64,
+        outline_sha256="1" * 64,
+        node_count=1,
+        canonical_document_sha256="2" * 64,
+        markdown_renderer_version="structured-markdown-v1",
+        markdown_sha256="3" * 64,
+        markdown_character_count=12,
+    )
+    rendered_observation = RenderedObservation(
+        render_run_id=render_run.id,
+        web_resource_id=resource.id,
+        snapshot_id=source_snapshot.id,
+        capture_state="completed",
+        requested_url=resource.normalized_url,
+        final_url=resource.normalized_url,
+        navigation_http_status=200,
+        browser_engine="chromium",
+        renderer_version="renderer-v2",
+        browser_policy_version="browser-policy-v2",
+        capture_schema_version="capture-schema-v2",
+        viewport_width=1440,
+        viewport_height=900,
+        device_scale_factor=1,
+        locale="en-US",
+        timezone_id="UTC",
+        color_scheme="light",
+        reduced_motion="reduce",
+        configuration_fingerprint="4" * 64,
+    )
+    performance_observation = PerformanceObservation(
+        performance_run_id=performance_run.id,
+        website_property_id=site.id,
+        web_resource_id=resource.id,
+        provider="pagespeed",
+        provider_adapter_version="fixture-v1",
+        normalization_version="fixture-v1",
+        target_kind="url",
+        target_key="5" * 64,
+        requested_target=resource.normalized_url,
+        dimension="mobile",
+        outcome="ready",
+        request_descriptor_json={},
+    )
+    accessibility_observation = AccessibilityObservation(
+        accessibility_run_id=accessibility_run.id,
+        website_property_id=site.id,
+        web_resource_id=resource.id,
+        requested_url=resource.normalized_url,
+        final_url=resource.normalized_url,
+        profile="desktop",
+        outcome="ready",
+        axe_core_version="fixture-v1",
+        detector_bundle_sha256="b" * 64,
+        integration_version="fixture-v1",
+        normalization_version="fixture-v1",
+        ruleset_profile="fixture",
+        ruleset_sha256="c" * 64,
+        profile_json={},
+    )
+    db_session.add_all(
+        [
+            structured_artifact,
+            rendered_observation,
+            performance_observation,
+            accessibility_observation,
+        ]
+    )
+    db_session.flush()
+    structured_node = HtmlStructuredContentNode(
+        artifact_id=structured_artifact.id,
+        position=0,
+        kind="heading",
+        depth=0,
+        source_tag="h1",
+        source_dom_path="html/body/h1",
+        region_key="main",
+        region_dom_path="html/body",
+        text="Fixture page",
+        semantic_sha256="6" * 64,
+        subtree_sha256="7" * 64,
+    )
+    db_session.add(structured_node)
+    db_session.flush()
     job = background_jobs.enqueue_finding_evaluation_job(db_session, evaluation.id, site.id)
     job.status = "completed"
     job.finished_at = datetime.now(UTC)
@@ -2380,8 +2551,19 @@ def test_site_reset_rebuilds_same_static_topology_and_recursive_sitemap_evidence
         "source_snapshot": source_snapshot.id,
         "target_snapshot": target_snapshot.id,
         "occurrence": occurrence.id,
+        "url_source": root.id,
         "root_refresh": root_refresh.id,
         "leaf_refresh": leaf.id,
+        "content_blob": content_blob.id,
+        "render_run": render_run.id,
+        "rendered_observation": rendered_observation.id,
+        "performance_run": performance_run.id,
+        "performance_observation": performance_observation.id,
+        "accessibility_run": accessibility_run.id,
+        "accessibility_observation": accessibility_observation.id,
+        "structured_artifact": structured_artifact.id,
+        "structured_node": structured_node.id,
+        "collection_plan": collection_plan.id,
     }
     source_observation_ids = list(
         db_session.scalars(
@@ -2415,6 +2597,7 @@ def test_site_reset_rebuilds_same_static_topology_and_recursive_sitemap_evidence
     assert db_session.get(ResourceSnapshot, evidence_ids["source_snapshot"]) is not None
     assert db_session.get(ResourceSnapshot, evidence_ids["target_snapshot"]) is not None
     assert db_session.get(ResourceOccurrence, evidence_ids["occurrence"]) is not None
+    assert db_session.get(UrlSource, evidence_ids["url_source"]) is not None
     retained_root = db_session.get(SourceRefresh, evidence_ids["root_refresh"])
     assert retained_root is not None
     assert retained_root.child_refresh_ids_json == [evidence_ids["leaf_refresh"]]
@@ -2428,6 +2611,34 @@ def test_site_reset_rebuilds_same_static_topology_and_recursive_sitemap_evidence
             )
         )
         == source_observation_ids
+    )
+    assert db_session.get(ContentBlob, evidence_ids["content_blob"]).sha256 == "a" * 64
+    assert db_session.get(RenderRun, evidence_ids["render_run"]).status == "completed"
+    assert (
+        db_session.get(RenderedObservation, evidence_ids["rendered_observation"]).capture_state
+        == "completed"
+    )
+    assert db_session.get(PerformanceRun, evidence_ids["performance_run"]).status == "completed"
+    assert (
+        db_session.get(PerformanceObservation, evidence_ids["performance_observation"]).outcome
+        == "ready"
+    )
+    assert db_session.get(AccessibilityRun, evidence_ids["accessibility_run"]).status == "completed"
+    assert (
+        db_session.get(AccessibilityObservation, evidence_ids["accessibility_observation"]).outcome
+        == "ready"
+    )
+    assert (
+        db_session.get(
+            HtmlStructuredContentArtifact, evidence_ids["structured_artifact"]
+        ).canonical_document_sha256
+        == "2" * 64
+    )
+    assert db_session.get(HtmlStructuredContentNode, evidence_ids["structured_node"]).text == (
+        "Fixture page"
+    )
+    assert db_session.get(CollectionPlan, evidence_ids["collection_plan"]).planner_version == (
+        "collection-planner-v1"
     )
     intelligence_after = get_site_intelligence(db_session, site.id)
     assert intelligence_after is not None
