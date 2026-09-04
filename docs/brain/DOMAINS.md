@@ -168,19 +168,22 @@ SourceRefresh is the immutable collection envelope. Sitemap urlset refreshes per
 
 ## Durable Background Jobs (`background-jobs`)
 
-BackgroundJob provides queued/running/terminal execution, leases, recovery, retries, and ownership fencing for durable domain mutation.
+BackgroundJob provides queued/running/terminal execution, leases, recovery, retries, ownership fencing, and an exhaustive typed lifecycle contract for durable domain mutation.
 
 **Type:** `domain`
 **State layer:** `operational`
 
 **Canonical paths:**
 - `backend/app/services/background_jobs.py`
+- `backend/app/services/job_lifecycle.py`
 - `backend/app/services/job_handlers.py`
 - `backend/app/worker.py`
 - `docs/background-jobs.md`
 
 **Landmark symbols:**
 - `claim_next_job`
+- `JobLifecycleSpec`
+- `lifecycle_for`
 - `JobExecutionContext.fence_domain_mutation`
 - `guard_execution_ownership`
 

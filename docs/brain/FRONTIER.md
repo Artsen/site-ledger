@@ -1,11 +1,12 @@
 # Development Frontier
 
 This file records non-canonical direction that may matter when planning a change. Canonical graph
-truth is reviewed against post-PR #53 `main`:
+truth is reviewed against post-PR #54 `main`:
 
-`7154d9ccbe421e088c23de1de3592f3e625b628d`
+`234d9d1945f2fc48518ea76e5adcd750308ea223`
 
-PR #54 completes Collection Plans V2. Unimplemented work below remains non-canonical direction.
+PR #55 completes BackgroundJob lifecycle contract consolidation. Unimplemented work below remains
+non-canonical direction.
 
 ## Completed Collection Plans V2 work
 
@@ -15,16 +16,19 @@ and latest-compatible observation timestamps while keeping compatible coverage a
 active collection independent. Structured Content remains missing-current only. No stale policy,
 default age threshold, recurring scheduling, or new collector abstraction was introduced.
 
-## Next architectural work
+## Completed BackgroundJob lifecycle work
 
-BackgroundJob lifecycle consolidation is the next intended architecture area. The goal is to reduce
-repeated native lifecycle wiring while preserving transaction boundaries, ownership fencing,
-collector-specific semantics, and current job compatibility. Do not combine that work with
-scheduling.
+Every supported JobType now has one explicit typed lifecycle contract covering applicable queued and
+running cancellation, failure, interruption, domain reconciliation, and required follow-ups.
+Operational callers still own leases, fencing, and commits; domain-specific status semantics remain
+authoritative. No scheduler, retry framework, or dynamic job discovery was introduced.
+
+## Next architectural work
 
 Broader non-binding direction remains:
 
-- decompose large API/frontend workspace modules;
+- decompose `backend/app/api/routes.py`;
+- decompose large frontend workspace modules;
 - establish Web Estate identity foundations;
 - add host/domain evidence and discovery;
 - infer technology/platform evidence;

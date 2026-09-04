@@ -9,6 +9,7 @@ These traces are compressed navigation maps. Follow the paths into source for im
 2. **Worker claims job**
    - `backend/app/worker.py`
    - `background_jobs.claim_next_job()`
+   - `job_lifecycle.lifecycle_for()` supplies the explicit domain lifecycle contract for its type
 3. **Scan handler executes**
    - `backend/app/services/job_handlers.py` → `ScanJobHandler`
    - `backend/app/services/scan_execution.py` → `ScanExecutionCoordinator`
