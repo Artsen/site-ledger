@@ -1,4 +1,42 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+
 import { expect, test, type Page } from "@playwright/test";
+
+if (process.env.README_SCREENSHOT_REVIEW === "1") {
+  test("captures deterministic README product screenshots", async ({ page }) => {
+    await mockApi(page);
+    await mockComparisonApi(page, 5, 6, 4);
+    await mockReadmePresentationApi(page);
+
+    const outputDir = path.resolve(process.cwd(), "..", ".tmp", "readme-screenshots");
+    await mkdir(outputDir, { recursive: true });
+    await page.setViewportSize({ width: 1440, height: 960 });
+
+    await page.goto("/sites/3");
+    await expect(page.getByRole("heading", { name: "Example Commerce" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Evidence coverage" })).toBeVisible();
+    await captureReadmeScreenshot(page, outputDir, "site-intelligence-overview.png");
+
+    await page.goto("/sites/3/findings");
+    await expect(page.getByRole("link", { name: "https://example.test/products/discontinued-lamp" })).toBeVisible();
+    await captureReadmeScreenshot(page, outputDir, "findings-workspace.png");
+
+    await page.goto("/sites/3/pages/2?tab=history");
+    await expect(page.getByText("Document and metadata changed")).toBeVisible();
+    await captureReadmeScreenshot(page, outputDir, "page-history.png");
+
+    await page.goto("/sites/3/comparisons");
+    await page.getByRole("button", { name: "Compare" }).click();
+    await expect(page.getByText("Comparable", { exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: /Pages/ }).click();
+    await captureReadmeScreenshot(page, outputDir, "scan-comparison.png");
+
+    await page.goto("/sites/3/graph?scan_id=1&labels=all&link_visibility=all");
+    await expect(page.getByRole("img", { name: "Static 2D website topology graph" })).toBeVisible();
+    await captureReadmeScreenshot(page, outputDir, "topology-graph.png");
+  });
+}
 
 test("product workspace shell is stable across desktop, tablet, and mobile", async ({ page }) => {
   await mockApi(page);
@@ -958,7 +996,156 @@ test("deterministic Scan comparison selects direction, filters, and sorts neutra
   await expect(page).toHaveURL(/comparison_show_all=true/);
 });
 
-async function mockComparisonApi(page: Page) {
+async function captureReadmeScreenshot(page: Page, outputDir: string, filename: string) {
+  await expect(page.locator("text=Loading")).toHaveCount(0);
+  await page.screenshot({ path: path.join(outputDir, filename), fullPage: false });
+}
+
+async function mockReadmePresentationApi(page: Page) {
+  const exampleSite = {
+    ...site,
+    name: "Example Commerce",
+    base_url: "https://example.test/",
+    normalized_base_url: "https://example.test/",
+    description: "A fictional commerce catalog used for deterministic documentation captures.",
+    platform_key: "Commerce CMS",
+    display_timezone: "UTC",
+    total_scan_count: 6,
+  };
+  const clock = (value: string | null, sourceScanId: number | null = null) => ({
+    latest_observed_at: value,
+    latest_completed_at: value,
+    oldest_current_observation_at: value,
+    newest_current_observation_at: value,
+    source_run_id: null,
+    source_scan_id: sourceScanId,
+    source_comparison_id: null,
+    source_status: value ? "completed" : null,
+  });
+  const coverage = (observed: number, eligible: number) => ({
+    observed,
+    eligible,
+    ratio: eligible ? observed / eligible : null,
+  });
+
+  await page.route("**/api/sites/3/intelligence", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        site_id: 3,
+        page_population: { active_page_total: 428, suppressed_page_total: 9, workspace_page_total: 437, workflow_counts: { approved: 312, needs_review: 41, unreviewed: 75 } },
+        scan: { present: true, id: 6, status: "completed", created_at: "2026-09-02T02:00:00Z", started_at: "2026-09-02T02:00:03Z", finished_at: "2026-09-02T02:12:18Z", discovered_count: 441, fetched_count: 425, failed_count: 3, skipped_count: 13, stop_reason: "queue_empty", fatal_error_message: null, active_page_observed: coverage(425, 428), active_page_fetched: coverage(422, 428), clock: clock("2026-09-02T02:12:18Z", 6) },
+        comparison: { present: true, comparison_id: 7, build_id: 9, baseline_scan_id: 5, target_scan_id: 6, comparison_version: "scan-comparison-v3", algorithm_identity: "scan-comparison-v3", page_counts: { substantive_change: 8, metadata_change: 3, technical_change: 27, normalization_only: 11, no_tracked_change: 376, not_applicable: 3 }, resource_counts: { changed: 18 }, link_counts: { changed: 34 }, clock: { ...clock("2026-09-02T02:13:01Z"), source_comparison_id: 7 } },
+        structured_content: { extractor_version: "structured-content-v2", extractor_config_version: "canonical-document-v1", markdown_renderer_version: "structured-markdown-v1", active_pages: 428, eligible_retained_html: 422, ready: 415, partial: 2, unavailable: 0, not_prepared: 5, ineligible: 6, coverage: coverage(417, 422), clock: clock("2026-09-02T02:12:18Z", 6) },
+        render: { latest_run: { present: true, id: 14, status: "completed", target_count: 120, created_at: "2026-09-02T03:00:00Z", started_at: "2026-09-02T03:00:01Z", finished_at: "2026-09-02T03:09:42Z" }, retained_coverage: coverage(389, 428), successful: 116, no_content: 0, redirect: 1, http_error: 1, rate_limited: 0, not_attempted_host_throttled: 0, technical_failure: 2, clock: clock("2026-09-02T03:09:42Z") },
+        performance: { contexts: [{ provider: "pagespeed", dimension: "mobile", target_kind: "url", provider_adapter_version: "pagespeed-provider-v2", normalization_version: "performance-normalization-v1", ready: 86, unavailable: 4, failed: 0, coverage: coverage(90, 428), clock: clock("2026-09-02T04:18:00Z") }], latest_run_id: 18, latest_run_status: "completed", clock: clock("2026-09-02T04:18:00Z") },
+        accessibility: { coverage: coverage(176, 856), ready_pages: 171, failed_pages: 5, pages_with_violations: 23, violation_rules: 14, affected_nodes: 67, needs_review_rules: 6, clock: clock("2026-09-02T05:21:00Z") },
+        sources: { active_source_count: 3, inactive_source_count: 0, current_inventory_count: 436, suppressed_inventory_count: 7, latest_refresh_status: "completed", latest_refresh_finished_at: "2026-09-02T01:48:00Z" },
+        findings: { detected: 17, unknown: 4, acknowledged_detected: 5, unresolved_total: 16, latest_evaluation_id: 22, latest_evidence_horizon_at: "2026-09-02T05:21:00Z", latest_evaluation_completed_at: "2026-09-02T05:22:12Z" },
+        activity: { active_job_count: 0, queued_count: 0, running_count: 0, jobs: [] },
+        collection_coverage: [{ evidence_domain: "render", target_mode: "missing_current", context_identity: "render:desktop", context: {}, active_page_count: 428, active_page_universe_sha256: "a".repeat(64), eligible: 428, covered: 389, in_flight: 0, missing: 39, ineligible: 0, batch_size: 250, estimated_batch_count: 1, collectable: true, non_collectable_reason: null }],
+      }),
+    });
+  });
+
+  await page.route(/\/api\/sites\/3\/findings(?:\?.*)?$/, async (route) => {
+    const rows = [
+      [41, 101, "https://example.test/products/discontinued-lamp", "page_http_error", "Page HTTP error", "high", { http_status: 404 }],
+      [42, 102, "https://example.test/guides/lighting", "page_broken_internal_links", "Broken internal links", "high", { broken_target_count: 4, occurrence_count: 7 }],
+      [43, 103, "https://example.test/products/desk-lamp", "page_noindex", "Page is noindexed", "medium", { robots_directives: ["noindex"] }],
+      [44, 104, "https://example.test/categories/lighting", "sitemap_page_http_error", "Sitemap Page HTTP error", "medium", { http_status: 500 }],
+      [45, 105, "https://example.test/products/floor-lamp", "page_internal_links_to_redirects", "Internal links to redirects", "low", { redirect_target_count: 2, occurrence_count: 5 }],
+    ].map(([id, resourceId, pageUrl, findingType, label, severity, summary], index) => ({
+      id, web_resource_id: resourceId, page_url: pageUrl, finding_type: findingType,
+      finding_label: label, logical_key_version: `${findingType}-key-v1`, fingerprint_sha256: String(index + 1).repeat(64),
+      condition_state: "detected", current_severity: severity,
+      first_detected_at: "2026-09-02T05:22:12Z", last_detected_at: "2026-09-02T05:22:12Z",
+      last_evaluated_evidence_at: "2026-09-02T05:21:00Z", resolved_at: null, reopened_at: null,
+      acknowledged_at: index === 4 ? "2026-09-02T06:00:00Z" : null, current_assessment_id: 200 + index,
+      page_workspace_state: "active", current_evidence_summary: summary,
+    }));
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: rows, total: rows.length, limit: 50, offset: 0 }) });
+  });
+
+  await page.route("**/api/sites/3/pages/2/change-history**", async (route) => {
+    const history = [
+      { snapshot_id: 109, scan_id: 6, scan_status: "completed", observed_at: "2026-09-02T02:05:10Z", http_status: 200, fetch_state: "fetched", change_label: "Document and metadata changed", changed_flags: ["document_content", "title", "description"], intervening_scan_count: 0, intervening_unsuccessful_observation_count: 0 },
+      { snapshot_id: 92, scan_id: 5, scan_status: "completed", observed_at: "2026-08-26T02:04:51Z", http_status: 200, fetch_state: "fetched", change_label: "Technical change", changed_flags: ["dependency", "raw_source"], intervening_scan_count: 0, intervening_unsuccessful_observation_count: 0 },
+      { snapshot_id: 73, scan_id: 4, scan_status: "completed_with_errors", observed_at: "2026-08-19T02:06:22Z", http_status: 200, fetch_state: "fetched", change_label: "No tracked change", changed_flags: [], intervening_scan_count: 1, intervening_unsuccessful_observation_count: 1 },
+      { snapshot_id: 51, scan_id: 2, scan_status: "completed", observed_at: "2026-08-05T02:03:18Z", http_status: 200, fetch_state: "fetched", change_label: "First successful observation", changed_flags: [], intervening_scan_count: 0, intervening_unsuccessful_observation_count: 0 },
+    ];
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: history, total: history.length, limit: 50, offset: 0 }) });
+  });
+
+  await page.route("**/api/sites/3/pages/2", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ...persistentPage, site_name: "Example Commerce", page: { ...persistentPage.page, normalized_url: "https://example.test/products/desk-lamp", latest_title: "Adjustable Desk Lamp", owner_label: "Merchandising", workflow_status: "approved", observation_count: 6, first_observed_at: "2026-08-05T02:03:18Z", latest_observed_at: "2026-09-02T02:05:10Z", latest_snapshot_id: 109, latest_scan_id: 6 } }),
+    });
+  });
+
+  await page.route("**/api/sites/3/scans**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          { ...scan, id: 6, status: "completed", website_property_id: 3, website_property_name: "Example Commerce", website_property_base_url: "https://example.test/", starting_url: "https://example.test/", created_at: "2026-09-02T02:00:00Z", finished_at: "2026-09-02T02:12:18Z", discovered_count: 441, fetched_count: 425, failed_count: 3 },
+          { ...scan, id: 5, status: "completed", website_property_id: 3, website_property_name: "Example Commerce", website_property_base_url: "https://example.test/", starting_url: "https://example.test/", created_at: "2026-08-26T02:00:00Z", finished_at: "2026-08-26T02:11:44Z", discovered_count: 432, fetched_count: 427, failed_count: 2 },
+          { ...scan, id: 1, status: "completed", website_property_id: 3, website_property_name: "Example Commerce", website_property_base_url: "https://example.test/", starting_url: "https://example.test/", finished_at: "2026-07-30T01:01:00Z" },
+        ], total: 3, limit: 100, offset: 0,
+      }),
+    });
+  });
+
+  await page.route("**/api/sites/3/comparisons/7/pages**", async (route) => {
+    const rows = [
+      [31, "https://example.test/products/desk-lamp", "present_in_both", "substantive_change", "different", "different", "same", "different", 4],
+      [32, "https://example.test/products/discontinued-lamp", "not_observed_in_target", "not_applicable", "not_applicable", "not_applicable", "not_applicable", "not_applicable", 0],
+      [33, "https://example.test/guides/lighting", "present_in_both", "technical_change", "same", "same", "different", "different", 2],
+      [34, "https://example.test/categories/new-arrivals", "present_in_both", "metadata_change", "same", "different", "same", "same", 1],
+    ].map(([resourceId, normalizedUrl, presenceState, primaryClass, contentState, metadataState, technicalState, sourceState, changedFields], index) => ({
+      id: index + 1, resource_id: resourceId, normalized_url: normalizedUrl, host: "example.test", path: new URL(String(normalizedUrl)).pathname,
+      presence_state: presenceState, change_state: primaryClass, primary_change_class: primaryClass, content_state: contentState,
+      document_content_state: contentState, metadata_state: metadataState, technical_state: technicalState, exact_source_state: sourceState,
+      head_state: metadataState, changed_field_count: changedFields, baseline_http_status: 200,
+      target_http_status: presenceState === "not_observed_in_target" ? null : 200, response_time_ms_delta: null, network_bytes_delta: null,
+    }));
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: rows, total: rows.length, limit: 50, offset: 0, comparison_build_id: 9, comparison_version: "scan-comparison-v3" }) });
+  });
+
+  await page.route(/\/api\/scans\/1\/graph(?:\?.*)?$/, async (route) => {
+    const paths = ["/", "/products/", "/products/desk-lamp", "/products/floor-lamp", "/products/pendant-light", "/categories/", "/categories/lighting", "/guides/", "/guides/lighting", "/about/", "/support/", "/support/shipping"];
+    const nodes = paths.map((urlPath, index) => ({
+      ...graph.nodes[index === 0 ? 0 : 1], id: `snapshot:${index + 1}`, snapshot_id: index + 1, resource_id: index + 1,
+      requested_url: `https://example.test${urlPath}`, final_url: `https://example.test${urlPath}`,
+      page_title: index === 0 ? "Example Commerce" : urlPath.split("/").filter(Boolean).at(-1)?.replace(/-/g, " "),
+      host: "example.test", path: urlPath, crawl_depth: urlPath.split("/").filter(Boolean).length,
+      inbound_occurrence_count: index === 0 ? 0 : 2 + (index % 4), inbound_source_page_count: index === 0 ? 0 : 1 + (index % 3),
+      outbound_occurrence_count: index < 8 ? 3 : 1, outbound_target_page_count: index < 8 ? 3 : 1,
+      is_scan_seed: index === 0, is_starting_url: index === 0,
+    }));
+    const edges = nodes.slice(1).map((node, index) => ({
+      ...graph.edges[0], id: `1-${node.snapshot_id}`, source: "snapshot:1", target: node.id,
+      source_snapshot_id: 1, target_snapshot_id: node.snapshot_id, target_resource_id: node.resource_id,
+      occurrence_count: 1 + (index % 3), sample_anchor_texts: [node.page_title], dom_regions: index % 4 === 0 ? { navigation: 1 } : { main: 1 },
+    }));
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...graph, scan: { ...graph.scan, starting_url: "https://example.test/", website_property_id: 3, website_property_name: "Example Commerce" }, summary: { ...graph.summary, total_available_nodes: nodes.length, total_available_edges: edges.length, returned_nodes: nodes.length, returned_edges: edges.length, fetched_nodes: nodes.length, total_occurrences: edges.reduce((total, edge) => total + edge.occurrence_count, 0) }, nodes, edges }) });
+  });
+
+  await page.route("**/api/sites/3", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(exampleSite) });
+  });
+  await page.route(/\/api\/sites(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ ...exampleSite, latest_scan_id: 6, latest_scan_status: "completed", latest_scan_date: "2026-09-02T02:00:00Z", latest_scan_discovered_count: 441, latest_scan_failed_count: 3 }], total: 1, limit: 25, offset: 0 }) });
+  });
+}
+
+async function mockComparisonApi(
+  page: Page,
+  baselineScanId = 1,
+  targetScanId = 2,
+  pageResultCount = 1,
+) {
   let created = false;
   const scanSide = (id: number, createdAt: string) => ({
     id,
@@ -998,7 +1185,7 @@ async function mockComparisonApi(page: Page) {
     build_duration_ms: 1000,
     error_type: null,
     error_message: null,
-    page_result_count: 1,
+    page_result_count: pageResultCount,
     resource_result_count: 0,
     link_result_count: 0,
     created_at: "2026-08-07T12:00:00Z",
@@ -1006,20 +1193,20 @@ async function mockComparisonApi(page: Page) {
   const comparison = {
     id: 7,
     website_property_id: 3,
-    baseline_scan_id: 1,
-    target_scan_id: 2,
+    baseline_scan_id: baselineScanId,
+    target_scan_id: targetScanId,
     current_build_id: 9,
     created_at: "2026-08-07T12:00:00Z",
     updated_at: "2026-08-07T12:00:01Z",
-    baseline_scan: scanSide(1, "2026-08-06T12:00:00Z"),
-    target_scan: scanSide(2, "2026-08-07T12:00:00Z"),
+    baseline_scan: scanSide(baselineScanId, "2026-08-06T12:00:00Z"),
+    target_scan: scanSide(targetScanId, "2026-08-07T12:00:00Z"),
     current_build: build,
     active_build: null,
   };
   const overview = {
     comparison,
     summary: {
-      pages: { total: 1, not_observed_in_target: 1 },
+      pages: { total: pageResultCount, not_observed_in_target: 1 },
       resources: { total: 0 },
       links: { total: 0 },
       scan: {},
@@ -1030,8 +1217,8 @@ async function mockComparisonApi(page: Page) {
       contentType: "application/json",
       body: JSON.stringify({
         items: [
-          scanSide(2, "2026-08-07T12:00:00Z"),
-          scanSide(1, "2026-08-06T12:00:00Z"),
+          scanSide(targetScanId, "2026-08-07T12:00:00Z"),
+          scanSide(baselineScanId, "2026-08-06T12:00:00Z"),
         ],
         total: 2,
         limit: 250,

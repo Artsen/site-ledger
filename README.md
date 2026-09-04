@@ -2,121 +2,143 @@
 
 **A historical record of your website.**
 
-Site Ledger is a local-first website intelligence platform that records websites as structured
-historical datasets. It inventories Pages, preserves scan observations and link provenance, and
-keeps the stored evidence needed to understand what exists and how the recorded state evolves over
-time.
+[![CI](https://github.com/Artsen/site-ledger/actions/workflows/ci.yml/badge.svg)](https://github.com/Artsen/site-ledger/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB)
+![Node 20.19+](https://img.shields.io/badge/Node-20.19%2B-339933)
+![Local first](https://img.shields.io/badge/data-local--first-2F855A)
+![Status: active development](https://img.shields.io/badge/status-active_development-D97706)
 
-It is useful for developers, site owners, content teams, and investigators who need a durable,
-inspectable record rather than a disposable crawl report. Persistent Page identities connect
-observations from separate scans without erasing the evidence captured by each scan.
+Site Ledger is a local-first website intelligence application. It crawls a website, keeps the
+evidence it observes, and helps you investigate how the site changes over time.
 
-## What It Currently Does
+Most crawlers produce a report about one moment. Site Ledger remembers Pages as persistent
+identities, so later Scans, sitemap declarations, browser captures, performance measurements,
+accessibility checks, structured content, comparisons, and Findings become one inspectable history.
+It is built for website owners, content teams, SEO and web operations practitioners, and developers
+who need evidence behind the answer, not just a current score.
 
-- Saves Sites with reusable scope and user-defined classification labels.
-- Runs bounded static HTML scans through durable background jobs, with one aggregate wall-clock
-  deadline per static request including redirects and response streaming.
-- Collects bounded Chromium-rendered observations in durable Render Runs, either manually or from
-  eligible static Scan snapshots.
-- Accepts sitemap, robots-discovered sitemap, and manual URL Sources.
-- Discovers and retains nested AI Document Sources with exact refresh evidence.
-- Maintains a current URL Inventory with source provenance.
-- Preserves persistent Pages and scan-specific observation history.
-- Inventories observed and HTML-referenced non-HTML Resources without storing Resource bodies.
-- Provides Site-scoped Page workspaces with categories, owner labels, workflow status, and notes.
-- Applies deterministic automatic Page Category Rules with manual provenance and exclusions.
-- Displays Site-scoped timestamps in an optional IANA timezone without changing stored evidence.
-- Classifies individual link occurrences by source-DOM role with explicit rule provenance.
-- Stores exact HTML responses as compressed, content-addressed evidence.
-- Extracts versioned deterministic Page outlines and direct source-text sections from retained HTML.
-- Collects immutable PageSpeed lab and CrUX field observations on demand with exact provider payloads.
-- Collects immutable automated Accessibility observations with pinned local axe-core evidence.
-- Records page metadata, redirect chains, errors, and inbound/outgoing link provenance.
-- Uses conditional HTTP revalidation and deterministic parsed-result reuse when safe.
-- Displays scan-specific 2D and 3D topology graphs with bounded server-side queries.
-- Materializes versioned, rebuildable indexes for fast immutable terminal-Scan reads while keeping
-  raw evidence authoritative.
-- Builds deterministic same-Site Scan Comparisons with evidence-linked Page, Resource, and link
-  differences.
-- Composes read-only Site Intelligence with active-Page denominators and independent evidence clocks.
-- Orchestrates missing-current Performance, Accessibility, Render, and Structured Content evidence
-  through durable Collection Plans that reuse native collectors.
-- Evaluates persistent deterministic static Findings for HTTP/fetch failures, noindex directives,
-  indexability conflicts, missing titles, invalid or multiple canonicals, broken observed canonical
-  targets, internal-link topology, and sitemap/static cross-stream conditions, with per-detector
-  diagnostics and explicit administrative delete/reset controls that preserve collected evidence.
-- Indexes browser-rendered observations from Site, Page, Render Run, and historical Scan workspaces
-- Deletes retained browser evidence independently with target tombstones, bounded bulk actions,
-  reference-safe artifact reclamation, and Site/legacy Scan ownership controls
-  with exact evidence links.
-- Supports scan, source, Site, and background Activity lifecycle management.
+![Site Intelligence overview for the fictional Example Commerce site](docs/screenshots/readme/site-intelligence-overview.png)
 
-Site Ledger does not perform browser-only crawling, Resource-body storage, complete website change
-detection, visual regression, WCAG certification, performance regression detection, analytics
-correlation, or AI findings.
+## Contents
 
-## Core Product Model
+- [Status and scope](#status-and-scope)
+- [Why Site Ledger exists](#why-site-ledger-exists)
+- [A plain-English tour](#a-plain-english-tour)
+- [Key capabilities](#key-capabilities)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Site Intelligence and Findings](#site-intelligence-and-findings)
+- [History and comparison](#history-and-comparison)
+- [Architecture and trust](#architecture-and-trust)
+- [Gallery](#gallery)
+- [Development](#development)
+- [Privacy, security, and limitations](#privacy-security-and-limitations)
+- [Documentation map](#documentation-map)
 
-- **Site:** A saved website property with reusable scope and configuration. The internal model is
-  WebsiteProperty.
-- **Page:** A persistent normalized URL identity represented internally by WebResource.
-- **Resource:** A non-HTML representation observed directly or referenced by retained HTML.
-- **Observation:** A scan-specific ResourceSnapshot of a Page or non-HTML Resource.
-- **Scan:** One bounded collection run that produces observations.
-- **Source:** A sitemap, robots-discovered sitemap, manual URL source, or AI Document Source.
-- **Inventory:** Current URL candidates declared by Sources. Inventory entries are inputs, not
-  observations.
-- **Graph:** A scan-specific representation of observed Pages and links.
-- **Activity:** Durable background execution and worker status.
-- **Performance observation:** External PageSpeed lab or CrUX field evidence collected independently
-  of a Scan.
-- **Accessibility observation:** Automated axe-core evidence for one persistent Page and responsive
-  profile, collected independently of a Scan.
+## Status And Scope
 
-See [Product vision](docs/product-vision.md) for the broader model and roadmap.
-See [Resource Inventory](docs/resource-inventory.md) for classification, provenance, and storage
-boundaries.
-See [Scan projections](docs/scan-projections.md) for terminal-result indexing, fallback, and rebuild
-behavior.
-See [Structured Page Content](docs/structured-page-content.md) for canonical source-document
-extraction, deterministic Markdown, historical preparation, and Content-tab semantics.
-See [Page Category Rules](docs/page-category-rules.md) and
-[Site display timezones](docs/site-timezones.md) for mutable Site organization and presentation.
-See [Performance observations](docs/performance-observations.md) for external provider evidence,
-security, collection limits, and workspace semantics.
-See [Automated Accessibility observations](docs/accessibility-observations.md) for detector
-provenance, browser security, evidence semantics, and automated-testing limitations.
-See [Site Intelligence](docs/site-intelligence.md) for current coverage, independent clocks, and
-evidence-compatibility semantics.
-See [URL identity contract](docs/url-identity-contract.md) for persistent WebResource semantics,
-known V1 equivalences, retained-data audit results, and future migration constraints.
-Developers and coding agents can use the maintained [Site Ledger second brain](docs/brain/README.md)
-as a context/navigation layer; source code, migrations, and tests remain authoritative.
+Site Ledger is a source-run local application under active development. These labels distinguish
+what the current repository implements from planned direction.
 
-## Architecture Overview
+| Area | State | What that means today |
+| --- | --- | --- |
+| Static website crawling | Available | Bounded HTTP collection with retained response and link evidence |
+| Persistent Page history | Available | Page workspaces accumulate observations across Scans |
+| Sitemap and URL Source evidence | Available | Sitemap, robots-discovered sitemap, manual URL, and AI document Sources |
+| Scan comparison | Available | Deterministic same-Site Page, Resource, and link comparison |
+| Browser-rendered evidence | Available | Explicit bounded Chromium Render Runs and retained artifacts |
+| PageSpeed and CrUX evidence | Available | Independent provider observations when a Google API key is configured |
+| Automated accessibility evidence | Available | Pinned axe-core checks; this is not WCAG certification |
+| Structured Page Content | Available | Versioned document text, headings, sections, and deterministic Markdown |
+| Site Intelligence | Available | Read-only coverage and activity rollup with independent evidence clocks |
+| Deterministic Findings | Available | Evidence-backed static, topology, and sitemap/static conditions |
+| Missing-current Collection Plans | Available | Bounded orchestration for evidence that is absent from the current identity |
+| Scheduled recurring collection | Not yet | Collection remains manually initiated |
+| Google Search Console and GA4 | Not yet | No analytics or search-performance integration |
+| AI interpretation | Not yet | AI document evidence can be retained; no AI reasoning is implemented |
+| Web Estate and platform discovery | Planned | Future domain, host, and platform intelligence |
 
-The backend uses FastAPI, SQLAlchemy 2, Alembic, SQLite, HTTPX, and lxml. A standalone worker claims
-durable database-backed jobs and invokes the crawler or source-refresh services. Exact response
-bytes are gzip-compressed behind a content-store abstraction.
+## Why Site Ledger Exists
 
-The frontend uses React, TypeScript, Vite, TanStack Query, Tailwind CSS, Vitest, Testing Library,
-and Playwright. Graph rendering is lazy-loaded so the Three.js-backed 3D renderer stays outside the
-initial application bundle.
+A website rarely changes in one clean, synchronized event. A Page can start returning a 404 while
+its sitemap still declares it. A canonical can point to a broken target. Internal links can begin
+passing through redirects. Browser evidence may be newer than the latest static Scan. A later
+observation may prove that the condition was fixed.
 
-The crawler is a static HTTP subsystem. It performs breadth-first GET traversal, validates each
-redirect against scope and SSRF protections, enforces response-size and request limits, and saves
-partial evidence when individual Pages fail.
+A current-state report loses much of that context. Site Ledger preserves observations and their
+provenance so you can ask:
 
-Detailed boundaries are documented in [Architecture](docs/architecture.md).
+- What did this Page look like in each Scan?
+- Was the change in document copy, metadata, dependencies, links, or only normalized noise?
+- Which exact observation supports a Finding?
+- Which Pages still lack current render, performance, accessibility, or structured-content evidence?
+- Was a Page absent from one Scan, or was it actually proven to be removed from the website?
 
-## Local Setup
+The goal is not a universal health score. It is a durable record that makes operational conclusions
+traceable.
 
-The reproducible contributor setup uses Python 3.11, uv 0.12.3, Node.js 20.19.0, and the npm
-10.8.2 distributed with that Node release. Install uv once with
-`python -m pip install --user uv==0.12.3`. The backend lock is authoritative for resolved Python
-dependencies, and `npm ci` installs the exact frontend lock.
+## A Plain-English Tour
 
-~~~powershell
+1. **Add a Site.** Save its starting URL, crawl boundary, and reusable collection settings.
+2. **Define discovery inputs.** Add sitemaps or manual URL Sources alongside crawl discovery.
+3. **Run a Scan.** The worker collects bounded static HTTP observations and link occurrences.
+4. **Keep the Pages.** Page workspaces persist across Scans with ownership, workflow, categories,
+   notes, and observation history.
+5. **Collect independent evidence.** Run browser captures, Performance measurements,
+   Accessibility audits, or Structured Content preparation on their own clocks.
+6. **Compare Scans.** Inspect deterministic Page, Resource, and link differences without rewriting
+   the original evidence.
+7. **Evaluate Findings.** Detect explicit conditions and open the retained evidence behind them.
+8. **Collect again later.** New evidence extends the history rather than replacing it.
+
+## Key Capabilities
+
+### Inventory And Discovery
+
+- Crawl bounded website scope and keep exact redirect, failure, and link-discovery evidence.
+- Refresh sitemap, robots-discovered sitemap, manual URL, and AI Document Sources.
+- Maintain a current URL Inventory with source provenance, separate from observed Pages.
+- Inventory observed and referenced non-HTML Resources without storing Resource bodies.
+
+### Historical Evidence
+
+- Keep persistent Page identities and Scan-specific observations.
+- Retain exact HTML in compressed, content-addressed local storage.
+- Extract deterministic document text, heading outlines, sections, and Markdown from retained HTML.
+- Record rendered DOM, screenshots, network evidence, and browser outcomes in explicit Render Runs.
+- Store immutable PageSpeed, CrUX, and automated Accessibility provider evidence.
+
+### Change Investigation
+
+- Compare prepared Scans using versioned deterministic algorithms.
+- Separate substantive document changes, metadata changes, technical/source changes, narrow
+  normalization-only changes, and unchanged tracked state.
+- Explore URL hierarchy and observed Page links in bounded 2D or 3D topology views.
+- Follow every comparison result back to its exact Page observations.
+
+### Findings And Site Intelligence
+
+- Roll up current Page population, evidence coverage, collection clocks, active work, comparisons,
+  Sources, and Findings without pretending they share one timestamp.
+- Evaluate deterministic Findings for HTTP/fetch failures, indexability and canonical problems,
+  internal-link topology, and sitemap/static conflicts.
+- Track Finding lifecycle as detected, unknown, resolved, reopened, and acknowledged.
+- Retain typed evidence references and bounded, deterministic evidence samples.
+
+### Organization And Durable Operations
+
+- Add Page categories, automatic Category Rules, owners, workflow states, and notes.
+- Queue Scans, Source refreshes, collection work, projections, comparisons, and Finding evaluations
+  as durable background jobs.
+- Cancel, retry, inspect, and recover work through explicit lifecycle state.
+- Delete selected evidence or rebuildable Finding history with clear preservation boundaries.
+
+## Quick Start
+
+The contributor setup is pinned to Python 3.11, uv 0.12.3, Node.js 20.19 or newer, and npm 10.8.2.
+Install [uv](https://docs.astral.sh/uv/) and Node.js before starting.
+
+```powershell
 git clone https://github.com/Artsen/site-ledger.git
 cd site-ledger
 
@@ -125,254 +147,277 @@ uv sync --extra dev --locked
 uv run playwright install chromium
 uv run python -m app.browser_check
 uv run alembic upgrade head
-~~~
+```
 
-Install the frontend dependencies in a separate terminal:
+Install the frontend in another terminal:
 
-~~~powershell
+```powershell
 cd frontend
 npm ci
-~~~
+```
 
-Runtime databases, static HTML, rendered DOM, and screenshots are written under data/ and ignored
-by Git.
+Run the API, worker, and frontend in three terminals:
 
-To enable on-demand Performance collection, set the Google API key only in the backend process
-environment before starting both API and worker:
-
-~~~powershell
-$env:SITE_LEDGER_GOOGLE_API_KEY="your-local-key"
-~~~
-
-The recommended Performance and Accessibility batch is 50 Pages. The configurable hard Page
-limit defaults to the absolute application ceiling of 250 Pages. Performance additionally permits
-at most 1,002 provider requests per run and throttles CrUX to 120 queries/minute; Accessibility
-permits at most 500 Page/profile browser audits. Collection is serial and manual. Scheduling and
-CrUX History import are not implemented.
-
-Operators may lower the limits with `SCANNER_PERFORMANCE_DEFAULT_PAGE_LIMIT`,
-`SCANNER_PERFORMANCE_HARD_PAGE_LIMIT`, `SCANNER_PERFORMANCE_MAX_PROVIDER_REQUESTS`,
-`SCANNER_PERFORMANCE_CRUX_QUERIES_PER_MINUTE`, `SCANNER_ACCESSIBILITY_DEFAULT_PAGE_LIMIT`,
-`SCANNER_ACCESSIBILITY_HARD_PAGE_LIMIT`, and `SCANNER_ACCESSIBILITY_MAX_AUDIT_COUNT`. Invalid
-values fail settings validation and are never silently clamped.
-
-### Observability Payload Lifecycle
-
-Performance and Accessibility evidence is immutable while retained, with explicit hard deletion at
-observation, Run, and Site-domain scope. Original terminal Run counters remain collection history;
-separate retained/deleted counts describe current evidence. Active collection blocks deletion and
-garbage collection only in its own domain. Shared content-addressed payloads survive partial
-deletion, and database changes commit before best-effort file cleanup. Cleanup failures are visible
-warnings. Full Site deletion applies the same payload cleanup without leaking unreferenced files.
-
-Payload GC is dry-run by default:
-
-~~~powershell
-python tools/observability_payload_gc.py --domain all
-python tools/observability_payload_gc.py --domain performance --apply
-~~~
-
-GC reports referenced, unreferenced, missing, orphan, unexpected, and reclaimable storage without
-deleting unexpected-layout files. See the Performance and Accessibility evidence documentation for
-the complete retention semantics.
-
-## Running Locally
-
-Run the API:
-
-~~~powershell
+```powershell
+# Terminal 1
 cd backend
 uv run uvicorn app.main:app --reload
-~~~
 
-Run the worker in a second terminal:
-
-~~~powershell
+# Terminal 2
 cd backend
 uv run python -m app.worker
-~~~
 
-Historical terminal Scans can prepare optimized results with
-`uv run python -m app.scan_projections build-missing --limit 25` from `backend`.
-Historical HTML can prepare structured Page content with
-`uv run python -m app.structured_content build-missing --site-id 1 --limit 500` from `backend`.
-Category Rule performance can be measured with
-`uv run python -m app.category_rule_benchmark`.
-Performance history queries can be measured with
-`uv run python -m app.performance_benchmark`.
-Run the deterministic Accessibility history benchmark with
-`uv run python -m app.accessibility_benchmark`.
-
-Run the frontend in a third terminal:
-
-~~~powershell
+# Terminal 3
 cd frontend
 npm run dev
-~~~
+```
 
-The API defaults to http://127.0.0.1:8000 and the frontend defaults to
-http://127.0.0.1:5173. Scans and source refreshes remain queued when no worker is online.
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The API defaults to
+`http://127.0.0.1:8000`. Collection jobs remain queued when no worker is running.
 
-## Data Storage And Privacy
+Performance collection is optional. Set `SITE_LEDGER_GOOGLE_API_KEY` in both backend process
+environments before starting the API and worker when PageSpeed or CrUX evidence is needed. Runtime
+databases and evidence stores are written under `data/` and ignored by Git.
 
-Site Ledger is local-first. SQLite data, worker state, and captured HTML stay in the local data
-directory unless the operator deliberately moves or exports them. Stored HTML is displayed as
-escaped source text and is never executed by the dashboard. Graph PNG exports are generated in the
-browser.
+## How It Works
 
-Content blobs are addressed by SHA-256 and deterministically compressed with gzip. Files are
-published atomically, and concurrent content-addressed database inserts reconcile to the committed
-winner. Identical response bodies share a blob record, while every scan retains its own Page
-observation and link provenance. Deletion is reference-aware so shared evidence remains available
-to other scans.
+### Product Workflow
 
-## Security Boundaries
+```mermaid
+flowchart LR
+    A[Define a Site and Sources] --> B[Collect evidence]
+    B --> C[Preserve Pages and observations]
+    C --> D[Build deterministic representations]
+    D --> E[Compare and evaluate Findings]
+    E --> F[Investigate exact evidence]
+    F --> B
+```
 
-The crawler is an SSRF boundary:
+### How Site Ledger Thinks About A Website
 
-- Only HTTP and HTTPS destinations are accepted.
-- Only complete globally routable DNS answer sets are accepted by default; mixed public/private,
-  loopback, link-local, private, and shared/CGNAT destinations are blocked.
-- IPv4-mapped IPv6 and well-known-prefix NAT64 destinations are classified by their embedded IPv4
-  address so encoding a private address in IPv6 cannot bypass the boundary.
-- Static sockets connect to the validated address while preserving HTTP Host, TLS SNI, and
-  certificate verification. Ambient proxy environment variables are ignored.
-- Redirect destinations are revalidated before each request.
-- Cookies and user credentials are not forwarded.
-- Request timeout, redirect, response-size, Page, and depth limits are enforced.
-- Active static scans may retry transient network failures and selected temporary HTTP statuses up
-  to `static_max_attempts`; every request remains durable attempt evidence under one final Page
-  observation. Retry-After and exponential delays are capped by `static_retry_max_delay_ms`.
-- Completed Scans cannot retry an individual static Page. Browser observations are never retried or
-  modified in place; an explicit selected rerender creates a new Render Run and new evidence.
-- Scanned HTML is parsed as data and never executed in the application.
-- Browser requests are intercepted before navigation and every HTTP redirect or subresource
-  destination is checked against the network policy.
-- Browser byte budgets use observed Chromium transfer and actively stop loading after a limit;
-  Chromium still has a documented DNS validation/connection TOCTOU boundary.
-- Browser contexts are non-persistent, service workers and unsafe methods are blocked, and no
-  credentials are supplied.
+A **Site** is the workspace and collection boundary. A **Page** is a persistent URL identity within
+that Site. Each Scan or independent collector adds an **Observation** without replacing earlier
+evidence. Internally, Site membership and workspace state are represented by `SitePage`, normalized
+URL identity by `WebResource`, and an exact static observation by `ResourceSnapshot`.
 
-Authenticated browser capture is not supported. Private-network access remains disabled by
-default and must be deliberately enabled in scan scope.
+Not all evidence is collected together:
 
-See [Network security](docs/network-security.md) for guarantees and residual risks.
+| Evidence domain | Clock | Primary role |
+| --- | --- | --- |
+| Static Scan | Per Scan | HTTP response, metadata, exact HTML, Resources, and links |
+| Source and sitemap evidence | Per Source refresh | Declared URL membership and source provenance |
+| Render evidence | Per Render Run | Browser outcome, DOM, screenshots, network, and console evidence |
+| Performance | Per provider observation | PageSpeed lab and CrUX field data |
+| Accessibility | Per Page/profile audit | Automated axe-core results and affected nodes |
+| Structured Content | Per retained HTML derivative | Document text, outline, sections, and Markdown |
 
-## Quality Checks
+Site Ledger does not pretend that "the latest Scan" is the complete current state of a Site. Each
+domain reports its own observation time, coverage, compatibility, and gaps. See
+[Architecture](docs/architecture.md) and [Site Intelligence](docs/site-intelligence.md).
 
-Backend:
+## Site Intelligence And Findings
 
-~~~powershell
-cd backend
-uv lock --check
-uv sync --extra dev --locked
-uv run --extra dev --locked pytest
-uv run --extra dev --locked ruff check . ../tools
-uv run --extra dev --locked ruff format --check . ../tools
-uv run --extra dev --locked mypy app
-uv run --extra dev --locked alembic upgrade head
-uv run --extra dev --locked alembic check
-~~~
+**Site Intelligence** is a current, read-only rollup. Its denominators are the active Page
+population, and its evidence panels retain separate clocks. Missing Performance or Accessibility
+evidence is shown as missing, not interpreted as a good result.
 
-Frontend:
+**Findings** are deterministic, evidence-backed operational conditions. They are not probabilistic
+advice. Each evaluation records the detector bundle, selected evidence, outcomes, and exact
+references supporting persisted Findings. Current detectors cover static Page state, internal-link
+topology, and sitemap/static cross-stream conditions. Administrative reset and delete controls
+remove rebuildable Finding interpretation history while preserving collected website evidence.
 
-~~~powershell
-cd frontend
-npm ci
-npm run lint
-npm run typecheck
-npm run test
-npm run build
-npm run e2e
-npm audit --omit=dev
-~~~
+See [Findings](docs/findings.md) for lifecycle and detector semantics.
 
-Full-stack Golden Path, from the repository root after both locked environments and Playwright
-Chromium are installed:
+## History And Comparison
 
-~~~powershell
-uv run --project backend --extra dev --locked python tools/run_full_stack_e2e.py
-~~~
+Pages persist even when individual Scan observations differ or are absent. Scan Comparison builds
+an immutable, versioned view between two prepared terminal Scans and links differences back to the
+source observations. "Not observed in Target" is deliberately not presented as proof that a Page
+was deleted from the live website.
 
-URL identity migration is an offline, local-only operator workflow. Schema upgrade alone is safe
-for an existing database and leaves V1 active. After resolving the private full reconciliation
-manifest, rebase and inspect it before any simulation:
+Exact source evidence is never normalized in place. Narrow meaningful-source normalization and
+document-content extraction are separate deterministic representations, so technical churn can
+remain visible without being mislabeled as changed Page copy. See
+[Scan comparisons](docs/scan-comparisons.md) and
+[Page history and reuse](docs/page-history-and-reuse.md).
 
-~~~powershell
-uv run --project backend --extra dev --locked python tools/url_identity_migrate.py `
-  --database data/scanner.db rebase .local/url-identity/manifest-full.json `
-  --output .local/url-identity/manifest-rebased.json
-uv run --project backend --extra dev --locked python tools/url_identity_migrate.py `
-  --database data/scanner.db status
-uv run --project backend --extra dev --locked python tools/url_identity_migrate.py `
-  --database data/scanner.db preflight .local/url-identity/manifest-rebased.json
-uv run --project backend --extra dev --locked python tools/url_identity_migrate.py `
-  --database data/scanner.db simulate .local/url-identity/manifest-rebased.json `
-  --destination .local/url-identity/simulation.db
-~~~
+## Architecture And Trust
 
-Live apply and rollback require separate exact confirmation phrases and stopped workers. See
-[URL identity migration](docs/url-identity-migration.md). Never commit full manifests or reports.
+### Architecture At A Glance
 
-GitHub Actions runs independent `Backend`, `Frontend`, `Playwright`, and `Golden Path` checks for
-pull requests to `main` and pushes to `main`. The production npm audit blocks on high or critical findings; the full
-dependency-tree audit is reported without blocking while the remaining Vite/Vitest advisories
-require major upgrades. The two current production advisories are moderate React Router findings.
-The Backend job exports locked runtime requirements and blocks on `pip-audit` findings.
+```mermaid
+flowchart TB
+    UI[React workspace] --> API[FastAPI API]
+    API --> DB[(SQLite metadata and job state)]
+    API --> STORE[(Local content-addressed evidence stores)]
+    WORKER[Background worker] --> DB
+    WORKER --> HTTP[Static HTTP crawler]
+    WORKER --> BROWSER[Chromium collectors]
+    WORKER --> PROVIDERS[Optional external providers]
+    HTTP --> DB
+    BROWSER --> DB
+    PROVIDERS --> DB
+    WORKER --> STORE
+    DB --> DERIVED[Versioned projections, comparisons, and Findings]
+```
 
-The regular Playwright workflow uses mocked API responses for fast UI coverage. The separate Golden
-Path runs one deterministic local fixture through the real React, API, SQLite, worker, crawler,
-evidence, projection, comparison, and UI lifecycle. Deterministic crawler behavior, redirect
-safety, storage, graph queries, background jobs, Page history, and reuse remain covered more broadly
-by backend tests. Benchmarks remain manual diagnostics rather than hosted-runner gates; run them
-explicitly through `uv run`, for example `uv run python -m app.static_benchmark`.
+The FastAPI backend owns APIs, collection services, evidence persistence, and the durable job
+queue. A standalone worker claims jobs and runs static, browser, provider, and derivative work.
+SQLite stores relational evidence and lifecycle state; large retained payloads use local
+content-addressed stores. The React workspace reads those APIs and lazy-loads graph renderers.
 
-## Updating Dependencies
+### Evidence And Trust Model
 
-For backend requirements, edit `backend/pyproject.toml`, run `uv lock`, then verify with
-`uv sync --extra dev --locked` and the backend checks above. Commit `pyproject.toml` and `uv.lock`
-together when both change; do not edit resolved lock entries manually.
+- **Exact evidence stays exact.** Derived normalization, extraction, projections, comparisons, and
+  Findings are separate versioned artifacts.
+- **Absence is not deletion.** A failed collector or a missing Scan observation does not prove a
+  live Page disappeared.
+- **Clocks stay independent.** Static, sitemap, rendered, Performance, Accessibility, and derived
+  evidence do not inherit an invented universal timestamp.
+- **Provenance is explicit.** Algorithm identities, provider versions, checksums, evidence links,
+  and job attempts remain inspectable.
+- **Mutable workflow stays separate.** Owners, categories, notes, acknowledgements, and Page
+  workspace state do not rewrite immutable observations.
+- **Rebuildable does not mean authoritative.** Projections and Findings can be rebuilt; retained
+  source observations remain the authority.
 
-For frontend requirements, change `frontend/package.json` intentionally, update
-`frontend/package-lock.json` with npm, then run `npm ci` and the frontend checks above. Commit both
-files when the declared dependency set changes.
+Read the full [architecture](docs/architecture.md), [URL identity contract](docs/url-identity-contract.md),
+[scan projection contract](docs/scan-projections.md), and [background job contract](docs/background-jobs.md).
 
-## Documentation
+## Gallery
+
+| Evidence-backed Findings | Persistent Page history |
+| --- | --- |
+| ![Findings workspace with deterministic current conditions](docs/screenshots/readme/findings-workspace.png) | ![Persistent Page change history across four Scans](docs/screenshots/readme/page-history.png) |
+
+| Deterministic Scan comparison | Website topology |
+| --- | --- |
+| ![Scan Comparison separating Page change classifications](docs/screenshots/readme/scan-comparison.png) | ![Two-dimensional URL hierarchy and link topology graph](docs/screenshots/readme/topology-graph.png) |
+
+The gallery uses a deterministic mocked Playwright fixture named **Example Commerce**. It contains
+no live, customer, personal, or retained user data. See [Writing style](docs/writing-style.md) for
+the screenshot maintenance rules.
+
+## Development
+
+### Repository Layout
+
+```text
+.
+|-- backend/              FastAPI API, worker, models, migrations, and service tests
+|-- frontend/             React workspace, unit tests, and Playwright UI tests
+|-- docs/                 Product, operator, evidence, and architecture documentation
+|   `-- brain/            Maintained architecture and context navigation
+|-- tools/                Operational, migration, benchmark, and verification utilities
+`-- data/                 Local runtime databases and evidence stores; ignored by Git
+```
+
+### Development Commands
+
+| Check | Command |
+| --- | --- |
+| Backend tests | `cd backend; uv run --extra dev --locked pytest` |
+| Ruff lint | `cd backend; uv run --extra dev --locked ruff check . ../tools` |
+| Ruff format | `cd backend; uv run --extra dev --locked ruff format --check . ../tools` |
+| Strict MyPy | `cd backend; uv run --extra dev --locked mypy app` |
+| Frontend lint | `cd frontend; npm run lint` |
+| TypeScript | `cd frontend; npm run typecheck` |
+| Frontend tests | `cd frontend; npm run test` |
+| Production build | `cd frontend; npm run build` |
+| Mocked Playwright | `cd frontend; npm run e2e` |
+| Full-stack Golden Path | `uv run --project backend --extra dev --locked python tools/run_full_stack_e2e.py` |
+| README screenshot review | `cd frontend; npm run review:readme-screens` |
+
+GitHub Actions runs Backend, Frontend, Playwright, and Golden Path jobs. The mocked Playwright suite
+provides broad deterministic UI coverage; the Golden Path exercises the real React, API, worker,
+crawler, SQLite, evidence, projection, comparison, and UI lifecycle on a local fixture. See
+[Full-stack testing](docs/full-stack-testing.md).
+
+Historical projection preparation, structured-content preparation, evidence garbage collection,
+URL identity migration, dependency maintenance, benchmark commands, and detailed collection limits
+are documented in their focused operator and architecture guides below. The URL identity migration
+is an explicit offline workflow; never run it against retained data without following
+[its preflight and confirmation process](docs/url-identity-migration.md).
+
+## Privacy, Security, And Limitations
+
+### Privacy And Security
+
+Site Ledger is local-first: SQLite state, captured HTML, browser artifacts, and provider payloads
+remain in local stores unless the operator deliberately moves or exports them. Stored HTML is
+rendered as escaped source in the application, not executed by the dashboard. External Performance
+provider requests occur only when configured and initiated.
+
+Collection destinations are treated as hostile. Static and browser collectors enforce explicit
+network policy, reject unsafe address classes by default, revalidate redirects, avoid ambient proxy
+and credential forwarding, and apply request, response-size, depth, Page, and run bounds. Browser
+capture remains subject to documented Chromium DNS/connection timing limits. Read
+[Network security](docs/network-security.md) before enabling private-network access.
+
+### Current Limitations
+
+- Site Ledger is a source-run local application, not a hosted service or stable release.
+- Static crawling does not execute JavaScript; browser rendering is a separate explicit collector.
+- Collection is manual. Collection Plans select missing-current evidence but do not schedule future
+  work or model freshness yet.
+- There is no GSC, GA4, AI interpretation, full visual regression, or performance-regression engine.
+- Automated Accessibility evidence is useful test output, not WCAG certification.
+- Static crawling is sequential within a run; broad concurrent collection and robots enforcement
+  remain deferred.
+- SQLite and local evidence stores impose practical limits on concurrent and very large workloads.
+- Graph responses are capped at 3,000 nodes and 10,000 edges; filters and focused neighborhoods are
+  preferable for dense Sites. The optional 3D renderer is a large lazy-loaded bundle.
+- The production npm audit currently reports two moderate React Router advisories; high and critical
+  production findings are CI-blocking.
+
+## What's Next
+
+The next substantive product area is **Collection Plans V2**: `refresh_current`, explicit freshness
+semantics, and stale-current groundwork. Longer-term direction includes recurring scheduling,
+GSC/GA4 evidence, broader cross-domain correlation, Web Estate and platform intelligence, and
+evidence-grounded AI interpretation. These are plans, not current capabilities.
+
+## Documentation Map
+
+### Getting Started
+
+- [Product workspace navigation](docs/workspace-navigation.md)
+- [Scan configuration policy](docs/scan-configuration-policy.md)
+- [Page workspaces](docs/page-workspaces.md)
+
+### Users And Operators
+
+- [Site Intelligence](docs/site-intelligence.md)
+- [Findings](docs/findings.md)
+- [Scan comparisons](docs/scan-comparisons.md)
+- [Collection Plans](docs/collection-plans.md)
+- [Structured Page Content](docs/structured-page-content.md)
+- [Browser-rendered observations](docs/browser-rendered-observations.md)
+- [Performance observations](docs/performance-observations.md)
+- [Automated Accessibility observations](docs/accessibility-observations.md)
+- [Resource Inventory](docs/resource-inventory.md)
+- [AI Document Sources](docs/ai-document-sources.md)
+- [Network security](docs/network-security.md)
+
+### Developers
 
 - [Product vision](docs/product-vision.md)
 - [Architecture](docs/architecture.md)
 - [URL identity contract](docs/url-identity-contract.md)
 - [URL identity migration](docs/url-identity-migration.md)
 - [Background jobs](docs/background-jobs.md)
-- [Website graph](docs/website-graph.md)
-- [Graph performance](docs/graph-performance.md)
+- [Scan projections](docs/scan-projections.md)
+- [Website graph](docs/website-graph.md) and [graph performance](docs/graph-performance.md)
 - [Page history and reuse](docs/page-history-and-reuse.md)
-- [Page workspaces](docs/page-workspaces.md)
-- [Structured Page Content](docs/structured-page-content.md)
-- [Browser-rendered observations](docs/browser-rendered-observations.md)
-- [Resource Inventory](docs/resource-inventory.md)
-- [AI Document Sources](docs/ai-document-sources.md)
-- [Deterministic Scan comparisons](docs/scan-comparisons.md)
-- [Full-stack Golden Path testing](docs/full-stack-testing.md)
-- [Collection Plans](docs/collection-plans.md)
-- [Product workspace navigation](docs/workspace-navigation.md)
+- [Page Category Rules](docs/page-category-rules.md)
+- [Full-stack testing](docs/full-stack-testing.md)
+- [Documentation writing style](docs/writing-style.md)
 
-## Current Limitations
+### Coding Agents And Architecture Navigation
 
-- The crawler observes static HTTP responses and does not render JavaScript.
-- Robots.txt enforcement and concurrent requests inside one crawl remain deferred.
-- Each crawl currently uses a sequential request loop with an optional delay.
-- Graph hard caps are 3,000 nodes and 10,000 edges; filters or focused neighborhoods are preferable
-  for dense scans.
-- The Three.js renderer is a large lazy chunk and triggers Vite's chunk-size warning.
-- SQLite can become a bottleneck for large aggregate graph queries and concurrent local work.
-- The full-stack Golden Path covers one deterministic static crawl and adjacent comparison workflow;
-  broader browser-rendered and failure-recovery workflows remain outside that focused path.
-- React Router production audit advisories remain an existing dependency concern.
-
-## Roadmap
-
-Future direction is designed to support screenshots, richer asset
-inventories, environment comparisons, findings, performance regression interpretation, analytics
-integrations, semantic analysis, and investigation workflow.
-These capabilities are planned areas, not current product claims.
+- [Second brain overview](docs/brain/README.md)
+- [Agent guide](docs/brain/AGENT_GUIDE.md)
+- [Context packs](docs/brain/CONTEXT_PACKS.md)
+- [Invariants](docs/brain/INVARIANTS.md)
+- [Current development frontier](docs/brain/FRONTIER.md)
