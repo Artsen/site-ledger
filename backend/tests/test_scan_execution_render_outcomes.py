@@ -250,3 +250,12 @@ async def test_ad_hoc_scan_queues_and_executes_site_less_render_run(
     assert all(item.navigation_http_status == 200 for item in observations)
     assert all(item.renderer_version == "2" for item in observations)
     assert all(item.snapshot_id is not None for item in observations)
+    db_session.refresh(scan)
+    assert (
+        scan.rendered_attempted_count,
+        scan.rendered_completed_count,
+        scan.rendered_failed_count,
+        scan.rendered_skipped_count,
+        scan.rendered_blocked_request_count,
+        scan.rendered_artifact_count,
+    ) == (0, 0, 0, 0, 0, 0)

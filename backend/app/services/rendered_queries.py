@@ -208,6 +208,9 @@ def list_scan_rendered_observations(
     limit: int = 50,
     offset: int = 0,
 ) -> RenderedObservationIndexList:
+    from app.services.scan_render_authority import scan_render_observation_ownership
+
+    ownership = scan_render_observation_ownership(scan_id)
     artifacts = (
         select(
             RenderedArtifact.rendered_observation_id.label("observation_id"),
@@ -228,7 +231,7 @@ def list_scan_rendered_observations(
         select(RenderedObservation, ResourceSnapshot, artifacts)
         .join(ResourceSnapshot, ResourceSnapshot.id == RenderedObservation.snapshot_id)
         .outerjoin(artifacts, artifacts.c.observation_id == RenderedObservation.id)
-        .where(ResourceSnapshot.scan_id == scan_id)
+        .where(ownership)
     )
     if search:
         pattern = f"%{search}%"
@@ -334,14 +337,14 @@ def list_scan_rendered_observations(
         )
         .select_from(RenderedObservation)
         .join(ResourceSnapshot)
-        .where(ResourceSnapshot.scan_id == scan_id)
+        .where(ownership)
     ).one()
     artifact_total = (
         db.scalar(
             select(func.count(RenderedArtifact.id))
             .join(RenderedObservation)
             .join(ResourceSnapshot)
-            .where(ResourceSnapshot.scan_id == scan_id)
+            .where(ownership)
         )
         or 0
     )

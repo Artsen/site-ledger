@@ -1,6 +1,6 @@
 # Site Ledger Knowledge Graph
 
-Canonical snapshot: `main@6e17e08e641b48660a7ed7a13d9227b288fcafc6` (2026-09-03).
+Canonical snapshot: `main@69b9565150ed9c774e0e91cfab6c8dab54e27970` (2026-09-04).
 
 This is a generated human-readable projection of `graph.json`. Edit `graph.json`, then regenerate this file.
 
@@ -40,6 +40,7 @@ flowchart LR
     sources -->|declares_candidates_for| site_identity
     sources -->|normalizes_with| url_identity
     static_scan -->|executed_by| background_jobs
+    static_scan -->|triggers| render
     sources -->|refresh_executed_by| background_jobs
     render -->|executed_by| background_jobs
     performance -->|executed_by| background_jobs

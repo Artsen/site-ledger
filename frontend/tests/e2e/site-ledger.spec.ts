@@ -868,6 +868,37 @@ test("terminal Scan projections switch from fallback and preserve ready results 
   await expect(page.getByText("Website topology graph")).toBeVisible();
 });
 
+test("modern Scan Render authority shows queued targets before attempts", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/scans/1", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...scan,
+        status: "completed",
+        website_property_id: 3,
+        website_property_name: "Example Site",
+        rendered_attempted_count: 99,
+        rendered_completed_count: 99,
+        render_run_id: 77,
+        render_run_status: "queued",
+        render: scanRenderSummary({ authority: "render_run", render_run_id: 77, status: "queued", selected_count: 2, target_count: 2, unattempted_target_count: 2 }),
+        scope_config: { ...scope, render_mode: "all_eligible" },
+      }),
+    });
+  });
+
+  await page.goto("/scans/1");
+
+  const summary = page.getByRole("region", { name: "Scan render execution summary" });
+  await expect(summary).toContainText("Browser Render Run #77");
+  await expect(summary).toContainText("Queued");
+  await expect(summary).toContainText("Targets2");
+  await expect(summary).toContainText("Attempted0");
+  await expect(summary.getByRole("link", { name: "Open Render Run" })).toHaveAttribute("href", "/sites/3/rendered/runs/77");
+  await expect(page.getByRole("tab", { name: /Rendered 2/ })).toBeVisible();
+});
+
 test("saved-Site observations link to their exact Page workspace while ad hoc observations do not", async ({ page }) => {
   await mockApi(page);
   await page.route("**/api/snapshots/9", async (route) => {
@@ -1834,6 +1865,30 @@ const scope = {
   max_redirects: 10,
 };
 
+function scanRenderSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    authority: "none",
+    selected_count: 0,
+    render_run_id: null,
+    status: null,
+    target_count: 0,
+    attempted_count: 0,
+    completed_count: 0,
+    failed_count: 0,
+    skipped_count: 0,
+    blocked_request_count: 0,
+    artifact_count: 0,
+    retained_observation_count: 0,
+    deleted_observation_count: 0,
+    unattempted_target_count: 0,
+    retained_artifact_count: 0,
+    started_at: null,
+    finished_at: null,
+    legacy: false,
+    ...overrides,
+  };
+}
+
 const scan = {
   id: 1,
   website_property_id: null,
@@ -1850,6 +1905,7 @@ const scan = {
   failed_count: 0,
   skipped_count: 0,
   queued_count: 2,
+  render: scanRenderSummary(),
   stop_reason: null,
   fatal_error_message: null,
 };

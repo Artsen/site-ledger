@@ -13,6 +13,26 @@ source Scan, and are deleted with that Scan using reference-aware artifact clean
 technical outcomes belong to the Render Run and do not change the Scan terminal result. Historical
 Scan-bound observations remain readable without invented Run membership.
 
+## Scan Render authority
+
+Modern browser execution outcomes belong only to the original `trigger=scan` Render Run linked by
+`source_scan_id`. The Scan retains `rendered_selected_count` as selection provenance; its other
+persisted Render counters are historical compatibility fields and are not synchronized from modern
+Runs. If anomalous historical data contains multiple scan-triggered Runs for one Scan, the earliest
+Run by creation time and ID is selected deterministically. Manual Runs and rerenders never replace
+that authority.
+
+Scan API reads normalize this boundary as `render.authority`:
+
+- `render_run` uses the exact linked Run's lifecycle, execution counters, and retained evidence;
+- `legacy_scan` uses pre-RenderRun Scan counters and NULL-run observations tied to Scan snapshots;
+- `none` means neither modern Run authority nor historical Scan-owned execution evidence exists.
+
+For modern authority, the Scan Rendered view filters by the exact Render Run ID. For legacy
+authority, it filters to NULL-run observations from that Scan's snapshots. Later rerenders are not
+mixed into the original Scan result. Deleting a modern Run does not resurrect unused Scan outcome
+columns as current execution truth.
+
 Static HTTP evidence remains authoritative. Each frozen target receives at most one immutable
 RenderedObservation. Rendered DOM is not parsed into static metadata or links and does not
 enter the graph. Browser technical success is distinct from requested-Page success: normal Page

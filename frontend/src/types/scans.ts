@@ -1,3 +1,24 @@
+export type ScanRenderSummary = {
+  authority: "render_run" | "legacy_scan" | "none";
+  selected_count: number;
+  render_run_id: number | null;
+  status: string | null;
+  target_count: number;
+  attempted_count: number;
+  completed_count: number;
+  failed_count: number;
+  skipped_count: number;
+  blocked_request_count: number;
+  artifact_count: number;
+  retained_observation_count: number;
+  deleted_observation_count: number;
+  unattempted_target_count: number;
+  retained_artifact_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+  legacy: boolean;
+};
+
 export type Scan = {
   id: number;
   website_property_id: number | null;
@@ -30,6 +51,7 @@ export type Scan = {
   rendered_artifact_count: number;
   render_run_id?: number | null;
   render_run_status?: string | null;
+  render: ScanRenderSummary;
   static_request_attempt_count: number;
   static_retry_request_count: number;
   static_recovered_after_retry_count: number;

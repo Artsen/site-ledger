@@ -320,6 +320,10 @@ Treat crawling and source refresh as SSRF boundaries:
   observations or counters to apply a newer outcome policy.
 - A Render Run freezes its targets and effective configuration before execution. Each target may
   produce at most one terminal immutable observation; rerendering always creates a new Run.
+- A Scan owns static collection and Render target-selection provenance. Its original scan-triggered
+  Render Run is the sole authority for modern Render lifecycle and execution outcomes; never copy
+  those outcomes back into the Scan. Preserve pre-RenderRun Scan counters and NULL-run observations
+  as truthful historical compatibility evidence.
 - Standalone Render Runs have no Scan snapshot provenance. Scan provenance is optional, while the
   frozen WebResource and requested URL remain authoritative target identity.
 - A Scan-triggered Render Run may be Site-less only while its ad-hoc source Scan remains its durable

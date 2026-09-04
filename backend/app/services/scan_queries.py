@@ -175,7 +175,9 @@ def list_scan_history(
     order = order_col.desc() if direction == "desc" else order_col.asc()
     id_order = Scan.id.desc() if direction == "desc" else Scan.id.asc()
     scans = list(db.scalars(query.order_by(order, id_order).limit(limit).offset(offset)))
-    return ScanHistory(items=scans, total=total, limit=limit, offset=offset)
+    from app.services.scan_render_authority import scan_reads
+
+    return ScanHistory(items=scan_reads(db, scans), total=total, limit=limit, offset=offset)
 
 
 def list_scan_pages_routed(
