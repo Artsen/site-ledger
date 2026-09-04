@@ -27,6 +27,7 @@ from app.models import (
 from app.schemas.collection_plans import CollectionPlanRequest
 from app.services.collection_plan_serialization import lock_site_for_collection_plan_change
 from app.services.collection_plans import create_collection_plan
+from app.services.url_identity import ensure_url_identity_state
 
 
 def _factory(
@@ -46,7 +47,11 @@ def _factory(
         cursor.close()
 
     Base.metadata.create_all(engine)
-    return engine, sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    with factory() as db:
+        ensure_url_identity_state(db)
+        db.commit()
+    return engine, factory
 
 
 def _seed_site(factory: sessionmaker[Session], page_count: int = 3) -> int:
@@ -192,7 +197,7 @@ def test_concurrent_plan_creation_serializes_before_selection(
 def test_plan_creation_lock_timeout_returns_conflict_without_partial_work(tmp_path: Path) -> None:
     engine, factory = _factory(tmp_path / "timeout.db", busy_timeout_ms=25)
     site_id = _seed_site(factory)
-    app = create_app()
+    app = create_app(session_factory=factory)
 
     def override_db() -> Generator[Session, None, None]:
         with factory() as db:
