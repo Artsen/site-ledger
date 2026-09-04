@@ -23,13 +23,13 @@ const plan = {
   target_mode: "missing_current",
   context_identity: "accessibility:test",
   context: { profile: "desktop" },
-  active_page_count: 501,
-  eligible_count: 501,
-  covered_count_at_creation: 0,
-  in_flight_count_at_creation: 0,
-  active_collection_count_at_creation: 0,
-  missing_count_at_creation: 501,
-  selection_reason_counts: { missing_current: 501, refresh_current: 0 },
+  active_page_count: 5,
+  eligible_count: 5,
+  covered_count_at_creation: 2,
+  in_flight_count_at_creation: 1,
+  active_collection_count_at_creation: null,
+  missing_count_at_creation: 3,
+  selection_reason_counts: { missing_current: 2 },
   ineligible_count_at_creation: 0,
   target_count: 501,
   batch_size: 250,
@@ -80,6 +80,12 @@ describe("Collection Plans workspace", () => {
     expect(screen.getByText("collection-planner-v1")).toBeInTheDocument();
     expect(screen.getAllByText("Missing current").length).toBeGreaterThan(0);
     expect(screen.getByText("https://example.test/page")).toBeInTheDocument();
+    expect(screen.getByText("Covered at creation").nextSibling).toHaveTextContent("2");
+    expect(screen.getByText("Missing at creation").nextSibling).toHaveTextContent("3");
+    expect(screen.getByText("Missing and in flight").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("Total active collection").nextSibling).toHaveTextContent(
+      "Not recorded in V1",
+    );
   });
 
   it("shows target mode in Plan history", async () => {

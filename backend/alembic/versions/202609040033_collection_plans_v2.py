@@ -33,14 +33,12 @@ def upgrade() -> None:
         sa.text(
             """
             UPDATE collection_plans
-            SET active_collection_count_at_creation = in_flight_count_at_creation,
-                missing_count_at_creation = target_count,
+            SET missing_count_at_creation = target_count + in_flight_count_at_creation,
                 selection_reason_counts_json = json_object('missing_current', target_count)
             """
         )
     )
     with op.batch_alter_table("collection_plans") as batch:
-        batch.alter_column("active_collection_count_at_creation", nullable=False)
         batch.alter_column("missing_count_at_creation", nullable=False)
         batch.alter_column("selection_reason_counts_json", nullable=False)
         batch.drop_constraint("ck_collection_plan_target_mode", type_="check")

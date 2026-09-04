@@ -13,7 +13,10 @@ immutable evidence.
 ## Selection Contract
 
 New Plans use `collection-planner-v2`. Historical `collection-planner-v1` Plans and checksums remain
-readable and are never reinterpreted. V2 supports:
+readable and are never reinterpreted. V1 recorded missing-and-in-flight Pages, but not V2's broader
+total of all equivalent active collection. Migrated V1 Plans therefore expose total active
+collection as unknown rather than inventing a value; their total missing count is reconstructed as
+frozen targets plus missing Pages that were already in flight. V2 supports:
 
 - `missing_current`: eligible Pages without compatible evidence, excluding equivalent collection
   already active.

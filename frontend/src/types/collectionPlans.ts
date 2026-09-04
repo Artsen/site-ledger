@@ -73,7 +73,7 @@ export type CollectionPlan = {
   eligible_count: number;
   covered_count_at_creation: number;
   in_flight_count_at_creation: number;
-  active_collection_count_at_creation: number;
+  active_collection_count_at_creation: number | null;
   missing_count_at_creation: number;
   selection_reason_counts: Record<string, number>;
   ineligible_count_at_creation: number;

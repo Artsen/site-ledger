@@ -3,9 +3,13 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from alembic import command
+from app.api.collection_plan_routes import _read
 from app.config import get_settings
+from app.services.collection_plans import get_collection_plan
 
 
 def test_populated_v1_collection_plan_upgrade_and_downgrade(tmp_path: Path, monkeypatch) -> None:
@@ -16,7 +20,7 @@ def test_populated_v1_collection_plan_upgrade_and_downgrade(tmp_path: Path, monk
     try:
         command.upgrade(config, "202609030032")
         with sqlite3.connect(database_path) as connection:
-            _insert_site_page(connection)
+            _insert_site_pages(connection)
             _insert_plan(
                 connection, plan_id=1, planner="collection-planner-v1", mode="missing_current"
             )
@@ -31,10 +35,19 @@ def test_populated_v1_collection_plan_upgrade_and_downgrade(tmp_path: Path, monk
             assert row == (
                 "collection-planner-v1",
                 "missing_current",
-                0,
-                1,
-                '{"missing_current":1}',
+                None,
+                3,
+                '{"missing_current":2}',
             )
+            assert connection.execute(
+                "SELECT eligible_count, covered_count_at_creation, "
+                "in_flight_count_at_creation, target_count, target_selection_sha256 "
+                "FROM collection_plans WHERE id = 1"
+            ).fetchone() == (5, 2, 1, 2, "3" * 64)
+            assert connection.execute(
+                "SELECT position, web_resource_id, selection_reason "
+                "FROM collection_plan_targets WHERE collection_plan_id = 1 ORDER BY position"
+            ).fetchall() == [(0, 1, "missing_current"), (1, 2, "missing_current")]
             _insert_plan(
                 connection,
                 plan_id=2,
@@ -44,12 +57,24 @@ def test_populated_v1_collection_plan_upgrade_and_downgrade(tmp_path: Path, monk
             )
             assert list(connection.execute("PRAGMA foreign_key_check")) == []
 
+        engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+        with Session(engine) as db:
+            historical = get_collection_plan(db, 1, 1)
+            assert historical is not None
+            read = _read(historical)
+            assert read.planner_version == "collection-planner-v1"
+            assert read.in_flight_count_at_creation == 1
+            assert read.missing_count_at_creation == 3
+            assert read.active_collection_count_at_creation is None
+            assert read.selection_reason_counts == {"missing_current": 2}
+        engine.dispose()
+
         command.downgrade(config, "202609030032")
         with sqlite3.connect(database_path) as connection:
             assert connection.execute("SELECT id FROM collection_plans").fetchall() == [(1,)]
             assert connection.execute(
-                "SELECT collection_plan_id FROM collection_plan_targets"
-            ).fetchall() == [(1,)]
+                "SELECT collection_plan_id FROM collection_plan_targets ORDER BY position"
+            ).fetchall() == [(1,), (1,)]
             with pytest.raises(sqlite3.IntegrityError):
                 connection.execute(
                     "UPDATE collection_plans SET target_mode = 'refresh_current' WHERE id = 1"
@@ -67,7 +92,7 @@ def test_populated_v1_collection_plan_upgrade_and_downgrade(tmp_path: Path, monk
         get_settings.cache_clear()
 
 
-def _insert_site_page(connection: sqlite3.Connection) -> None:
+def _insert_site_pages(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute(
         "INSERT INTO website_properties "
@@ -76,12 +101,19 @@ def _insert_site_page(connection: sqlite3.Connection) -> None:
         "(1, 'Migration Site', 'https://example.test/', 'https://example.test/', "
         "'Other', 'Other', 'Unknown', '{}')"
     )
-    connection.execute(
+    connection.executemany(
         "INSERT INTO web_resources "
         "(id, resource_type, normalized_url, scheme, host, path, query) VALUES "
-        "(1, 'page', 'https://example.test/page', 'https', 'example.test', '/page', '')"
+        "(?, 'page', ?, 'https', 'example.test', ?, '')",
+        [
+            (resource_id, f"https://example.test/page-{resource_id}", f"/page-{resource_id}")
+            for resource_id in range(1, 6)
+        ],
     )
-    connection.execute("INSERT INTO site_pages (website_property_id, resource_id) VALUES (1, 1)")
+    connection.executemany(
+        "INSERT INTO site_pages (website_property_id, resource_id) VALUES (1, ?)",
+        [(resource_id,) for resource_id in range(1, 6)],
+    )
     connection.commit()
 
 
@@ -108,13 +140,13 @@ def _insert_plan(
         mode,
         f"accessibility:test:{plan_id}",
         "{}",
-        1,
+        1 if v2 else 5,
         str(plan_id) * 64,
-        1,
-        0 if not v2 else 1,
+        1 if v2 else 5,
+        1 if v2 else 2,
+        0 if v2 else 1,
         0,
-        0,
-        1,
+        1 if v2 else 2,
         250,
         0,
         str(plan_id + 2) * 64,
@@ -131,20 +163,25 @@ def _insert_plan(
         "collection_plan_id, position, web_resource_id, requested_url, selection_reason, "
         "target_context_json"
     )
-    target_values: list[object] = [
-        plan_id,
-        0,
-        1,
-        "https://example.test/page",
-        mode,
-        "{}",
-    ]
     if v2:
         target_columns += ", latest_compatible_observed_at"
-        target_values.append("2026-09-01 15:24:00+00:00")
-    target_placeholders = ", ".join("?" for _ in target_values)
-    connection.execute(
-        f"INSERT INTO collection_plan_targets ({target_columns}) VALUES ({target_placeholders})",
-        target_values,
-    )
+    target_count = 1 if v2 else 2
+    for position in range(target_count):
+        resource_id = position + 1
+        target_values: list[object] = [
+            plan_id,
+            position,
+            resource_id,
+            f"https://example.test/page-{resource_id}",
+            mode,
+            "{}",
+        ]
+        if v2:
+            target_values.append("2026-09-01 15:24:00+00:00")
+        target_placeholders = ", ".join("?" for _ in target_values)
+        connection.execute(
+            f"INSERT INTO collection_plan_targets ({target_columns}) "
+            f"VALUES ({target_placeholders})",
+            target_values,
+        )
     connection.commit()

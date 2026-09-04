@@ -59,6 +59,7 @@ from app.services.background_jobs import (
     enqueue_structured_content_job,
     request_cancellation,
 )
+from app.services.collection_plan_serialization import lock_site_for_collection_plan_change
 from app.services.job_types import ACTIVE_JOB_STATUSES, TERMINAL_JOB_STATUSES
 from app.services.performance_collection import create_performance_run
 from app.services.performance_providers import (
@@ -624,6 +625,8 @@ def batch_target_counts(target_count: int, batch_size: int) -> list[int]:
 def create_collection_plan(
     db: Session, site_id: int, request: CollectionPlanRequest
 ) -> CollectionPlan:
+    if lock_site_for_collection_plan_change(db, site_id) is None:
+        raise ValueError("Site not found.")
     selection = build_selection(db, site_id, request)
     if not selection.collectable:
         raise ValueError(selection.non_collectable_reason or "Context is not collectable.")

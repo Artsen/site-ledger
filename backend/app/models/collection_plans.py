@@ -49,7 +49,7 @@ class CollectionPlan(Base):
     eligible_count: Mapped[int] = mapped_column(Integer)
     covered_count_at_creation: Mapped[int] = mapped_column(Integer)
     in_flight_count_at_creation: Mapped[int] = mapped_column(Integer)
-    active_collection_count_at_creation: Mapped[int] = mapped_column(Integer, default=0)
+    active_collection_count_at_creation: Mapped[int | None] = mapped_column(Integer)
     missing_count_at_creation: Mapped[int] = mapped_column(Integer, default=0)
     selection_reason_counts_json: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
     ineligible_count_at_creation: Mapped[int] = mapped_column(Integer)

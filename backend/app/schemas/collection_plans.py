@@ -91,7 +91,7 @@ class CollectionPlanRead(BaseModel):
     eligible_count: int
     covered_count_at_creation: int
     in_flight_count_at_creation: int
-    active_collection_count_at_creation: int
+    active_collection_count_at_creation: int | None
     missing_count_at_creation: int
     selection_reason_counts: dict[str, int]
     ineligible_count_at_creation: int

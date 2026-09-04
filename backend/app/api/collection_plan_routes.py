@@ -18,6 +18,7 @@ from app.schemas.collection_plans import (
     CollectionPlanTargetRead,
     CollectionPreviewTarget,
 )
+from app.services.collection_plan_serialization import CollectionPlanSerializationBusyError
 from app.services.collection_plans import (
     Selection,
     _processed,
@@ -155,6 +156,9 @@ def preview_collection_plan(
 def create_plan(site_id: int, payload: CollectionPlanRequest, db: DbSession) -> CollectionPlanRead:
     try:
         return _read(create_collection_plan(db, site_id, payload))
+    except CollectionPlanSerializationBusyError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         db.rollback()
         message = str(exc)
