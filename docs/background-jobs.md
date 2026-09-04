@@ -50,6 +50,26 @@ queued job that has no online worker.
 APIs create the domain record and enqueue the job in the same transaction where practical. Scan and
 source refresh endpoints return `202 Accepted` once work is durable.
 
+Every supported job type has one typed lifecycle contract in
+`backend/app/services/job_lifecycle.py`. The static registry declares queued cancellation, running
+cancellation, failure, interruption/lease-expiry, domain reconciliation, and required follow-up
+behavior explicitly; unsupported capabilities are registered as `None`. Domain services continue
+to own their state mutations, while lifecycle adapters only stage mutations in the caller's
+Session. BackgroundJob callers retain ownership of commits, leases, and transaction fencing.
+
+| Job type | Native/domain state | Queued cancel | Recovery/reconcile | Required follow-up |
+| --- | --- | --- | --- | --- |
+| Scan | Scan | native cancellation | yes | projection and active category rules |
+| Source refresh | SourceRefresh | native cancellation | yes | none |
+| Projection | ScanProjectionBuild | build cancellation | yes | waiting and adjacent comparisons |
+| Comparison | ScanComparisonBuild | build cancellation | yes | none |
+| Category rules | PageCategoryRuleRun | run cancellation | yes | requested coalesced rerun |
+| Structured content | job-owned preparation | job only | job lifecycle only | none |
+| Performance | PerformanceRun | native cancellation | yes | none |
+| Accessibility | AccessibilityRun | native cancellation | yes | none |
+| Render | RenderRun | native cancellation | yes | none |
+| Finding evaluation | FindingEvaluation | evaluation cancellation | yes | none |
+
 Workers claim queued jobs deterministically by priority, availability time, creation time, and id.
 Claiming sets a lease token and lease expiry. Heartbeats and progress updates are accepted only from
 the holder of the current lease.
@@ -77,8 +97,9 @@ and stages domain and BackgroundJob terminal state in one transaction, so recove
 between ownership validation and domain mutation. Heartbeats remain mutable operational state and
 do not create permanent `JobEvent` rows.
 
-Cancellation is cooperative. Direct cancellation stages a queued job and its native Scan, Source
-Refresh, Performance, Accessibility, Render, or Comparison build terminal state in one transaction.
+Cancellation is cooperative. Direct cancellation stages a queued job and its applicable native
+Scan, Source Refresh, Projection, Comparison, Category Rule, Performance, Accessibility, Render, or
+Finding evaluation terminal state in one transaction.
 A running job stores `cancellation_requested_at`; handlers check that flag between fetches or source
 parsing steps, save partial results, and finish as `cancelled`.
 

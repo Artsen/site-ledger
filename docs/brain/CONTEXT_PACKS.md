@@ -6,11 +6,13 @@ Use these as **minimum viable context** for a task. `graph.json` remains the can
 
 Read first:
 - `backend/app/services/background_jobs.py`
+- `backend/app/services/job_lifecycle.py`
 - `backend/app/services/job_handlers.py`
 - `backend/app/worker.py`
 - `docs/background-jobs.md`
 - `backend/tests/test_execution_ownership_fencing.py`
 - `backend/tests/test_worker_resilience.py`
+- `backend/tests/test_job_lifecycle_registry.py`
 
 Then, for a specific job type, add that domain's service/model/tests.
 

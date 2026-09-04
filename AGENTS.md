@@ -132,6 +132,8 @@ behavior. Keep storage behind the existing content-store abstraction.
 - crawler.static_crawler owns breadth-first collection and observation persistence.
 - storage.content_store owns exact compressed response evidence.
 - services.background_jobs owns queue, lease, heartbeat, progress, cancellation, and worker health.
+- services.job_lifecycle owns the exhaustive JobType-to-domain lifecycle registration. Lifecycle
+  hooks stage domain mutations but do not own commits or lease authorization.
 - services.job_handlers adapts jobs to domain execution.
 - services.site_* owns saved-Site behavior and queries.
 - services.source_* owns Sources, refresh, and Inventory.
@@ -558,6 +560,10 @@ Do not disable checks or weaken tests to force passing results.
 - Queued native cancellation must commit BackgroundJob and native terminal state together. Required
   post-success work may use an idempotent recovery protocol when its domain terminal commit is an
   earlier transaction; recovery must ensure that work before reconciling the BackgroundJob.
+- Adding or changing a JobType requires updating the JobType vocabulary, handler registry, and
+  lifecycle registry; explicitly decide queued/running cancellation, failure, shutdown/lease
+  interruption, reconciliation, and follow-up behavior, then extend completeness and durable
+  lifecycle regression coverage.
 - Do not compensate for event-loop starvation by merely increasing job lease timeout defaults.
 - Avoid unrelated refactors and dependency upgrades.
 - Do not create fake data, placeholder APIs, or controls that do nothing.

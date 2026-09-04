@@ -6,7 +6,6 @@ import threading
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from sqlalchemy.exc import OperationalError
@@ -15,22 +14,21 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import is_transient_database_lock
 from app.models import (
-    AccessibilityRun,
     BackgroundJob,
-    PageCategoryRuleRun,
-    PerformanceRun,
-    RenderRun,
     Scan,
     SourceRefresh,
 )
 from app.services import background_jobs
-from app.services.accessibility_collection import (
-    execute_accessibility_run,
-    mark_accessibility_run_failed,
-)
+from app.services.accessibility_collection import execute_accessibility_run
 from app.services.category_rules import reconcile_site
-from app.services.finding_evaluations import execute_evaluation, mark_evaluation_terminal
-from app.services.job_followups import ensure_required_followups, ensure_terminal_scan_followups
+from app.services.finding_evaluations import execute_evaluation
+from app.services.job_followups import ensure_required_followups
+from app.services.job_lifecycle import (
+    InterruptionReason,
+    stage_domain_cancelled,
+    stage_domain_failed,
+    stage_domain_interrupted,
+)
 from app.services.job_types import (
     JOB_STATUS_CANCELLED,
     JOB_STATUS_COMPLETED,
@@ -48,18 +46,16 @@ from app.services.job_types import (
     JOB_TYPE_STRUCTURED_CONTENT_BUILD,
     ExecutionOwnershipLost,
 )
-from app.services.performance_collection import execute_performance_run, mark_performance_run_failed
-from app.services.render_runs import execute_render_run, mark_render_run_failed
+from app.services.performance_collection import execute_performance_run
+from app.services.render_runs import execute_render_run
 from app.services.scan_comparisons import (
     ComparisonBuildCancelled,
     execute_comparison_build,
-    mark_comparison_build_terminal,
 )
 from app.services.scan_execution import ScanExecutionCoordinator
 from app.services.scan_projections import (
     ProjectionBuildCancelled,
     execute_projection_build,
-    mark_projection_build_terminal,
 )
 from app.services.source_refresh import execute_source_refresh
 from app.services.structured_content import build_missing_structured_content
@@ -375,44 +371,28 @@ class CategoryRuleEvaluationJobHandler:
         return await asyncio.to_thread(self._execute_blocking, run_id, context)
 
     def _execute_blocking(self, run_id: int, context: JobExecutionContext) -> HandlerResult:
-        try:
-            with self.session_factory() as db:
-                run = reconcile_site(
-                    db,
-                    run_id,
-                    should_cancel=context.check_cancelled,
-                    progress=lambda current, total: context.progress(
-                        phase="reconciling",
-                        current_operation="Applying Page category Rules",
-                        current=current,
-                        total=total,
-                        unit="Pages",
-                    ),
-                    fence_domain_mutation=context.fence_domain_mutation,
-                )
-                result = {
-                    "run_id": run.id,
-                    "site_id": run.website_property_id,
-                    "rule_supports_added": run.rule_supports_added,
-                    "rule_supports_removed": run.rule_supports_removed,
-                }
-                if run.status == "cancelled":
-                    raise JobCancelled("Category Rule evaluation cancelled by user.")
-        except JobCancelled:
-            raise
-        except ExecutionOwnershipLost:
-            raise
-        except Exception as exc:
-            with self.session_factory() as db:
-                failed_run = db.get(PageCategoryRuleRun, run_id)
-                if failed_run:
-                    failed_run.status = "failed"
-                    failed_run.finished_at = datetime.now(UTC)
-                    failed_run.error_type = type(exc).__name__
-                    failed_run.error_message = str(exc)
-                    context.fence_domain_mutation(db)
-                    db.commit()
-            raise
+        with self.session_factory() as db:
+            run = reconcile_site(
+                db,
+                run_id,
+                should_cancel=context.check_cancelled,
+                progress=lambda current, total: context.progress(
+                    phase="reconciling",
+                    current_operation="Applying Page category Rules",
+                    current=current,
+                    total=total,
+                    unit="Pages",
+                ),
+                fence_domain_mutation=context.fence_domain_mutation,
+            )
+            result = {
+                "run_id": run.id,
+                "site_id": run.website_property_id,
+                "rule_supports_added": run.rule_supports_added,
+                "rule_supports_removed": run.rule_supports_removed,
+            }
+            if run.status == "cancelled":
+                raise JobCancelled("Category Rule evaluation cancelled by user.")
         return HandlerResult(result_json=result)
 
 
@@ -927,65 +907,7 @@ def _mark_domain_cancelled(
 ) -> None:
     context = nullcontext(db_or_factory) if isinstance(db_or_factory, Session) else db_or_factory()
     with context as db:
-        now = datetime.now(UTC)
-        if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
-            mark_projection_build_terminal(
-                db,
-                int(job.payload_json.get("projection_build_id", 0)),
-                "cancelled",
-                "cancelled",
-                "Projection build cancelled by user.",
-                commit=commit,
-            )
-        elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
-            mark_evaluation_terminal(
-                db,
-                int(job.payload_json.get("finding_evaluation_id", 0)),
-                "cancelled",
-                error_type="cancelled",
-                error_message="Finding evaluation cancelled by user.",
-            )
-        elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
-            mark_comparison_build_terminal(
-                db,
-                int(job.payload_json.get("comparison_build_id", 0)),
-                "cancelled",
-                "cancelled",
-                "Comparison build cancelled by user.",
-                commit=commit,
-            )
-        elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
-            performance_run = db.get(PerformanceRun, job.performance_run_id)
-            if performance_run:
-                performance_run.status = "cancelled"
-                performance_run.finished_at = now
-        elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN and job.accessibility_run_id:
-            accessibility_run = db.get(AccessibilityRun, job.accessibility_run_id)
-            if accessibility_run:
-                accessibility_run.status = "cancelled"
-                accessibility_run.finished_at = now
-        elif job.job_type == JOB_TYPE_RENDER_RUN and job.render_run_id:
-            render_run = db.get(RenderRun, job.render_run_id)
-            if render_run:
-                render_run.status = "cancelled"
-                render_run.finished_at = now
-        elif job.scan_id:
-            scan = db.get(Scan, job.scan_id)
-            if scan:
-                scan.status = "cancelled"
-                scan.stop_reason = "cancelled_by_user"
-                scan.finished_at = now
-                _enqueue_projection_for_terminal_scan(db, scan, commit=commit)
-        if job.source_refresh_id:
-            refresh = db.get(SourceRefresh, job.source_refresh_id)
-            if refresh:
-                refresh.status = "cancelled"
-                refresh.error_type = "cancelled"
-                refresh.error_message = "Refresh cancelled by user."
-                refresh.finished_at = now
-                if refresh.url_source:
-                    refresh.url_source.last_refresh_status = "cancelled"
-                    refresh.url_source.last_refresh_finished_at = now
+        stage_domain_cancelled(db, job)
         if commit:
             db.commit()
 
@@ -993,82 +915,13 @@ def _mark_domain_cancelled(
 def _mark_domain_interrupted(
     db_or_factory: Session | Callable[[], Session],
     job: BackgroundJob,
-    reason: str,
+    reason: InterruptionReason,
     *,
     commit: bool = True,
 ) -> None:
     context = nullcontext(db_or_factory) if isinstance(db_or_factory, Session) else db_or_factory()
     with context as db:
-        now = datetime.now(UTC)
-        if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
-            mark_projection_build_terminal(
-                db,
-                int(job.payload_json.get("projection_build_id", 0)),
-                "failed",
-                reason,
-                "Worker interrupted during projection build.",
-                commit=commit,
-            )
-        elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
-            mark_evaluation_terminal(
-                db,
-                int(job.payload_json.get("finding_evaluation_id", 0)),
-                "failed",
-                error_type=reason,
-                error_message="Worker interrupted during Finding evaluation.",
-            )
-        elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
-            mark_comparison_build_terminal(
-                db,
-                int(job.payload_json.get("comparison_build_id", 0)),
-                "failed",
-                reason,
-                "Worker interrupted during comparison build.",
-                commit=commit,
-            )
-        elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
-            performance_run = db.get(PerformanceRun, job.performance_run_id)
-            if performance_run:
-                performance_run.status = "failed"
-                performance_run.finished_at = now
-                performance_run.error_summary = "Worker interrupted during Performance collection."
-        elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN and job.accessibility_run_id:
-            accessibility_run = db.get(AccessibilityRun, job.accessibility_run_id)
-            if accessibility_run:
-                accessibility_run.status = "interrupted"
-                accessibility_run.finished_at = now
-                accessibility_run.error_summary = (
-                    "Worker interrupted during Accessibility collection."
-                )
-        elif job.job_type == JOB_TYPE_RENDER_RUN and job.render_run_id:
-            render_run = db.get(RenderRun, job.render_run_id)
-            if render_run:
-                render_run.status = "interrupted"
-                render_run.finished_at = now
-                render_run.error_summary = "Worker interrupted during rendered capture."
-                from app.services.rendered_capture import mark_render_run_capturing_interrupted
-
-                mark_render_run_capturing_interrupted(db, render_run.id, reason, commit=commit)
-        elif job.scan_id:
-            scan = db.get(Scan, job.scan_id)
-            if scan:
-                scan.status = "interrupted"
-                scan.stop_reason = reason
-                scan.finished_at = now
-                from app.services.rendered_capture import mark_capturing_interrupted
-
-                mark_capturing_interrupted(db, scan.id, reason, commit=commit)
-                _enqueue_projection_for_terminal_scan(db, scan, commit=commit)
-        if job.source_refresh_id:
-            refresh = db.get(SourceRefresh, job.source_refresh_id)
-            if refresh:
-                refresh.status = "interrupted"
-                refresh.error_type = reason
-                refresh.error_message = "Worker interrupted before completion."
-                refresh.finished_at = now
-                if refresh.url_source:
-                    refresh.url_source.last_refresh_status = "interrupted"
-                    refresh.url_source.last_refresh_finished_at = now
+        stage_domain_interrupted(db, job, reason)
         if commit:
             db.commit()
 
@@ -1082,63 +935,14 @@ def _mark_domain_failed(
 ) -> None:
     context = nullcontext(db_or_factory) if isinstance(db_or_factory, Session) else db_or_factory()
     with context as db:
-        now = datetime.now(UTC)
-        if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
-            mark_projection_build_terminal(
-                db,
-                int(job.payload_json.get("projection_build_id", 0)),
-                "failed",
-                type(exc).__name__,
-                str(exc),
-                commit=commit,
-            )
-        elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
-            mark_evaluation_terminal(
-                db,
-                int(job.payload_json.get("finding_evaluation_id", 0)),
-                "failed",
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-            )
-        elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
-            mark_comparison_build_terminal(
-                db,
-                int(job.payload_json.get("comparison_build_id", 0)),
-                "failed",
-                type(exc).__name__,
-                str(exc),
-                commit=commit,
-            )
-        elif job.job_type == JOB_TYPE_PERFORMANCE_RUN and job.performance_run_id:
-            mark_performance_run_failed(db, job.performance_run_id, exc, commit=commit)
-        elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN and job.accessibility_run_id:
-            mark_accessibility_run_failed(db, job.accessibility_run_id, exc, commit=commit)
-        elif job.job_type == JOB_TYPE_RENDER_RUN and job.render_run_id:
-            mark_render_run_failed(db, job.render_run_id, exc, commit=commit)
-        elif job.scan_id:
-            scan = db.get(Scan, job.scan_id)
-            if scan:
-                scan.status = "failed"
-                scan.fatal_error_message = str(exc)
-                scan.finished_at = now
-                _enqueue_projection_for_terminal_scan(db, scan, commit=commit)
-        if job.source_refresh_id:
-            refresh = db.get(SourceRefresh, job.source_refresh_id)
-            if refresh:
-                refresh.status = "failed"
-                refresh.error_type = type(exc).__name__
-                refresh.error_message = str(exc)
-                refresh.finished_at = now
-                if refresh.url_source:
-                    refresh.url_source.last_refresh_status = "failed"
-                    refresh.url_source.last_error_type = refresh.error_type
-                    refresh.url_source.last_error_message = refresh.error_message
-                    refresh.url_source.last_refresh_finished_at = now
+        stage_domain_failed(db, job, exc)
         if commit:
             db.commit()
 
 
 def _enqueue_projection_for_terminal_scan(db: Session, scan: Scan, *, commit: bool = True) -> None:
+    from app.services.job_followups import ensure_terminal_scan_followups
+
     ensure_terminal_scan_followups(db, scan)
     if commit:
         db.commit()

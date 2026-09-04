@@ -29,6 +29,9 @@ Landmarks:
 - `background_jobs.guard_execution_ownership()`
 
 The ownership check and domain mutation belong in the **same database transaction**.
+Every supported JobType must also have an explicit lifecycle registration for its applicable domain
+terminalization, reconciliation, and required follow-up behavior; the registry never replaces the
+runtime ownership check or caller-owned transaction.
 
 ## 4. A recovered job may coexist with a zombie worker
 **ID:** `recovered-job-zombie-worker`
