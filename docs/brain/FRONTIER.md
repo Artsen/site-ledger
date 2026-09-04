@@ -1,13 +1,13 @@
 # Development Frontier
 
 This file records non-canonical direction that may matter when planning a change. Canonical graph
-truth is reviewed against post-PR #55 `main`:
+truth is reviewed against post-PR #56 `main`:
 
-`69b9565150ed9c774e0e91cfab6c8dab54e27970`
+`3dcdcfa410f7ed5b956b2f779178083a0927c7a6`
 
-PR #56 clarifies that modern RenderRun records own Render execution outcomes while Scan retains
-selection provenance and historical pre-RenderRun compatibility evidence. Unimplemented work below
-remains non-canonical direction.
+PR #57 decomposes the core backend API router into focused HTTP adapter modules while preserving
+the stable composition import and complete OpenAPI contract. Unimplemented work below remains
+non-canonical direction.
 
 ## Completed Collection Plans V2 work
 
@@ -31,11 +31,17 @@ execution lifecycle and counters. Legacy Scan counters and NULL-run observations
 historical truth, while exact Run filtering prevents later rerenders from entering original Scan
 results. No migration, backfill, or counter synchronization was introduced.
 
+## Completed backend API route decomposition
+
+The stable `app.api.routes.router` now composes focused core domain routers. Shared typed HTTP
+dependencies have one neutral home, and the Projection HTTP helper remains compatibility-exported.
+Domain services, transactions, paths, methods, schemas, errors, and the complete OpenAPI contract
+remain unchanged.
+
 ## Next architectural work
 
 Broader non-binding direction remains:
 
-- decompose `backend/app/api/routes.py`;
 - decompose frontend API contracts and client modules;
 - establish Web Estate identity foundations;
 - add host/domain evidence and discovery;

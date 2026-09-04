@@ -23,6 +23,35 @@ The frontend, API, and worker are separate processes. The API creates durable re
 work. The worker claims jobs and invokes domain services. SQLite and local gzip storage are the
 current implementations.
 
+## API Router Structure
+
+`backend/app/api/routes.py` is the stable composition and compatibility surface for the older core
+API. It includes focused HTTP adapters from:
+
+```text
+app/api/
+|-- routes.py                 composition and compatibility exports
+|-- dependencies.py           shared typed database/query dependencies
+|-- system_routes.py          health
+|-- job_routes.py             jobs, worker health, and events
+|-- scan_routes.py            Scan lifecycle, inputs, deletion, and Page results
+|-- site_routes.py            Site CRUD
+|-- source_routes.py          Sources, refreshes, and current Inventory
+|-- page_routes.py            persistent Pages and Page Categories
+|-- note_routes.py            Site, Scan, and Page notes
+|-- projection_routes.py      Scan Projection lifecycle and HTTP cache policy
+|-- resource_routes.py        Site and Scan Resource Inventory
+|-- graph_routes.py           Scan topology and graph capabilities
+|-- snapshot_routes.py        static observations, links, attempts, and HTML
+|-- legacy_render_routes.py   historical Scan-bound Render evidence adapters
+|-- render_routes.py          first-class RenderRun API
+`-- *_routes.py               other established domain routers
+```
+
+Routers own HTTP adaptation only. Services and query modules retain domain behavior, transaction
+semantics, and evidence ownership. New endpoints belong in the router for their domain; the
+composition module should not accumulate unrelated handlers.
+
 ## Core Domain Model
 
 - WebsiteProperty is a saved Site with reusable configuration.

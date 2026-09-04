@@ -1,6 +1,6 @@
 # Domain Map
 
-Snapshot: `main@69b9565150ed9c774e0e91cfab6c8dab54e27970`.
+Snapshot: `main@3dcdcfa410f7ed5b956b2f779178083a0927c7a6`.
 
 This file is generated from `graph.json`. Source code remains authoritative.
 
@@ -480,5 +480,10 @@ FastAPI route modules expose domain operations and read models while service mod
 **State layer:** `platform`
 
 **Canonical paths:**
-- `backend/app/api`
+- `backend/app/api/routes.py`
+- `backend/app/api/dependencies.py`
+- `backend/app/api/scan_routes.py`
+- `backend/app/api/source_routes.py`
+- `backend/app/api/page_routes.py`
+- `backend/app/api/resource_routes.py`
 - `backend/app/main.py`

@@ -1,6 +1,6 @@
 # Site Ledger Knowledge Graph
 
-Canonical snapshot: `main@69b9565150ed9c774e0e91cfab6c8dab54e27970` (2026-09-04).
+Canonical snapshot: `main@3dcdcfa410f7ed5b956b2f779178083a0927c7a6` (2026-09-04).
 
 This is a generated human-readable projection of `graph.json`. Edit `graph.json`, then regenerate this file.
 
