@@ -49,6 +49,9 @@ class CollectionPlan(Base):
     eligible_count: Mapped[int] = mapped_column(Integer)
     covered_count_at_creation: Mapped[int] = mapped_column(Integer)
     in_flight_count_at_creation: Mapped[int] = mapped_column(Integer)
+    active_collection_count_at_creation: Mapped[int] = mapped_column(Integer, default=0)
+    missing_count_at_creation: Mapped[int] = mapped_column(Integer, default=0)
+    selection_reason_counts_json: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
     ineligible_count_at_creation: Mapped[int] = mapped_column(Integer)
     target_count: Mapped[int] = mapped_column(Integer)
     batch_size: Mapped[int] = mapped_column(Integer)
@@ -76,7 +79,10 @@ class CollectionPlan(Base):
             "evidence_domain IN ('performance', 'accessibility', 'render', 'structured_content')",
             name="ck_collection_plan_evidence_domain",
         ),
-        CheckConstraint("target_mode = 'missing_current'", name="ck_collection_plan_target_mode"),
+        CheckConstraint(
+            "target_mode IN ('missing_current', 'refresh_current')",
+            name="ck_collection_plan_target_mode",
+        ),
         Index(
             "ix_collection_plans_site_created",
             "website_property_id",
@@ -106,6 +112,7 @@ class CollectionPlanTarget(Base):
     )
     requested_url: Mapped[str] = mapped_column(Text)
     selection_reason: Mapped[str] = mapped_column(String(32))
+    latest_compatible_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     target_context_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     source_snapshot_id: Mapped[int | None] = mapped_column(
         ForeignKey("resource_snapshots.id", ondelete="SET NULL"), index=True
