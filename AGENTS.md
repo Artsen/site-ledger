@@ -58,6 +58,10 @@ Use Page instead of WebResource in product copy. Use Observation where Snapshot 
 unnecessarily technical. Internal classes, API fields, routes, and developer documentation may use
 their exact technical names.
 
+When editing public or user-facing documentation, follow `docs/writing-style.md`: lead with product
+outcomes, use product terminology before implementation terminology, distinguish current capability
+from planned work, and preserve evidence semantics.
+
 ## Current Product Boundary
 
 Implemented capabilities include:
