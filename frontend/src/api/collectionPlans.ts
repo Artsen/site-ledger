@@ -1,4 +1,4 @@
-import type { CollectionPlan, CollectionPlanList, CollectionPlanPreview, CollectionPlanRequest } from "../types/collectionPlans";
+import type { CollectionPlan, CollectionPlanList, CollectionPlanPreview, CollectionPlanRequest, CollectionPlanTargetList } from "../types/collectionPlans";
 import { errorFromResponse } from "../utils/errors";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -23,6 +23,9 @@ export const listCollectionPlans = (siteId: string | number, query = "") =>
 
 export const getCollectionPlan = (siteId: string | number, planId: string | number) =>
   request<CollectionPlan>(`/api/sites/${siteId}/collection-plans/${planId}`);
+
+export const listCollectionPlanTargets = (siteId: string | number, planId: string | number) =>
+  request<CollectionPlanTargetList>(`/api/sites/${siteId}/collection-plans/${planId}/targets?limit=100`);
 
 export const cancelCollectionPlan = (siteId: string | number, planId: string | number) =>
   request<CollectionPlan>(`/api/sites/${siteId}/collection-plans/${planId}/cancel`, { method: "POST" });
