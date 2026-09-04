@@ -839,18 +839,20 @@ def cancel_collection_plan(db: Session, plan: CollectionPlan) -> CollectionPlan:
             if job is None or job.status in TERMINAL_JOB_STATUSES:
                 continue
             was_queued = job.status == "queued"
+            run = None
+            if was_queued:
+                run = batch.performance_run or batch.accessibility_run or batch.render_run
+                if run is not None and run.status == "queued":
+                    run.status = "cancelled"
+                    run.error_summary = "Cancelled before execution by Collection Plan."
             request_cancellation(
                 db,
                 job,
                 "Collection Plan cancellation requested.",
                 commit=False,
             )
-            if was_queued:
-                run = batch.performance_run or batch.accessibility_run or batch.render_run
-                if run is not None and run.status == "queued":
-                    run.status = "cancelled"
-                    run.finished_at = job.finished_at
-                    run.error_summary = "Cancelled before execution by Collection Plan."
+            if run is not None:
+                run.finished_at = job.finished_at
         db.commit()
     except Exception:
         db.rollback()

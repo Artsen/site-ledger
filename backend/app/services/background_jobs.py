@@ -649,16 +649,9 @@ def request_cancellation(
         job.status = JOB_STATUS_CANCELLED
         job.cancelled_at = now
         job.finished_at = now
-        if job.job_type == JOB_TYPE_FINDING_EVALUATION:
-            from app.services.finding_evaluations import mark_evaluation_terminal
+        from app.services.job_lifecycle import stage_queued_cancellation
 
-            mark_evaluation_terminal(
-                db,
-                int(job.payload_json.get("finding_evaluation_id", 0)),
-                "cancelled",
-                error_type="cancelled",
-                error_message="Finding evaluation cancelled before execution.",
-            )
+        stage_queued_cancellation(db, job, message, now=now)
         emit_event(db, job.id, "cancelled", "info", "Queued job cancelled.")
     if commit:
         db.commit()
@@ -825,111 +818,9 @@ def recover_expired_jobs(
         job.finished_at = now
         job.error_type = "lease_expired"
         job.error_message = "Worker lease expired before completion."
-        if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
-            from app.services.scan_projections import mark_projection_build_terminal
+        from app.services.job_lifecycle import stage_domain_interrupted
 
-            mark_projection_build_terminal(
-                db,
-                int(job.payload_json.get("projection_build_id", 0)),
-                "failed",
-                "lease_expired",
-                "Worker lease expired during projection build.",
-            )
-            job = db.get(BackgroundJob, job.id) or job
-            ensure_transition(job.status, JOB_STATUS_INTERRUPTED)
-            job.status = JOB_STATUS_INTERRUPTED
-            job.finished_at = now
-            job.error_type = "lease_expired"
-            job.error_message = "Worker lease expired before completion."
-        elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
-            from app.services.scan_comparisons import mark_comparison_build_terminal
-
-            mark_comparison_build_terminal(
-                db,
-                int(job.payload_json.get("comparison_build_id", 0)),
-                "failed",
-                "lease_expired",
-                "Worker lease expired during comparison build.",
-            )
-            job = db.get(BackgroundJob, job.id) or job
-            job.status = JOB_STATUS_INTERRUPTED
-            job.finished_at = now
-            job.error_type = "lease_expired"
-            job.error_message = "Worker lease expired before completion."
-        elif job.job_type == JOB_TYPE_CATEGORY_RULE_EVALUATION:
-            from app.models import PageCategoryRuleRun
-
-            run = db.get(PageCategoryRuleRun, int(job.payload_json.get("run_id", 0)))
-            if run and run.status not in TERMINAL_JOB_STATUSES:
-                run.status = "interrupted"
-                run.finished_at = now
-                run.error_type = "lease_expired"
-                run.error_message = "Worker lease expired during Category Rule evaluation."
-        elif job.job_type == JOB_TYPE_PERFORMANCE_RUN:
-            from app.models import PerformanceRun
-
-            performance_run = db.get(
-                PerformanceRun, int(job.payload_json.get("performance_run_id", 0))
-            )
-            if performance_run and performance_run.status not in TERMINAL_JOB_STATUSES:
-                performance_run.status = "failed"
-                performance_run.finished_at = now
-                performance_run.error_summary = (
-                    "Worker lease expired during Performance collection."
-                )
-        elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN:
-            from app.models import AccessibilityRun
-
-            accessibility_run = db.get(
-                AccessibilityRun, int(job.payload_json.get("accessibility_run_id", 0))
-            )
-            if accessibility_run and accessibility_run.status not in TERMINAL_JOB_STATUSES:
-                accessibility_run.status = "interrupted"
-                accessibility_run.finished_at = now
-                accessibility_run.error_summary = (
-                    "Worker lease expired during Accessibility collection."
-                )
-        elif job.job_type == JOB_TYPE_RENDER_RUN:
-            from app.services.rendered_capture import mark_render_run_capturing_interrupted
-
-            render_run = db.get(RenderRun, int(job.payload_json.get("render_run_id", 0)))
-            if render_run and render_run.status not in TERMINAL_JOB_STATUSES:
-                render_run.status = "interrupted"
-                render_run.finished_at = now
-                render_run.error_summary = "Worker lease expired during rendered capture."
-                mark_render_run_capturing_interrupted(db, render_run.id, "lease_expired")
-        elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
-            from app.services.finding_evaluations import mark_evaluation_terminal
-
-            mark_evaluation_terminal(
-                db,
-                int(job.payload_json.get("finding_evaluation_id", 0)),
-                "failed",
-                error_type="lease_expired",
-                error_message="Worker lease expired during Finding evaluation.",
-            )
-        elif job.scan_id:
-            scan = db.get(Scan, job.scan_id)
-            if scan and scan.status not in TERMINAL_JOB_STATUSES:
-                scan.status = "interrupted"
-                scan.stop_reason = "worker_lease_expired"
-                scan.finished_at = now
-        if job.source_refresh_id:
-            refresh = db.get(SourceRefresh, job.source_refresh_id)
-            if refresh and refresh.status not in TERMINAL_JOB_STATUSES:
-                refresh.status = "interrupted"
-                refresh.error_type = "worker_lease_expired"
-                refresh.error_message = "Worker lease expired before completion."
-                refresh.finished_at = now
-                if refresh.url_source:
-                    refresh.url_source.last_refresh_status = "interrupted"
-                    refresh.url_source.last_refresh_finished_at = now
-                if (
-                    refresh.ai_document_refresh
-                    and refresh.ai_document_refresh.status not in TERMINAL_JOB_STATUSES
-                ):
-                    refresh.ai_document_refresh.status = "interrupted"
-                    refresh.ai_document_refresh.stop_reason = "worker_lease_expired"
+        stage_domain_interrupted(db, job, "lease_expired", now=now)
         emit_event(db, job.id, "lease_expired", "warning", "Worker lease expired.")
         emit_event(db, job.id, "interrupted", "warning", "Job interrupted by recovery.")
         recovered += 1
@@ -938,63 +829,9 @@ def recover_expired_jobs(
 
 
 def reconcile_job_with_domain(db: Session, job: BackgroundJob) -> bool:
-    domain_status: str | None = None
-    if job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
-        from app.models import ScanProjectionBuild
+    from app.services.job_lifecycle import reconcile_domain_status
 
-        build = db.get(ScanProjectionBuild, int(job.payload_json.get("projection_build_id", 0)))
-        if build is None:
-            domain_status = JOB_STATUS_FAILED
-        elif build.status == "ready":
-            domain_status = JOB_STATUS_COMPLETED
-        elif build.status in {"failed", "cancelled"}:
-            domain_status = build.status
-    elif job.job_type == JOB_TYPE_SCAN_COMPARISON_BUILD:
-        from app.models import ScanComparisonBuild
-
-        comparison_build = db.get(
-            ScanComparisonBuild, int(job.payload_json.get("comparison_build_id", 0))
-        )
-        if comparison_build is None:
-            domain_status = JOB_STATUS_FAILED
-        elif comparison_build.status == "ready":
-            domain_status = JOB_STATUS_COMPLETED
-        elif comparison_build.status in {"failed", "cancelled"}:
-            domain_status = comparison_build.status
-    elif job.job_type == JOB_TYPE_CATEGORY_RULE_EVALUATION:
-        from app.models import PageCategoryRuleRun
-
-        run = db.get(PageCategoryRuleRun, int(job.payload_json.get("run_id", 0)))
-        domain_status = run.status if run else JOB_STATUS_FAILED
-    elif job.job_type == JOB_TYPE_PERFORMANCE_RUN:
-        from app.models import PerformanceRun
-
-        performance_run = db.get(PerformanceRun, int(job.payload_json.get("performance_run_id", 0)))
-        domain_status = performance_run.status if performance_run else JOB_STATUS_FAILED
-    elif job.job_type == JOB_TYPE_ACCESSIBILITY_RUN:
-        from app.models import AccessibilityRun
-
-        accessibility_run = db.get(
-            AccessibilityRun, int(job.payload_json.get("accessibility_run_id", 0))
-        )
-        domain_status = accessibility_run.status if accessibility_run else JOB_STATUS_FAILED
-    elif job.job_type == JOB_TYPE_RENDER_RUN:
-        render_run = db.get(RenderRun, int(job.payload_json.get("render_run_id", 0)))
-        domain_status = render_run.status if render_run else JOB_STATUS_FAILED
-    elif job.job_type == JOB_TYPE_FINDING_EVALUATION:
-        from app.models import FindingEvaluation
-
-        evaluation = db.get(
-            FindingEvaluation, int(job.payload_json.get("finding_evaluation_id", 0))
-        )
-        if evaluation is not None and evaluation.status in {"completed", "cancelled"}:
-            domain_status = evaluation.status
-    elif job.scan_id:
-        scan = db.get(Scan, job.scan_id)
-        domain_status = scan.status if scan else JOB_STATUS_FAILED
-    elif job.source_refresh_id:
-        refresh = db.get(SourceRefresh, job.source_refresh_id)
-        domain_status = refresh.status if refresh else JOB_STATUS_FAILED
+    domain_status = reconcile_domain_status(db, job)
     if domain_status not in TERMINAL_JOB_STATUSES:
         return False
     if job.status in TERMINAL_JOB_STATUSES:

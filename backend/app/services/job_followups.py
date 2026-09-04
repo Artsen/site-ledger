@@ -3,24 +3,14 @@ from sqlalchemy.orm import Session
 
 from app.models import BackgroundJob, PageCategoryRule, PageCategoryRuleRun, Scan
 from app.services import background_jobs
-from app.services.job_types import (
-    JOB_TYPE_CATEGORY_RULE_EVALUATION,
-    JOB_TYPE_SCAN,
-    JOB_TYPE_SCAN_PROJECTION_BUILD,
-)
 from app.services.scan_projections import create_projection_build
 
 
 def ensure_required_followups(db: Session, job: BackgroundJob) -> None:
     """Idempotently stage required work after a legitimate terminal domain commit."""
-    if job.job_type == JOB_TYPE_SCAN and job.scan_id:
-        scan = db.get(Scan, job.scan_id)
-        if scan is not None:
-            ensure_terminal_scan_followups(db, scan)
-    elif job.job_type == JOB_TYPE_SCAN_PROJECTION_BUILD:
-        _ensure_projection_followups(db, job)
-    elif job.job_type == JOB_TYPE_CATEGORY_RULE_EVALUATION:
-        _ensure_category_rerun(db, job)
+    from app.services.job_lifecycle import stage_required_followups
+
+    stage_required_followups(db, job)
 
 
 def ensure_terminal_scan_followups(db: Session, scan: Scan) -> None:
@@ -48,7 +38,7 @@ def ensure_terminal_scan_followups(db: Session, scan: Scan) -> None:
         queue_evaluation(db, scan.website_property_id, "scan_completed")
 
 
-def _ensure_projection_followups(db: Session, job: BackgroundJob) -> None:
+def ensure_projection_followups(db: Session, job: BackgroundJob) -> None:
     from app.models import ScanProjectionBuild
     from app.services.scan_comparisons import (
         queue_adjacent_comparison_for_scan,
@@ -62,7 +52,7 @@ def _ensure_projection_followups(db: Session, job: BackgroundJob) -> None:
     queue_adjacent_comparison_for_scan(db, build.scan_id)
 
 
-def _ensure_category_rerun(db: Session, job: BackgroundJob) -> None:
+def ensure_category_rerun(db: Session, job: BackgroundJob) -> None:
     payload = dict(job.payload_json)
     if not payload.get("rerun_requested"):
         return
