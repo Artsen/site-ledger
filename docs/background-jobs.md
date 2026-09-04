@@ -162,6 +162,8 @@ cancellation between audits. See [Automated Accessibility observations](accessib
 observation per target, owns a Run-local host throttling circuit, reports Page counters, and checks
 cancellation between and during bounded captures. A Scan may enqueue this job, but the job and its
 evidence remain independently owned by the Render Run.
+The Scan retains target-selection provenance; the Render Run alone owns modern Render lifecycle and
+execution outcomes, so Scan and Render terminal states and counters are not synchronized.
 
 An active `render_run` job blocks observation, bulk, Run, and owner-scope rendered evidence
 deletion for that Run. Terminal Run deletion removes its terminal job/event history; partial

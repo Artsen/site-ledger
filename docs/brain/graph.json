@@ -1,8 +1,8 @@
 {
   "schema": "site-ledger-second-brain-v1.2",
   "repository": "Artsen/site-ledger",
-  "base_commit": "6e17e08e641b48660a7ed7a13d9227b288fcafc6",
-  "generated_at": "2026-09-03",
+  "base_commit": "69b9565150ed9c774e0e91cfab6c8dab54e27970",
+  "generated_at": "2026-09-04",
   "principles": [
     "Source code, migrations, and tests remain authoritative; this graph is a navigation and context-compression layer.",
     "graph.json is the canonical machine-readable source for semantic nodes and edges; generated human views must not drift from it.",
@@ -89,11 +89,12 @@
       "id": "static-scan",
       "type": "domain",
       "label": "Static Scan",
-      "summary": "Deterministic static crawl records durable fetch attempts, snapshots, occurrences, resource identities, and Page membership.",
+      "summary": "Deterministic static crawl records durable fetch attempts, snapshots, occurrences, resource identities, Page membership, and Render target-selection provenance.",
       "source_paths": [
         "backend/app/services/scan_execution.py",
         "backend/app/crawler/static_crawler.py",
         "backend/app/services/scan_queries.py",
+        "backend/app/services/scan_render_authority.py",
         "backend/app/models/resources.py"
       ],
       "symbols": [
@@ -226,11 +227,12 @@
       "id": "render",
       "type": "evidence-domain",
       "label": "Rendered Evidence",
-      "summary": "Browser observations are a separate evidence clock and run type rather than being hidden inside static Scan.",
+      "summary": "RenderRun owns modern browser execution lifecycle, outcomes, and observations on an independent clock; historical Scan-owned browser evidence remains readable.",
       "source_paths": [
         "backend/app/services/render_runs.py",
         "backend/app/services/rendered_capture.py",
         "backend/app/services/rendered_queries.py",
+        "backend/app/services/scan_render_authority.py",
         "docs/browser-rendered-observations.md"
       ],
       "state_layer": "evidence",
@@ -542,6 +544,11 @@
       "source": "static-scan",
       "target": "background-jobs",
       "relation": "executed_by"
+    },
+    {
+      "source": "static-scan",
+      "target": "render",
+      "relation": "triggers"
     },
     {
       "source": "sources",

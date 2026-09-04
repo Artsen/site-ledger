@@ -449,8 +449,9 @@ describe("scan results workflow", () => {
       ...scanFixture,
       render_run_id: 77,
       render_run_status: "running",
+      render: renderSummary({ authority: "render_run", render_run_id: 77, status: "running", selected_count: 1, target_count: 1 }),
     };
-    const terminalScan = { ...activeScan, render_run_status: "completed" };
+    const terminalScan = { ...activeScan, render_run_status: "completed", render: { ...activeScan.render, status: "completed" } };
     api.getScan.mockResolvedValue(activeScan);
     let renderCompleted = false;
     api.listPages.mockImplementation(async () => ({
@@ -490,6 +491,7 @@ describe("scan results workflow", () => {
       website_property_name: null,
       render_run_id: 77,
       render_run_status: "running",
+      render: renderSummary({ authority: "render_run", render_run_id: 77, status: "running", selected_count: 2, target_count: 2 }),
       scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" }
     });
     api.listScanRenderedObservations.mockResolvedValue({
@@ -506,6 +508,91 @@ describe("scan results workflow", () => {
     expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View rendered observations" })).toHaveAttribute("href", "/scans/1?tab=rendered");
     await waitFor(() => expect(api.listScanRenderedObservations).toHaveBeenCalledWith("1", expect.any(String)));
+  });
+
+  it("shows queued modern Render work from RenderRun authority at zero attempts", async () => {
+    api.getScan.mockResolvedValue({
+      ...scanFixture,
+      website_property_id: 3,
+      rendered_attempted_count: 99,
+      rendered_completed_count: 99,
+      render_run_id: 77,
+      render_run_status: "queued",
+      render: renderSummary({
+        authority: "render_run",
+        render_run_id: 77,
+        status: "queued",
+        selected_count: 2,
+        target_count: 2,
+        unattempted_target_count: 2,
+      }),
+      scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" },
+    });
+
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1");
+
+    const summary = await screen.findByRole("region", { name: "Scan render execution summary" });
+    expect(summary).toHaveTextContent("Browser Render Run #77");
+    expect(summary).toHaveTextContent("Queued");
+    expect(summary).toHaveTextContent("Targets2");
+    expect(summary).toHaveTextContent("Attempted0");
+    expect(summary).toHaveTextContent("Completed0");
+    expect(within(summary).getByRole("link", { name: "Open Render Run" })).toHaveAttribute("href", "/sites/3/rendered/runs/77");
+    expect(screen.getByRole("tab", { name: /Rendered 2/ })).toBeVisible();
+  });
+
+  it("uses completed RenderRun counters instead of conflicting Scan counters", async () => {
+    api.getScan.mockResolvedValue({
+      ...scanFixture,
+      rendered_completed_count: 99,
+      rendered_failed_count: 99,
+      render: renderSummary({
+        authority: "render_run",
+        render_run_id: 77,
+        status: "completed_with_errors",
+        selected_count: 10,
+        target_count: 10,
+        attempted_count: 4,
+        completed_count: 3,
+        failed_count: 1,
+        skipped_count: 6,
+        retained_observation_count: 4,
+      }),
+      scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" },
+    });
+
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1");
+
+    const summary = await screen.findByRole("region", { name: "Scan render execution summary" });
+    expect(summary).toHaveTextContent("Attempted4");
+    expect(summary).toHaveTextContent("Completed3");
+    expect(summary).toHaveTextContent("Failed1");
+    expect(summary).not.toHaveTextContent("Completed99");
+  });
+
+  it("labels historical Scan-owned rendering without inventing a RenderRun link", async () => {
+    api.getScan.mockResolvedValue({
+      ...scanFixture,
+      rendered_attempted_count: 1,
+      rendered_completed_count: 1,
+      render: renderSummary({
+        authority: "legacy_scan",
+        legacy: true,
+        selected_count: 1,
+        target_count: 1,
+        attempted_count: 1,
+        completed_count: 1,
+        retained_observation_count: 1,
+      }),
+      scope_config: { ...scanFixture.scope_config, render_mode: "starting_page" },
+    });
+
+    renderRoute(<ScanDetailPage />, "/scans/:scanId", "/scans/1");
+
+    const summary = await screen.findByRole("region", { name: "Scan render execution summary" });
+    expect(summary).toHaveTextContent("Historical Scan-owned Render evidence");
+    expect(summary).toHaveTextContent("Legacy Scan rendering");
+    expect(within(summary).queryByRole("link", { name: "Open Render Run" })).not.toBeInTheDocument();
   });
 
   it("keeps Resource search stable and resets filters when changing Scan tabs", async () => {
@@ -578,7 +665,7 @@ describe("scan results workflow", () => {
   });
 
   it("lists rendered observations and links to exact evidence", async () => {
-    api.getScan.mockResolvedValue({ ...scanFixture, rendered_attempted_count: 1, scope_config: { ...scanFixture.scope_config, render_mode: "starting_page" } });
+    api.getScan.mockResolvedValue({ ...scanFixture, rendered_attempted_count: 1, render: renderSummary({ authority: "legacy_scan", legacy: true, selected_count: 1, target_count: 1, attempted_count: 1, completed_count: 1, retained_observation_count: 1 }), scope_config: { ...scanFixture.scope_config, render_mode: "starting_page" } });
     api.listScanRenderedObservations.mockResolvedValue({ items: [{
       id: 31, snapshot_id: 9, capture_state: "completed_with_warnings", static_final_url: "https://example.com/page", page_title: "Rendered Page", navigation_http_status: 200, duration_ms: 450, warning_count: 1, page_error_count: 0, blocked_request_count: 2, console_message_count: 1, has_viewport_screenshot: true, has_full_page_screenshot: false, has_rendered_dom: true, started_at: "2026-08-06T01:00:00Z", finished_at: "2026-08-06T01:00:01Z"
     }], total: 1, limit: 50, offset: 0 });
@@ -592,7 +679,7 @@ describe("scan results workflow", () => {
   });
 
   it("keeps legacy bulk-deletion cleanup warnings visible on Scan Rendered", async () => {
-    api.getScan.mockResolvedValue({ ...scanFixture, rendered_attempted_count: 1, scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" } });
+    api.getScan.mockResolvedValue({ ...scanFixture, rendered_attempted_count: 1, render: renderSummary({ authority: "legacy_scan", legacy: true, selected_count: 1, target_count: 1, attempted_count: 1, failed_count: 1, retained_observation_count: 1 }), scope_config: { ...scanFixture.scope_config, render_mode: "all_eligible" } });
     api.listScanRenderedObservations.mockResolvedValue({ items: [{
       id: 31, snapshot_id: 9, resource_id: 2, render_run_target_id: null, capture_state: "failed", static_final_url: "https://example.com/limited", page_title: "Limited", navigation_http_status: 429, error_type: "navigation_rate_limited", error_message: "Rate limited", duration_ms: 450, warning_count: 1, page_error_count: 0, blocked_request_count: 0, console_message_count: 0, has_viewport_screenshot: false, has_full_page_screenshot: false, has_rendered_dom: false, finished_at: "2026-08-06T01:00:01Z"
     }], total: 1, limit: 50, offset: 0 });
@@ -1315,6 +1402,30 @@ function resourceFixture(overrides: Partial<ResourceInventoryItem>): ResourceInv
   };
 }
 
+function renderSummary(overrides: Partial<Scan["render"]> = {}): Scan["render"] {
+  return {
+    authority: "none",
+    selected_count: 0,
+    render_run_id: null,
+    status: null,
+    target_count: 0,
+    attempted_count: 0,
+    completed_count: 0,
+    failed_count: 0,
+    skipped_count: 0,
+    blocked_request_count: 0,
+    artifact_count: 0,
+    retained_observation_count: 0,
+    deleted_observation_count: 0,
+    unattempted_target_count: 0,
+    retained_artifact_count: 0,
+    started_at: null,
+    finished_at: null,
+    legacy: false,
+    ...overrides,
+  };
+}
+
 const scanFixture: Scan = {
   id: 1,
   website_property_id: null,
@@ -1373,6 +1484,7 @@ const scanFixture: Scan = {
   rendered_skipped_count: 0,
   rendered_blocked_request_count: 0,
   rendered_artifact_count: 0,
+  render: renderSummary(),
   static_request_attempt_count: 1,
   static_retry_request_count: 0,
   static_recovered_after_retry_count: 0,

@@ -53,6 +53,20 @@ Do not modify this area from UI assumptions alone.
 - `docs/scan-projections.md`
 - projection-focused tests
 
+## Browser Render authority
+
+- `backend/app/services/scan_render_authority.py`
+- `backend/app/services/render_runs.py`
+- `backend/app/services/rendered_queries.py`
+- `backend/app/services/rendered_capture.py`
+- `backend/app/models/rendered.py`
+- `backend/app/models/resources.py`
+- `docs/browser-rendered-observations.md`
+- `backend/tests/test_scan_render_authority.py`
+
+Keep Scan selection provenance distinct from RenderRun execution outcomes. Preserve historical
+Scan-owned counters and NULL-run observations without synthesizing modern Runs.
+
 ## Comparisons
 
 - `backend/app/services/scan_comparisons.py`

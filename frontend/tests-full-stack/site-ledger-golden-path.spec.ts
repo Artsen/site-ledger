@@ -38,6 +38,13 @@ type Json = Record<string, unknown> & {
   workflow_status: string;
   workspace_state: string;
   scope_config: { allow_private_networks: boolean };
+  render: {
+    authority: "render_run" | "legacy_scan" | "none";
+    render_run_id: number | null;
+    selected_count: number;
+    target_count: number;
+    completed_count: number;
+  };
   source: Json;
   page: Json;
   comparison: Json;
@@ -94,6 +101,19 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   expect(scan1.fetched_count).toBe(4);
   await waitForProjection(request, scan1Id);
   const scan1RenderRun = await waitForScanRenderRun(request, scan1Id);
+  const scan1WithRender = await getJson(request, `${apiUrl}/api/scans/${scan1Id}`);
+  expect(scan1WithRender.render.authority).toBe("render_run");
+  expect(scan1WithRender.render.render_run_id).toBe(scan1RenderRun.id);
+  expect(scan1WithRender.render.target_count).toBe(scan1WithRender.render.selected_count);
+  expect(scan1WithRender.render.completed_count).toBe(scan1RenderRun.completed_count);
+  expect([
+    scan1WithRender.rendered_attempted_count,
+    scan1WithRender.rendered_completed_count,
+    scan1WithRender.rendered_failed_count,
+    scan1WithRender.rendered_skipped_count,
+    scan1WithRender.rendered_blocked_request_count,
+    scan1WithRender.rendered_artifact_count,
+  ]).toEqual([0, 0, 0, 0, 0, 0]);
   const scan1Ready = Date.now();
   const pages1 = await getJson(request, `${apiUrl}/api/scans/${scan1Id}/pages?limit=50`);
   expect(pages1.total).toBe(4);
@@ -163,6 +183,9 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   await deleteJson(request, `${apiUrl}/api/sites/${site.id}/render-runs/${scan1RenderRun.id}`, {
     confirmation: `DELETE RENDER RUN ${scan1RenderRun.id}`
   });
+  const scan1AfterRenderDeletion = await getJson(request, `${apiUrl}/api/scans/${scan1Id}`);
+  expect(scan1AfterRenderDeletion.render.authority).toBe("none");
+  expect(scan1AfterRenderDeletion.render.render_run_id).toBeNull();
   const rootRenderHistory = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${rootPage.resource_id}/rendered-observations?direction=asc&limit=50`);
   expect(rootRenderHistory.total).toBe(3);
   expect(rootRenderHistory.items.map((item) => item.render_run_target_id)).toHaveLength(3);
@@ -522,8 +545,12 @@ async function waitForScan(request: APIRequestContext, scanId: number): Promise<
 async function waitForScanRenderRun(request: APIRequestContext, scanId: number): Promise<Json> {
   return poll(async () => {
     const scan = await getJson(request, `${apiUrl}/api/scans/${scanId}`);
-    if (!scan.render_run_id) return null;
-    return waitForRenderRun(request, Number(scan.website_property_id), Number(scan.render_run_id));
+    if (scan.render?.authority !== "render_run" || !scan.render.render_run_id) return null;
+    return waitForRenderRun(
+      request,
+      Number(scan.website_property_id),
+      Number(scan.render.render_run_id),
+    );
   }, `Render Run for Scan ${scanId}`);
 }
 

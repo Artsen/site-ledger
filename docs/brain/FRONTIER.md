@@ -1,12 +1,13 @@
 # Development Frontier
 
 This file records non-canonical direction that may matter when planning a change. Canonical graph
-truth is reviewed against post-PR #54 `main`:
+truth is reviewed against post-PR #55 `main`:
 
-`234d9d1945f2fc48518ea76e5adcd750308ea223`
+`69b9565150ed9c774e0e91cfab6c8dab54e27970`
 
-PR #55 completes BackgroundJob lifecycle contract consolidation. Unimplemented work below remains
-non-canonical direction.
+PR #56 clarifies that modern RenderRun records own Render execution outcomes while Scan retains
+selection provenance and historical pre-RenderRun compatibility evidence. Unimplemented work below
+remains non-canonical direction.
 
 ## Completed Collection Plans V2 work
 
@@ -23,12 +24,19 @@ running cancellation, failure, interruption, domain reconciliation, and required
 Operational callers still own leases, fencing, and commits; domain-specific status semantics remain
 authoritative. No scheduler, retry framework, or dynamic job discovery was introduced.
 
+## Completed Render outcome authority cleanup
+
+Modern Scan reads resolve the original scan-triggered RenderRun as the sole authority for browser
+execution lifecycle and counters. Legacy Scan counters and NULL-run observations remain readable as
+historical truth, while exact Run filtering prevents later rerenders from entering original Scan
+results. No migration, backfill, or counter synchronization was introduced.
+
 ## Next architectural work
 
 Broader non-binding direction remains:
 
 - decompose `backend/app/api/routes.py`;
-- decompose large frontend workspace modules;
+- decompose frontend API contracts and client modules;
 - establish Web Estate identity foundations;
 - add host/domain evidence and discovery;
 - infer technology/platform evidence;

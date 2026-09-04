@@ -44,7 +44,7 @@ export function ScanDetailPage() {
     refetchInterval: (query) => {
       const value = query.state.data;
       const scanFinished = isTerminalStatus(value?.status ?? "");
-      const renderFinished = !value?.render_run_id || isTerminalStatus(value.render_run_status ?? "");
+      const renderFinished = value?.render.authority !== "render_run" || isTerminalStatus(value.render.status ?? "");
       return scanFinished && renderFinished ? false : 1500;
     },
     retry: (failureCount, error) => (error instanceof Error && error.message.includes("not be found") ? false : failureCount < 2)
@@ -85,9 +85,9 @@ export function ScanDetailPage() {
 
   const pageQuery = useMemo(() => buildPageQuery(searchParams), [searchParams]);
   const projectionKey = projection.data?.current_build?.id ?? projection.data?.projection_status ?? "unknown";
-  const renderLifecycleKey = scan.data?.render_run_id == null
+  const renderLifecycleKey = scan.data?.render.render_run_id == null
     ? "no-render-run"
-    : `${scan.data.render_run_id}:${scan.data.render_run_status ?? "unknown"}`;
+    : `${scan.data.render.render_run_id}:${scan.data.render.status ?? "unknown"}`;
   const pages = useQuery({
     queryKey: ["pages", scanId, projectionKey, renderLifecycleKey, pageQuery],
     queryFn: () => listPages(scanId, pageQuery),
@@ -95,8 +95,8 @@ export function ScanDetailPage() {
     ...scanPageQueryOptions(
       scan.data?.status,
       projection.data,
-      scan.data?.render_run_id,
-      scan.data?.render_run_status
+      scan.data?.render.render_run_id,
+      scan.data?.render.status
     ),
     placeholderData: (previous) => previous
   });
@@ -114,8 +114,8 @@ export function ScanDetailPage() {
   const recentRendered = useQuery({
     queryKey: ["scan-rendered-observations", scanId, "overview"],
     queryFn: () => listScanRenderedObservations(scanId, "?sort=capture_time&direction=desc&limit=5"),
-    enabled: tab === "overview" && Boolean(scan.data?.rendered_attempted_count || scan.data?.render_run_id),
-    refetchInterval: scan.data?.render_run_id && !isTerminalStatus(scan.data.render_run_status ?? "") ? 1500 : false
+    enabled: tab === "overview" && scan.data?.render.authority !== "none",
+    refetchInterval: scan.data?.render.authority === "render_run" && !isTerminalStatus(scan.data.render.status ?? "") ? 1500 : false
   });
   const cancel = useMutation({
     mutationFn: () => cancelScan(scanId),
@@ -168,7 +168,7 @@ export function ScanDetailPage() {
     { id: "inputs", label: "Inputs", count: seeds.data?.total },
     { id: "pages", label: "Pages", count: pageTotal },
     { id: "resources", label: "Resources", count: scan.data.resource_discovered_count },
-    { id: "rendered", label: "Rendered", count: scan.data.rendered_attempted_count },
+    { id: "rendered", label: "Rendered", count: scan.data.render.target_count },
     { id: "errors", label: "Errors", count: errors.data?.length ?? scan.data.failed_count },
     { id: "graph", label: "Graph" },
     { id: "notes", label: "Notes" }
@@ -211,8 +211,7 @@ export function ScanDetailPage() {
         <Metric label="Final failed" value={scan.data.failed_count} />
         <Metric label="Skipped" value={scan.data.skipped_count} />
       </div>
-      {scan.data.render_run_id ? <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-stone-200 bg-white p-3 text-sm"><span>Browser Render Run #{scan.data.render_run_id} <StatusBadge status={scan.data.render_run_status ?? "queued"} /></span><Link className="font-medium underline" to={scan.data.website_property_id ? `/sites/${scan.data.website_property_id}/rendered/runs/${scan.data.render_run_id}` : `/scans/${scanId}?tab=rendered`}>{scan.data.website_property_id ? "Open Render Run" : "View rendered observations"}</Link></div> : null}
-      {scan.data.scope_config.render_mode !== "none" ? <Link to={`/scans/${scanId}?tab=rendered`} className="mb-6 grid grid-cols-2 gap-3 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 md:grid-cols-4 xl:grid-cols-8" aria-label="View historical Scan-bound rendered captures"><Metric label="Successful renders" value={recentRendered.data?.summary?.successful_renders ?? scan.data.rendered_completed_count} /><Metric label="No content" value={recentRendered.data?.summary?.no_content_responses ?? 0} /><Metric label="Redirects" value={recentRendered.data?.summary?.redirect_responses ?? 0} /><Metric label="HTTP errors (not 429)" value={recentRendered.data?.summary?.http_error_responses ?? 0} /><Metric label="Rate limited" value={recentRendered.data?.summary?.rate_limited ?? 0} /><Metric label="Not attempted" value={recentRendered.data?.summary?.skipped_after_throttling ?? scan.data.rendered_skipped_count} /><Metric label="Technical failures" value={recentRendered.data?.summary?.technical_failures ?? scan.data.rendered_failed_count} /><Metric label="Artifacts" value={recentRendered.data?.summary?.artifacts_retained ?? scan.data.rendered_artifact_count} /></Link> : null}
+      <RenderAuthoritySummary scan={scan.data} scanId={scanId} />
 
       {latestJob && !isTerminalStatus(latestJob.status) ? <JobNotice job={latestJob} workerHealth={workerHealth.data} /> : null}
       {projection.data && projection.data.projection_status !== "not_terminal" ? <ProjectionNotice status={projection.data.projection_status} canBuild={projection.data.can_build} canRebuild={projection.data.can_rebuild} errorMessage={projection.data.active_build?.error_message ?? projection.data.latest_build?.error_message} loading={prepareProjection.isPending} onBuild={() => prepareProjection.mutate()} /> : null}
@@ -260,7 +259,7 @@ export function ScanDetailPage() {
           />
         ) : null}
         {tab === "resources" ? <ResourceInventoryView scope="scan" id={scanId} scanStatus={scan.data.status} projectionStatus={projection.data} /> : null}
-        {tab === "rendered" ? <div className="space-y-4"><RenderedDeletionNotice result={renderDeletionResult} />{selectedRendered.length ? <div className="flex flex-wrap gap-2"><Button type="button" loading={rerenderLegacy.isPending} disabled={!scan.data.website_property_id} onClick={() => rerenderLegacy.mutate()}>Rerender selected ({selectedRendered.length})</Button><LegacyRenderBulkDeleteAction scanId={scanId} observationIds={selectedRendered} onDeleted={(result) => { setRenderDeletionResult(result); setSelectedRendered([]); }} /></div> : null}{rerenderLegacy.error ? <ErrorBanner error={rerenderLegacy.error} title="Could not rerender selected Pages" /> : null}<RenderedObservationTable scanId={scanId} renderMode={scan.data.scope_config.render_mode} poll={Boolean(scan.data.render_run_id && !isTerminalStatus(scan.data.render_run_status ?? ""))} selectedObservationIds={selectedRendered} onSelectedObservationIdsChange={setSelectedRendered} onLoadedItemsChange={setLoadedRendered} /><section className="border-t border-stone-200 pt-4"><RenderScanDeleteAction scanId={scanId} onDeleted={(result) => { setRenderDeletionResult(result); setSelectedRendered([]); }} /></section></div> : null}
+        {tab === "rendered" ? <div className="space-y-4"><RenderedDeletionNotice result={renderDeletionResult} />{scan.data.render.authority === "legacy_scan" && selectedRendered.length ? <div className="flex flex-wrap gap-2"><Button type="button" loading={rerenderLegacy.isPending} disabled={!scan.data.website_property_id} onClick={() => rerenderLegacy.mutate()}>Rerender selected ({selectedRendered.length})</Button><LegacyRenderBulkDeleteAction scanId={scanId} observationIds={selectedRendered} onDeleted={(result) => { setRenderDeletionResult(result); setSelectedRendered([]); }} /></div> : null}{rerenderLegacy.error ? <ErrorBanner error={rerenderLegacy.error} title="Could not rerender selected Pages" /> : null}<RenderedObservationTable scanId={scanId} renderMode={scan.data.scope_config.render_mode} poll={scan.data.render.authority === "render_run" && !isTerminalStatus(scan.data.render.status ?? "")} selectedObservationIds={scan.data.render.authority === "legacy_scan" ? selectedRendered : undefined} onSelectedObservationIdsChange={scan.data.render.authority === "legacy_scan" ? setSelectedRendered : undefined} onLoadedItemsChange={scan.data.render.authority === "legacy_scan" ? setLoadedRendered : undefined} observationHref={scan.data.render.authority === "render_run" && scan.data.website_property_id ? (id) => `/sites/${scan.data.website_property_id}/rendered/observations/${id}` : undefined} /><section className="border-t border-stone-200 pt-4"><RenderScanDeleteAction scanId={scanId} onDeleted={(result) => { setRenderDeletionResult(result); setSelectedRendered([]); }} /></section></div> : null}
         {tab === "inputs" ? <InputsView seeds={seeds.data?.items ?? []} loading={seeds.isLoading} error={seeds.error} /> : null}
         {tab === "errors" ? <ErrorsView scanId={scanId} errors={errors.data ?? []} loading={errors.isLoading} error={errors.error} /> : null}
         {tab === "graph" ? <ScanGraphView scan={scan.data} projectionStatus={projection.data} /> : null}
@@ -283,6 +282,35 @@ function ProjectionNotice({ status, canBuild, canRebuild, errorMessage, loading,
 
 function PageFrame({ children }: { children: React.ReactNode }) {
   return <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</section>;
+}
+
+function RenderAuthoritySummary({ scan, scanId }: { scan: Scan; scanId: string }) {
+  const render = scan.render;
+  if (render.authority === "none" && scan.scope_config.render_mode === "none") return null;
+  const runHref = render.render_run_id && scan.website_property_id
+    ? `/sites/${scan.website_property_id}/rendered/runs/${render.render_run_id}`
+    : null;
+  return <section className="mb-6 border-y border-stone-200 py-4" aria-label="Scan render execution summary">
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        {render.authority === "render_run" ? <><span className="font-medium">Browser Render Run #{render.render_run_id}</span><StatusBadge status={render.status ?? "queued"} /></> : null}
+        {render.authority === "legacy_scan" ? <><span className="font-medium">Historical Scan-owned Render evidence</span><span className="text-stone-500">Legacy Scan rendering</span></> : null}
+        {render.authority === "none" ? <span className="text-stone-600">No browser Render execution</span> : null}
+      </div>
+      {runHref ? <Link className="font-medium underline" to={runHref}>Open Render Run</Link> : render.authority !== "none" ? <Link className="font-medium underline" to={`/scans/${scanId}?tab=rendered`}>View rendered observations</Link> : null}
+    </div>
+    <Link to={`/scans/${scanId}?tab=rendered`} className="grid grid-cols-2 gap-3 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 md:grid-cols-5 xl:grid-cols-9">
+      <Metric label="Selected" value={render.selected_count} />
+      <Metric label="Targets" value={render.target_count} />
+      <Metric label="Attempted" value={render.attempted_count} />
+      <Metric label="Completed" value={render.completed_count} />
+      <Metric label="Failed" value={render.failed_count} />
+      <Metric label="Skipped" value={render.skipped_count} />
+      <Metric label="Blocked" value={render.blocked_request_count} />
+      <Metric label="Artifacts recorded" value={render.artifact_count} />
+      <Metric label="Evidence retained" value={render.retained_observation_count} />
+    </Link>
+  </section>;
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

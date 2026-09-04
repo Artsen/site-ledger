@@ -109,7 +109,6 @@ class ScanExecutionCoordinator:
         rendered_stop_reason: str | None = None
         scan.rendered_selected_count = len(selected)
         if config.render_mode == "starting_page" and not selected:
-            scan.rendered_skipped_count = 1
             rendered_stop_reason = "starting_page_not_render_eligible"
         elif selected:
             render_run = create_scan_render_run(self.db, scan, selected)

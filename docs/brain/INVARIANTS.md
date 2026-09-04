@@ -59,6 +59,11 @@ Every externally supplied crawl target is attacker-controlled. Scheme, userinfo,
 
 Do not pretend that a fresh Scan means Render, Performance, Accessibility, Structured Content, Source, or other independently collected evidence is equally fresh. Site Intelligence intentionally exposes independent clocks.
 
+Independent collectors also own their execution outcomes. A Scan may retain Render target-selection
+provenance, but its first-class RenderRun is the sole mutable authority for modern browser execution
+status and counters. Historical pre-RenderRun Scan counters and NULL-run evidence remain readable
+without fabricating or synchronizing a Run.
+
 ## 8. Projection activation is atomic
 **ID:** `projection-activation-atomic`
 

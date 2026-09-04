@@ -1,6 +1,6 @@
 # Domain Map
 
-Snapshot: `main@6e17e08e641b48660a7ed7a13d9227b288fcafc6`.
+Snapshot: `main@69b9565150ed9c774e0e91cfab6c8dab54e27970`.
 
 This file is generated from `graph.json`. Source code remains authoritative.
 
@@ -75,7 +75,7 @@ Normalized resource identity is explicitly versioned; historical identities are 
 
 ## Static Scan (`static-scan`)
 
-Deterministic static crawl records durable fetch attempts, snapshots, occurrences, resource identities, and Page membership.
+Deterministic static crawl records durable fetch attempts, snapshots, occurrences, resource identities, Page membership, and Render target-selection provenance.
 
 **Type:** `domain`
 **State layer:** `evidence`
@@ -84,6 +84,7 @@ Deterministic static crawl records durable fetch attempts, snapshots, occurrence
 - `backend/app/services/scan_execution.py`
 - `backend/app/crawler/static_crawler.py`
 - `backend/app/services/scan_queries.py`
+- `backend/app/services/scan_render_authority.py`
 - `backend/app/models/resources.py`
 
 **Landmark symbols:**
@@ -212,7 +213,7 @@ Terminal domain work schedules idempotent required downstream work such as scan 
 
 ## Rendered Evidence (`render`)
 
-Browser observations are a separate evidence clock and run type rather than being hidden inside static Scan.
+RenderRun owns modern browser execution lifecycle, outcomes, and observations on an independent clock; historical Scan-owned browser evidence remains readable.
 
 **Type:** `evidence-domain`
 **State layer:** `evidence`
@@ -221,6 +222,7 @@ Browser observations are a separate evidence clock and run type rather than bein
 - `backend/app/services/render_runs.py`
 - `backend/app/services/rendered_capture.py`
 - `backend/app/services/rendered_queries.py`
+- `backend/app/services/scan_render_authority.py`
 - `docs/browser-rendered-observations.md`
 
 **Relevant invariants:**

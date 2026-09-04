@@ -17,7 +17,6 @@ from app.models import (
     RenderedNetworkEntry,
     RenderedObservation,
     RenderedPageError,
-    RenderRun,
     ResourceOccurrence,
     ResourceSnapshot,
     Scan,
@@ -179,6 +178,7 @@ from app.services.scan_queries import (
 from app.services.scan_queries import (
     list_scan_pages_routed as list_scan_pages,
 )
+from app.services.scan_render_authority import scan_read, scan_reads
 from app.services.site_management import (
     DuplicateSiteError,
     InactiveSiteError,
@@ -350,7 +350,7 @@ def get_job_events(
 
 
 @router.post("/scans", response_model=ScanRead, status_code=202)
-def create_scan(payload: ScanCreate, db: DbSession) -> Scan:
+def create_scan(payload: ScanCreate, db: DbSession) -> ScanRead:
     if payload.website_property_id is not None:
         site = db.get(WebsiteProperty, payload.website_property_id)
         if site is None:
@@ -369,12 +369,12 @@ def create_scan(payload: ScanCreate, db: DbSession) -> Scan:
     enqueue_scan_job(db, scan)
     db.commit()
     db.refresh(scan)
-    return scan
+    return scan_read(db, scan)
 
 
 @router.get("/scans", response_model=list[ScanRead])
-def list_scans(db: DbSession, limit: ScanListLimit = 25) -> list[Scan]:
-    return list(
+def list_scans(db: DbSession, limit: ScanListLimit = 25) -> list[ScanRead]:
+    scans = list(
         db.scalars(
             select(Scan)
             .options(joinedload(Scan.website_property))
@@ -382,6 +382,7 @@ def list_scans(db: DbSession, limit: ScanListLimit = 25) -> list[Scan]:
             .limit(limit)
         )
     )
+    return scan_reads(db, scans)
 
 
 @router.get("/scans/history", response_model=ScanHistory)
@@ -510,7 +511,7 @@ def remove_site(site_id: int, request: Request, db: DbSession) -> SiteDeleteResu
 
 
 @router.post("/sites/{site_id}/scans", response_model=ScanRead, status_code=202)
-def post_site_scan(site_id: int, payload: SiteScanCreate, db: DbSession) -> Scan:
+def post_site_scan(site_id: int, payload: SiteScanCreate, db: DbSession) -> ScanRead:
     try:
         scan = create_scan_from_site(
             db,
@@ -527,7 +528,7 @@ def post_site_scan(site_id: int, payload: SiteScanCreate, db: DbSession) -> Scan
     enqueue_scan_job(db, scan)
     db.commit()
     db.refresh(scan)
-    return scan
+    return scan_read(db, scan)
 
 
 @router.post("/sites/{site_id}/sources", response_model=UrlSourceRead, status_code=201)
@@ -1236,19 +1237,12 @@ def get_scan(scan_id: int, db: DbSession) -> ScanRead:
     scan = db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(404, "Scan not found")
-    result = ScanRead.model_validate(scan, from_attributes=True)
-    result.note_count = db.scalar(select(func.count(Note.id)).where(Note.scan_id == scan.id)) or 0
-    render_run = db.scalar(
-        select(RenderRun).where(RenderRun.source_scan_id == scan.id).order_by(RenderRun.id.desc())
-    )
-    if render_run:
-        result.render_run_id = render_run.id
-        result.render_run_status = render_run.status
-    return result
+    note_count = db.scalar(select(func.count(Note.id)).where(Note.scan_id == scan.id)) or 0
+    return scan_read(db, scan, note_count=note_count)
 
 
 @router.post("/scans/{scan_id}/cancel", response_model=ScanRead)
-def cancel_scan(scan_id: int, db: DbSession) -> Scan:
+def cancel_scan(scan_id: int, db: DbSession) -> ScanRead:
     scan = db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(404, "Scan not found")
@@ -1256,7 +1250,7 @@ def cancel_scan(scan_id: int, db: DbSession) -> Scan:
     if job:
         request_native_cancellation(db, job)
     db.refresh(scan)
-    return scan
+    return scan_read(db, scan)
 
 
 @router.get("/scans/{scan_id}/delete-preview", response_model=ScanDeletePreview)

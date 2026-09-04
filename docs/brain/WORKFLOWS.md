@@ -30,6 +30,18 @@ These traces are compressed navigation maps. Follow the paths into source for im
 9. **Frontend**
    - `SiteIntelligenceOverview.tsx` and related Site workspace surfaces
 
+## Scan-triggered Render authority
+
+1. A Scan deterministically selects eligible Pages and retains the selected count as provenance.
+2. It creates one original `trigger=scan` RenderRun with frozen targets, then continues to its own
+   static terminal state independently.
+3. RenderRun status and counters are authoritative for modern browser execution; they are never
+   copied back into Scan outcome columns.
+4. Scan reads resolve that exact original Run and query its evidence by RenderRun ID, excluding
+   later manual Runs and rerenders.
+5. Pre-RenderRun Scans remain readable from historical Scan counters and NULL-run observations tied
+   to their snapshots, without a synthetic Run.
+
 ## Lease loss and recovery
 
 1. Worker A claims a job with lease token A.

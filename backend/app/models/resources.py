@@ -52,6 +52,7 @@ class Scan(Base):
     network_bytes_transferred: Mapped[int] = mapped_column(Integer, default=0)
     reused_content_bytes: Mapped[int] = mapped_column(Integer, default=0)
     rendered_selected_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Retained for pre-RenderRun history; modern execution outcomes belong to RenderRun.
     rendered_attempted_count: Mapped[int] = mapped_column(Integer, default=0)
     rendered_completed_count: Mapped[int] = mapped_column(Integer, default=0)
     rendered_failed_count: Mapped[int] = mapped_column(Integer, default=0)
