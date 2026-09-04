@@ -34,7 +34,7 @@ function intelligence(): SiteIntelligence {
     sources: { active_source_count: 2, inactive_source_count: 1, current_inventory_count: 11, suppressed_inventory_count: 2, latest_refresh_status: "completed", latest_refresh_finished_at: "2026-08-27T05:00:00Z" },
     findings: { detected: 2, unknown: 1, acknowledged_detected: 1, unresolved_total: 3, latest_evaluation_id: 6, latest_evidence_horizon_at: "2026-08-27T05:00:00Z", latest_evaluation_completed_at: "2026-08-27T05:01:00Z" },
     activity: { active_job_count: 0, queued_count: 0, running_count: 0, jobs: [] },
-    collection_coverage: [{ evidence_domain: "accessibility", target_mode: "missing_current", context_identity: "accessibility:test", context: { profile: "desktop" }, active_page_count: 10, active_page_universe_sha256: "a".repeat(64), eligible: 10, covered: 4, in_flight: 1, missing: 5, ineligible: 0, batch_size: 250, estimated_batch_count: 1, collectable: true, non_collectable_reason: null }],
+    collection_coverage: [{ evidence_domain: "accessibility", target_mode: "missing_current", context_identity: "accessibility:test", context: { profile: "desktop" }, active_page_count: 10, active_page_universe_sha256: "a".repeat(64), eligible: 10, covered: 4, in_flight: 1, active_collection: 1, missing: 5, ineligible: 0, batch_size: 250, estimated_batch_count: 1, collectable: true, non_collectable_reason: null }],
   };
 }
 
@@ -42,7 +42,7 @@ describe("Site Intelligence overview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getSiteIntelligence.mockResolvedValue(intelligence());
-    plans.previewCollectionPlan.mockResolvedValue({ ...intelligence().collection_coverage[0], target_total: 5, limit: 20, offset: 0, targets: [{ position: 0, web_resource_id: 42, requested_url: "https://example.test/missing", selection_reason: "missing_current", source_snapshot_id: null, content_blob_id: null }] });
+    plans.previewCollectionPlan.mockResolvedValue({ ...intelligence().collection_coverage[0], target_total: 5, limit: 20, offset: 0, targets: [{ position: 0, web_resource_id: 42, requested_url: "https://example.test/missing", selection_reason: "missing_current", latest_compatible_observed_at: null, source_snapshot_id: null, content_blob_id: null }] });
     plans.createCollectionPlan.mockResolvedValue({ id: 91 });
   });
   afterEach(() => cleanup());
@@ -173,6 +173,46 @@ describe("Site Intelligence overview", () => {
     expect(invalidation).toHaveBeenCalledWith({ queryKey: ["site-intelligence", "3"] });
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Batch 1: 5"));
     confirm.mockRestore();
+  });
+
+  it("offers refresh for observation domains and explains retained history", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    plans.previewCollectionPlan.mockImplementation((_siteId, payload) => Promise.resolve({
+      ...intelligence().collection_coverage[0],
+      target_mode: payload.target_mode,
+      target_total: 8,
+      missing: 4,
+      covered: 6,
+      active_collection: 2,
+      estimated_batch_count: 1,
+      limit: 20,
+      offset: 0,
+      targets: [],
+    }));
+    renderOverview();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh current" }));
+
+    await waitFor(() => expect(plans.createCollectionPlan).toHaveBeenCalledWith(3, expect.objectContaining({ target_mode: "refresh_current" })));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Existing observations will be retained"));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("2 eligible Pages are already being collected"));
+    confirm.mockRestore();
+  });
+
+  it("offers refresh for Performance, Accessibility, and Render but not Structured Content", async () => {
+    const value = intelligence();
+    const base = value.collection_coverage[0];
+    value.collection_coverage = [
+      { ...base, evidence_domain: "performance", context_identity: "performance:test", context: { provider: "pagespeed", dimension: "mobile" } },
+      base,
+      { ...base, evidence_domain: "render", context_identity: "render:test", context: {} },
+      { ...base, evidence_domain: "structured_content", context_identity: "structured:test", context: {} },
+    ];
+    api.getSiteIntelligence.mockResolvedValue(value);
+    renderOverview();
+
+    expect(await screen.findAllByRole("button", { name: "Refresh current" })).toHaveLength(3);
+    expect(screen.getByText(/time-based refresh does not apply/)).toBeInTheDocument();
   });
 });
 

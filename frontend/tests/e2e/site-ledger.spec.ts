@@ -38,6 +38,38 @@ if (process.env.README_SCREENSHOT_REVIEW === "1") {
   });
 }
 
+test("Site Intelligence refreshes current evidence without replacing history", async ({ page }) => {
+  await mockApi(page);
+  await mockReadmePresentationApi(page);
+  let requestedMode = "";
+  await page.route("**/api/sites/3/collection-plans/preview?limit=20", async (route) => {
+    const payload = route.request().postDataJSON();
+    requestedMode = payload.target_mode;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        evidence_domain: "render", target_mode: "refresh_current", context_identity: "render:desktop", context: {},
+        active_page_count: 428, active_page_universe_sha256: "a".repeat(64), eligible: 428,
+        covered: 389, in_flight: 0, active_collection: 5, missing: 39, ineligible: 0,
+        batch_size: 250, estimated_batch_count: 2, collectable: true, non_collectable_reason: null,
+        targets: [], target_total: 423, limit: 20, offset: 0,
+      }),
+    });
+  });
+  await page.route("**/api/sites/3/collection-plans", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: 54 }) });
+  });
+  await page.goto("/sites/3");
+  const dialogPromise = page.waitForEvent("dialog");
+  const clickPromise = page.getByRole("button", { name: "Refresh current" }).click();
+  const dialog = await dialogPromise;
+  expect(dialog.message()).toContain("Existing observations will be retained");
+  expect(dialog.message()).toContain("5 eligible Pages are already being collected");
+  await dialog.accept();
+  await clickPromise;
+  await expect.poll(() => requestedMode).toBe("refresh_current");
+});
+
 test("product workspace shell is stable across desktop, tablet, and mobile", async ({ page }) => {
   await mockApi(page);
   const screenshotDir = process.env.WORKSPACE_SCREENSHOTS_DIR;
@@ -1043,7 +1075,7 @@ async function mockReadmePresentationApi(page: Page) {
         sources: { active_source_count: 3, inactive_source_count: 0, current_inventory_count: 436, suppressed_inventory_count: 7, latest_refresh_status: "completed", latest_refresh_finished_at: "2026-09-02T01:48:00Z" },
         findings: { detected: 17, unknown: 4, acknowledged_detected: 5, unresolved_total: 16, latest_evaluation_id: 22, latest_evidence_horizon_at: "2026-09-02T05:21:00Z", latest_evaluation_completed_at: "2026-09-02T05:22:12Z" },
         activity: { active_job_count: 0, queued_count: 0, running_count: 0, jobs: [] },
-        collection_coverage: [{ evidence_domain: "render", target_mode: "missing_current", context_identity: "render:desktop", context: {}, active_page_count: 428, active_page_universe_sha256: "a".repeat(64), eligible: 428, covered: 389, in_flight: 0, missing: 39, ineligible: 0, batch_size: 250, estimated_batch_count: 1, collectable: true, non_collectable_reason: null }],
+        collection_coverage: [{ evidence_domain: "render", target_mode: "missing_current", context_identity: "render:desktop", context: {}, active_page_count: 428, active_page_universe_sha256: "a".repeat(64), eligible: 428, covered: 389, in_flight: 0, active_collection: 0, missing: 39, ineligible: 0, batch_size: 250, estimated_batch_count: 1, collectable: true, non_collectable_reason: null }],
       }),
     });
   });
