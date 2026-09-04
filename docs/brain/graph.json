@@ -384,7 +384,7 @@
       "id": "collection-plans",
       "type": "orchestration-domain",
       "label": "Collection Plans",
-      "summary": "Plans compute missing-current evidence across the active Page universe, freeze target selection/checksums, and batch existing native collectors.",
+      "summary": "Plans freeze deterministic missing-current or explicit refresh-current selections and batch existing native collectors without becoming evidence or freshness policy.",
       "source_paths": [
         "backend/app/services/collection_plans.py",
         "backend/app/models/collection_plans.py",
@@ -398,7 +398,8 @@
       "state_layer": "operational",
       "invariants": [
         "collection-plans-use-native-collectors",
-        "frozen-universes-deterministic"
+        "frozen-universes-deterministic",
+        "compatibility-not-freshness"
       ]
     },
     {
@@ -682,17 +683,17 @@
     {
       "source": "collection-plans",
       "target": "render",
-      "relation": "targets_missing_current"
+      "relation": "orchestrates_missing_or_refresh_current"
     },
     {
       "source": "collection-plans",
       "target": "performance",
-      "relation": "targets_missing_current"
+      "relation": "orchestrates_missing_or_refresh_current"
     },
     {
       "source": "collection-plans",
       "target": "accessibility",
-      "relation": "targets_missing_current"
+      "relation": "orchestrates_missing_or_refresh_current"
     },
     {
       "source": "collection-plans",

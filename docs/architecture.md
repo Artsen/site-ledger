@@ -327,10 +327,12 @@ Source evidence, and block while Site Finding evaluation work is active.
 ## Collection Plans
 
 Collection Plans are implemented orchestration records, not evidence and not a scheduler. They
-freeze a current active-Page universe and compatibility context, select missing evidence, and batch
-the existing Performance, Accessibility, Render, or Structured Content job types. Site Intelligence
-uses the same selectors so overview coverage and plan previews agree about current-compatible
-evidence. See [Collection Plans](collection-plans.md).
+freeze a current active-Page universe and compatibility context, select missing evidence or an
+explicit refresh of eligible Performance, Accessibility, or Render evidence, and batch the existing
+native job types. Structured Content remains missing-current only because it is deterministic from
+retained HTML. Site Intelligence uses the same selectors so overview coverage and Plan previews
+agree about current-compatible evidence while separately representing equivalent active collection.
+See [Collection Plans](collection-plans.md).
 
 ## External Performance Evidence
 

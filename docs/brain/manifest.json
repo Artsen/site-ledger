@@ -2,9 +2,9 @@
   "name": "Site Ledger Second Brain",
   "schema": "site-ledger-second-brain-v1.2",
   "repository": "Artsen/site-ledger",
-  "base_commit": "6e17e08e641b48660a7ed7a13d9227b288fcafc6",
-  "updated_in": "PR #52: Findings reset/delete workflow and maintenance contract",
-  "generated_at": "2026-09-03",
+  "base_commit": "7154d9ccbe421e088c23de1de3592f3e625b628d",
+  "updated_in": "PR #54: Collection Plans V2 refresh and freshness foundation",
+  "generated_at": "2026-09-04",
   "recommended_path": "docs/brain",
   "canonical_semantic_source": "graph.json",
   "generated_views": [

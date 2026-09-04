@@ -115,3 +115,13 @@ Do not introduce distributed infrastructure merely to look production-like. The 
 A sitemap index is a container, not a Page-membership leaf. Each exact `SourceRefresh` retains its sitemap document type and ordered exact child-refresh IDs. Finding evaluation freezes configured/robots-discovered sitemap roots and recursively selected refresh trees; persistent discovered-child Source state must not make stale membership current. Presence may be proven by any usable leaf, but absence is clear only when every required frozen branch is complete and usable.
 
 **Read:** `docs/findings.md`, `backend/app/services/finding_evaluations.py`, `backend/tests/test_findings.py`, `backend/tests/test_sources.py`.
+
+## 18. Compatibility is not freshness
+**ID:** `compatibility-not-freshness`
+
+Compatible evidence, explicit freshness policy, and equivalent active collection are separate
+states. Current-compatible evidence remains covered while a refresh is active. Nothing is stale or
+due without an explicit frozen policy and cutoff, and refresh collection always creates new native
+evidence rather than rewriting prior observations.
+
+**Read:** `docs/collection-plans.md`, `backend/app/services/collection_plans.py`.

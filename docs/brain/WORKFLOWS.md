@@ -85,13 +85,18 @@ These traces are compressed navigation maps. Follow the paths into source for im
 ## Collection Plan
 
 1. Freeze active Page universe in stable order.
-2. For each requested evidence domain, determine compatibility/current coverage.
-3. Remove Pages already satisfied or already covered by relevant in-flight work.
-4. Persist deterministic target selection/checksums.
+2. For one requested evidence domain, determine compatible coverage, latest compatible observation
+   timestamps, and equivalent active collection independently.
+3. `missing_current` selects uncovered eligible Pages; `refresh_current` selects all eligible Pages
+   for Performance, Accessibility, or Render. Both exclude equivalent active collection.
+4. Persist deterministic target selection/checksums, reason counts, and each selected Page's reason
+   and prior compatible observation timestamp.
 5. Batch target IDs into existing collector run limits.
 6. Enqueue normal Render/Performance/Accessibility/Structured Content work.
 7. Aggregate plan progress from those native runs.
 8. Cancellation preserves atomicity between queued native state and corresponding background jobs.
+9. Structured Content remains missing-current only because currentness follows retained HTML and
+   extractor identity rather than wall-clock age.
 
 ## Finding administrative deletion and reset
 

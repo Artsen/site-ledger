@@ -43,5 +43,9 @@ Collection Plan previews and Site Intelligence coverage share the deterministic 
 profiles, and Structured Content extractor identities therefore use the same definition of covered,
 in flight, missing, and ineligible Pages.
 
+Compatible coverage and equivalent active collection are represented independently. A covered Page
+remains covered while `refresh_current` work acquires a later observation, and another Plan excludes
+that active Page rather than scheduling duplicate native work.
+
 Site Intelligence does not create Findings or a global health score. Findings are separately
 persisted deterministic interpretations linked back to evidence.

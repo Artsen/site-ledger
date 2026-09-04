@@ -68,9 +68,9 @@ flowchart LR
     site_intelligence -->|summarizes| sources
     site_intelligence -->|surfaces| findings
     collection_plans -->|freezes_active_page_universe| site_identity
-    collection_plans -->|targets_missing_current| render
-    collection_plans -->|targets_missing_current| performance
-    collection_plans -->|targets_missing_current| accessibility
+    collection_plans -->|orchestrates_missing_or_refresh_current| render
+    collection_plans -->|orchestrates_missing_or_refresh_current| performance
+    collection_plans -->|orchestrates_missing_or_refresh_current| accessibility
     collection_plans -->|targets_missing_current| structured_content
     frontend -->|renders| site_intelligence
     frontend -->|renders| findings
