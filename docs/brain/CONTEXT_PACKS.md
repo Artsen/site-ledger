@@ -16,6 +16,18 @@ Read first:
 
 Then, for a specific job type, add that domain's service/model/tests.
 
+## HTTP API routing
+
+- `backend/app/api/routes.py` for core composition and compatibility exports
+- `backend/app/api/dependencies.py` for shared typed HTTP dependencies and bounds
+- the focused `backend/app/api/*_routes.py` module matching the domain
+- the domain service/query module called by that router
+- `backend/app/main.py` for full application assembly and middleware
+- `backend/tests/test_api_route_composition.py`
+
+Keep route modules as HTTP adapters. New domain endpoints belong in the focused router, not the
+composition module, and full application path/method uniqueness must remain tested.
+
 ## Static crawler / scan evidence
 
 - `backend/app/services/scan_execution.py`

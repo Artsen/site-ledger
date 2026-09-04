@@ -1,7 +1,7 @@
 {
   "schema": "site-ledger-second-brain-v1.2",
   "repository": "Artsen/site-ledger",
-  "base_commit": "69b9565150ed9c774e0e91cfab6c8dab54e27970",
+  "base_commit": "3dcdcfa410f7ed5b956b2f779178083a0927c7a6",
   "generated_at": "2026-09-04",
   "principles": [
     "Source code, migrations, and tests remain authoritative; this graph is a navigation and context-compression layer.",
@@ -492,7 +492,12 @@
       "label": "HTTP API",
       "summary": "FastAPI route modules expose domain operations and read models while service modules retain domain behavior.",
       "source_paths": [
-        "backend/app/api",
+        "backend/app/api/routes.py",
+        "backend/app/api/dependencies.py",
+        "backend/app/api/scan_routes.py",
+        "backend/app/api/source_routes.py",
+        "backend/app/api/page_routes.py",
+        "backend/app/api/resource_routes.py",
         "backend/app/main.py"
       ],
       "state_layer": "platform",

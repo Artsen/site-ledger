@@ -2,6 +2,17 @@
 
 These traces are compressed navigation maps. Follow the paths into source for implementation detail.
 
+## HTTP route composition
+
+1. `backend/app/main.py` assembles the stable core compatibility router and established dedicated
+   domain routers under their unchanged `/api` paths.
+2. `backend/app/api/routes.py` composes focused core routers and re-exports only intentional
+   compatibility surfaces such as `router` and `_projection_http_response`.
+3. `backend/app/api/dependencies.py` supplies shared typed database and bounded query aliases.
+4. Focused `*_routes.py` modules adapt HTTP requests to existing domain services without owning
+   business semantics or changing transaction boundaries.
+5. Full-application OpenAPI and duplicate-route tests guard composition and route precedence.
+
 ## Scan to intelligence
 
 1. **User/API starts a Scan**

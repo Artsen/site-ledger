@@ -176,7 +176,10 @@ behavior. Keep storage behind the existing content-store abstraction.
   files must be deterministically encoded, atomically published, and leave no temporary files.
 - services.graph_config owns graph capabilities and limits.
 - services.graph_queries owns scan-specific topology queries and aggregation.
-- app.api.routes exposes typed APIs.
+- `app.api.routes` is the stable core-router composition/compatibility surface. Add endpoints to the
+  focused domain router, keep shared typed dependencies in `app.api.dependencies`, and leave domain
+  semantics in services. Do not regrow unrelated handlers in the composition module. Validate the
+  fully assembled route/OpenAPI contract when changing router registration.
 
 Keep graph adapters and renderers separate. Keep network, parsing, normalization, scope,
 persistence, and storage concerns separate. Do not introduce speculative plugin systems or unused
