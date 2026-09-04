@@ -1,36 +1,34 @@
 # Development Frontier
 
 This file records non-canonical direction that may matter when planning a change. Canonical graph
-truth is reviewed against post-PR #51 `main`:
+truth is reviewed against post-PR #53 `main`:
 
-`6e17e08e641b48660a7ed7a13d9227b288fcafc6`
+`7154d9ccbe421e088c23de1de3592f3e625b628d`
 
-PR #52 adds explicit Findings deletion/reset controls and adopts this maintained context map. PR
-#53 completes the README and public project-presentation overhaul without changing product or
-architecture semantics. Unimplemented work below remains non-canonical direction.
+PR #54 completes Collection Plans V2. Unimplemented work below remains non-canonical direction.
 
-## Completed presentation work
+## Completed Collection Plans V2 work
 
-PR #53 restructures the public README around plain-English product outcomes, current scope,
-deterministic product screenshots, a concise Quick Start, workflow and architecture diagrams,
-evidence/trust boundaries, and audience-oriented documentation. It also adds a documentation house
-style and screenshot maintenance workflow. This presentation work does not add a canonical semantic
-graph domain.
+Collection Plans now preserve historical `missing_current` semantics and add explicit
+`refresh_current` collection for Performance, Accessibility, and Render. V2 freezes target reasons
+and latest-compatible observation timestamps while keeping compatible coverage and equivalent
+active collection independent. Structured Content remains missing-current only. No stale policy,
+default age threshold, recurring scheduling, or new collector abstraction was introduced.
 
-## Next substantive product feature
+## Next architectural work
 
-Collection Plans V2 remains the next intended implementation area after the README work, centered
-on `refresh_current` and freshness/stale-current groundwork. It must not be described as current
-capability until implemented.
+BackgroundJob lifecycle consolidation is the next intended architecture area. The goal is to reduce
+repeated native lifecycle wiring while preserving transaction boundaries, ownership fencing,
+collector-specific semantics, and current job compatibility. Do not combine that work with
+scheduling.
 
-Recent platform sequencing also places complexity-management work before a broad Web Estate
-expansion:
+Broader non-binding direction remains:
 
-- consolidate BackgroundJob lifecycle contracts;
 - decompose large API/frontend workspace modules;
 - establish Web Estate identity foundations;
 - add host/domain evidence and discovery;
-- infer technology/platform evidence.
+- infer technology/platform evidence;
+- later define explicit freshness policy and recurring collection semantics.
 
 These are planning signals, not a binding numbered constitution. PR boundaries may move as
 implementation reveals better ownership boundaries.

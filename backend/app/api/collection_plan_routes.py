@@ -18,6 +18,7 @@ from app.schemas.collection_plans import (
     CollectionPlanTargetRead,
     CollectionPreviewTarget,
 )
+from app.services.collection_plan_serialization import CollectionPlanSerializationBusyError
 from app.services.collection_plans import (
     Selection,
     _processed,
@@ -34,7 +35,7 @@ DbSession = Annotated[Session, Depends(get_db)]
 
 
 def _coverage(selection: Selection) -> CollectionCoverageRead:
-    missing = len(selection.targets)
+    target_total = len(selection.targets)
     return CollectionCoverageRead(
         evidence_domain=selection.domain,
         target_mode=selection.target_mode,
@@ -45,10 +46,11 @@ def _coverage(selection: Selection) -> CollectionCoverageRead:
         eligible=len(selection.eligible),
         covered=len(selection.covered_ids),
         in_flight=len(selection.in_flight_ids),
-        missing=missing,
+        active_collection=len(selection.active_collection_ids),
+        missing=len(selection.missing_ids),
         ineligible=selection.ineligible_count,
         batch_size=selection.batch_size,
-        estimated_batch_count=(missing + selection.batch_size - 1) // selection.batch_size,
+        estimated_batch_count=(target_total + selection.batch_size - 1) // selection.batch_size,
         collectable=selection.collectable,
         non_collectable_reason=selection.non_collectable_reason,
     )
@@ -98,6 +100,9 @@ def _read(plan: CollectionPlan) -> CollectionPlanRead:
         eligible_count=plan.eligible_count,
         covered_count_at_creation=plan.covered_count_at_creation,
         in_flight_count_at_creation=plan.in_flight_count_at_creation,
+        active_collection_count_at_creation=plan.active_collection_count_at_creation,
+        missing_count_at_creation=plan.missing_count_at_creation,
+        selection_reason_counts=plan.selection_reason_counts_json,
         ineligible_count_at_creation=plan.ineligible_count_at_creation,
         target_count=plan.target_count,
         batch_size=plan.batch_size,
@@ -131,7 +136,8 @@ def preview_collection_plan(
                 position=offset + index,
                 web_resource_id=target.resource_id,
                 requested_url=target.url,
-                selection_reason="missing_current",
+                selection_reason=selection.target_reasons[target.resource_id],
+                latest_compatible_observed_at=target.latest_compatible_observed_at,
                 target_context=selection.context,
                 source_snapshot_id=target.source_snapshot_id,
                 content_blob_id=target.content_blob_id,
@@ -150,6 +156,9 @@ def preview_collection_plan(
 def create_plan(site_id: int, payload: CollectionPlanRequest, db: DbSession) -> CollectionPlanRead:
     try:
         return _read(create_collection_plan(db, site_id, payload))
+    except CollectionPlanSerializationBusyError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         db.rollback()
         message = str(exc)
@@ -157,7 +166,7 @@ def create_plan(site_id: int, payload: CollectionPlanRequest, db: DbSession) -> 
             404
             if message == "Site not found."
             else 409
-            if "already active" in message or message.startswith("No missing current evidence")
+            if "already active" in message or message.startswith("No ")
             else 422
         )
         raise HTTPException(status, message) from exc
@@ -225,6 +234,7 @@ def list_targets(
                 web_resource_id=row.web_resource_id,
                 requested_url=row.requested_url,
                 selection_reason=row.selection_reason,
+                latest_compatible_observed_at=row.latest_compatible_observed_at,
                 target_context=row.target_context_json,
                 source_snapshot_id=row.source_snapshot_id,
                 content_blob_id=row.content_blob_id,

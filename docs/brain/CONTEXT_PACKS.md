@@ -90,11 +90,14 @@ If adding a domain, preserve independent clocks.
 
 - `backend/app/services/collection_plans.py`
 - `backend/app/models/collection_plans.py`
+- `backend/app/schemas/collection_plans.py`
+- `backend/app/api/collection_plan_routes.py`
 - `docs/collection-plans.md`
 - `backend/tests/test_collection_plans.py`
 - `frontend/src/pages/site-workspace/CollectionPlansWorkspace.tsx`
 
-Treat the plan as orchestration over native collectors, not evidence.
+Treat the Plan as orchestration over native collectors, not evidence. Keep compatibility, latest
+compatible observation time, and equivalent active collection separate.
 
 ## Source definitions / current inventory / AI Documents
 

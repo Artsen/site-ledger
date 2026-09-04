@@ -50,9 +50,9 @@ Python app package.
   evidence pointers, evidence-time lifecycle, and separate acknowledgement workflow.
 - **Site Intelligence:** A read-only, non-persisted composition of current Site workspace state,
   deterministic derivatives, evidence coverage, independent domain clocks, and active work.
-- **Collection Plan:** Durable orchestration provenance for one frozen, deterministic selection of
-  active Pages missing compatible current evidence in exactly one collection context. It owns
-  batches of native Runs/jobs but is not itself evidence, a Run, a job type, or a scheduler.
+- **Collection Plan:** Durable orchestration provenance for one frozen, deterministic missing-current
+  or refresh-current selection in exactly one collection context. It owns batches of native
+  Runs/jobs but is not itself evidence, a Run, a job type, a freshness policy, or a scheduler.
 
 Use Page instead of WebResource in product copy. Use Observation where Snapshot would be
 unnecessarily technical. Internal classes, API fields, routes, and developer documentation may use
@@ -95,8 +95,8 @@ Implemented capabilities include:
 - Scan, source, Site, and Activity lifecycle management.
 - A Site Intelligence Overview with explicit active-Page denominators and independent static,
   Render, Performance, Accessibility, Structured Content, Source, and Comparison provenance.
-- Current-evidence Collection Plans for Performance, Accessibility, Render, and Structured Content,
-  with deterministic target checksums, fixed native batching, cancellation, and Plan history.
+- Current-evidence Collection Plans with deterministic missing-current selection for all supported
+  domains and explicit refresh-current collection for Performance, Accessibility, and Render.
 - First-class deterministic static Page Findings for HTTP/fetch failures, noindex directives,
   conflicting indexability, missing titles, canonical validity/cardinality/target failures, and
   current non-HTML representations. Evaluation history persists complete per-detector diagnostics
@@ -160,9 +160,10 @@ behavior. Keep storage behind the existing content-store abstraction.
   read-only Site Intelligence composition model. It must use active SitePages as the operational
   Page denominator, retain independent evidence clocks, and never prepare or persist derivatives.
 - models.collection_plans, services.collection_plans, schemas.collection_plans, and
-  api.collection_plan_routes own missing-current selection and orchestration provenance. Selectors
-  are shared with Site Intelligence. Plans must queue existing native collectors and job types;
-  they must not become evidence, duplicate collection logic, or introduce scheduling semantics.
+  api.collection_plan_routes own missing-current/refresh-current selection and orchestration
+  provenance. Selectors are shared with Site Intelligence. Compatibility, freshness, and active
+  collection remain separate. Plans must queue existing native collectors and job types; they must
+  not become evidence, duplicate collection logic, or introduce scheduling semantics.
 - services.site_pages, services.page_categories, and services.notes own Site-scoped Page workflow.
 - services.category_rules and services.category_rule_evaluator own automatic Category provenance,
   preview, reconciliation, and evaluation history.

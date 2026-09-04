@@ -52,7 +52,7 @@ what the current repository implements from planned direction.
 | Structured Page Content | Available | Versioned document text, headings, sections, and deterministic Markdown |
 | Site Intelligence | Available | Read-only coverage and activity rollup with independent evidence clocks |
 | Deterministic Findings | Available | Evidence-backed static, topology, and sitemap/static conditions |
-| Missing-current Collection Plans | Available | Bounded orchestration for evidence that is absent from the current identity |
+| Collection Plans | Available | Fill missing evidence or explicitly reacquire compatible Render, Performance, and Accessibility evidence |
 | Scheduled recurring collection | Not yet | Collection remains manually initiated |
 | Google Search Console and GA4 | Not yet | No analytics or search-performance integration |
 | AI interpretation | Not yet | AI document evidence can be retained; no AI reasoning is implemented |
@@ -359,8 +359,8 @@ capture remains subject to documented Chromium DNS/connection timing limits. Rea
 
 - Site Ledger is a source-run local application, not a hosted service or stable release.
 - Static crawling does not execute JavaScript; browser rendering is a separate explicit collector.
-- Collection is manual. Collection Plans select missing-current evidence but do not schedule future
-  work or model freshness yet.
+- Collection is manual. Collection Plans can fill missing evidence or explicitly refresh compatible
+  evidence, but do not schedule future work or apply automatic stale/due policies.
 - There is no GSC, GA4, AI interpretation, full visual regression, or performance-regression engine.
 - Automated Accessibility evidence is useful test output, not WCAG certification.
 - Static crawling is sequential within a run; broad concurrent collection and robots enforcement
@@ -373,10 +373,11 @@ capture remains subject to documented Chromium DNS/connection timing limits. Rea
 
 ## What's Next
 
-The next substantive product area is **Collection Plans V2**: `refresh_current`, explicit freshness
-semantics, and stale-current groundwork. Longer-term direction includes recurring scheduling,
-GSC/GA4 evidence, broader cross-domain correlation, Web Estate and platform intelligence, and
-evidence-grounded AI interpretation. These are plans, not current capabilities.
+The next architectural area is **BackgroundJob lifecycle consolidation**, reducing repeated native
+job lifecycle wiring while preserving ownership fencing and collector boundaries. Longer-term
+direction includes recurring scheduling, GSC/GA4 evidence, broader cross-domain correlation, Web
+Estate and platform intelligence, and evidence-grounded AI interpretation. These are plans, not
+current capabilities.
 
 ## Documentation Map
 

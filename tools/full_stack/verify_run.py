@@ -223,9 +223,11 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         assert seed_origins
 
         deleted_scan_render_run = db.get(RenderRun, int(result["deleted_scan_render_run_id"]))
+        refresh_render_run = db.get(RenderRun, int(result["refresh_render_run_id"]))
         standalone_render_run = db.get(RenderRun, int(result["standalone_render_run_id"]))
         rerender_render_run = db.get(RenderRun, int(result["rerender_render_run_id"]))
         assert deleted_scan_render_run is None
+        assert refresh_render_run is not None and refresh_render_run.status == "completed"
         assert standalone_render_run is not None and standalone_render_run.source_scan_id is None
         assert rerender_render_run is not None and rerender_render_run.source_render_run_id is None
         assert rerender_render_run.status == standalone_render_run.status == "completed"
@@ -233,13 +235,14 @@ def verify(result: dict[str, Any], request_log: Path) -> dict[str, Any]:
         repeated_observation_ids = [
             int(value) for value in result["repeated_render_observation_ids"]
         ]
-        assert len(repeated_observation_ids) == 2
+        assert len(repeated_observation_ids) == 3
         repeated_observations = [
             db.get(RenderedObservation, observation_id)
             for observation_id in repeated_observation_ids
         ]
         assert all(item is not None for item in repeated_observations)
         assert {item.render_run_id for item in repeated_observations if item is not None} == {
+            refresh_render_run.id,
             standalone_render_run.id,
             rerender_render_run.id,
         }

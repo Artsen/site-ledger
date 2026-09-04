@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 EvidenceDomain = Literal["performance", "accessibility", "render", "structured_content"]
-TargetMode = Literal["missing_current"]
+TargetMode = Literal["missing_current", "refresh_current"]
 
 
 class CollectionPlanRequest(BaseModel):
@@ -18,6 +18,7 @@ class CollectionPreviewTarget(BaseModel):
     web_resource_id: int
     requested_url: str
     selection_reason: str
+    latest_compatible_observed_at: datetime | None = None
     target_context: dict[str, Any] = Field(default_factory=dict)
     source_snapshot_id: int | None = None
     content_blob_id: int | None = None
@@ -33,6 +34,7 @@ class CollectionCoverageRead(BaseModel):
     eligible: int
     covered: int
     in_flight: int
+    active_collection: int
     missing: int
     ineligible: int
     batch_size: int
@@ -89,6 +91,9 @@ class CollectionPlanRead(BaseModel):
     eligible_count: int
     covered_count_at_creation: int
     in_flight_count_at_creation: int
+    active_collection_count_at_creation: int | None
+    missing_count_at_creation: int
+    selection_reason_counts: dict[str, int]
     ineligible_count_at_creation: int
     target_count: int
     batch_size: int
@@ -116,6 +121,7 @@ class CollectionPlanTargetRead(BaseModel):
     web_resource_id: int
     requested_url: str
     selection_reason: str
+    latest_compatible_observed_at: datetime | None
     target_context: dict[str, Any]
     source_snapshot_id: int | None
     content_blob_id: int | None

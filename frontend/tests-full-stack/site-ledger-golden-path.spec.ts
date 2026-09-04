@@ -121,6 +121,27 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
   const coveredIntelligence = await getJson(request, `${apiUrl}/api/sites/${site.id}/intelligence`);
   const coveredRender = (coveredIntelligence.collection_coverage as Json[]).find((item) => item.evidence_domain === "render");
   expect(coveredRender?.missing).toBe(0);
+  const rootBeforeRefresh = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${rootPage.resource_id}/rendered-observations?direction=asc&limit=50`);
+  expect(rootBeforeRefresh.total).toBe(1);
+  const originalRootObservationId = rootBeforeRefresh.items[0].id;
+  const refreshRenderPayload = {
+    evidence_domain: "render",
+    target_mode: "refresh_current",
+    context: {}
+  };
+  const refreshRenderPreview = await postJson(request, `${apiUrl}/api/sites/${site.id}/collection-plans/preview`, refreshRenderPayload);
+  expect(refreshRenderPreview.target_total).toBe(4);
+  expect(refreshRenderPreview.covered).toBe(4);
+  expect(refreshRenderPreview.missing).toBe(0);
+  expect((refreshRenderPreview.targets as Json[]).every((target) => target.selection_reason === "refresh_current")).toBe(true);
+  const queuedRefreshPlan = await postJson(request, `${apiUrl}/api/sites/${site.id}/collection-plans`, refreshRenderPayload);
+  const completedRefreshPlan = await waitForCollectionPlan(request, site.id, queuedRefreshPlan.id);
+  expect(completedRefreshPlan.status).toBe("completed");
+  expect(completedRefreshPlan.target_mode).toBe("refresh_current");
+  expect((completedRefreshPlan.selection_reason_counts as Record<string, number>).refresh_current).toBe(4);
+  const rootAfterRefresh = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${rootPage.resource_id}/rendered-observations?direction=asc&limit=50`);
+  expect(rootAfterRefresh.total).toBe(2);
+  expect(rootAfterRefresh.items.some((item) => item.id === originalRootObservationId)).toBe(true);
   const standaloneRenderRun = await postJson(request, `${apiUrl}/api/sites/${site.id}/render-runs`, {
     resource_ids: [rootPage.resource_id],
     trigger: "site_workspace",
@@ -143,8 +164,8 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     confirmation: `DELETE RENDER RUN ${scan1RenderRun.id}`
   });
   const rootRenderHistory = await getJson(request, `${apiUrl}/api/sites/${site.id}/pages/${rootPage.resource_id}/rendered-observations?direction=asc&limit=50`);
-  expect(rootRenderHistory.total).toBe(2);
-  expect(rootRenderHistory.items.map((item) => item.render_run_target_id)).toHaveLength(2);
+  expect(rootRenderHistory.total).toBe(3);
+  expect(rootRenderHistory.items.map((item) => item.render_run_target_id)).toHaveLength(3);
   const evidence1 = await collectEvidence(request, site.id, scan1Id);
   expect(evidence1["/"].structured.sections.some((section) => section.direct_text.includes("Version one product copy."))).toBe(true);
 
@@ -461,6 +482,7 @@ test("real Site Ledger stack preserves and compares deterministic crawl evidence
     sitemap_redirect_finding_id: sitemapRedirectFinding.id,
     finding_id: pageNoindexFinding.id,
     deleted_scan_render_run_id: scan1RenderRun.id,
+    refresh_render_run_id: (completedRefreshPlan.batches as Json[])[0].render_run_id,
     standalone_render_run_id: completedStandaloneRenderRun.id,
     rerender_render_run_id: completedRerenderRun.id,
     repeated_render_resource_id: rootPage.resource_id,

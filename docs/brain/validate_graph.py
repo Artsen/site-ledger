@@ -21,7 +21,8 @@ ALLOWED_RELATIONS = {
     "freezes_active_page_universe", "guarded_by", "leases_and_fences_in", "normalizes_with",
     "organized_by", "pins", "presented_by", "reads", "reconciles", "records",
     "refresh_executed_by", "renders", "scoped_by", "stress_tests", "summarizes", "surfaces",
-    "targets_missing_current", "terminalizes_into", "triggers", "verifies",
+    "orchestrates_missing_or_refresh_current", "targets_missing_current", "terminalizes_into",
+    "triggers", "verifies",
 }
 
 

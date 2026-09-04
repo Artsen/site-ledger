@@ -59,6 +59,7 @@ from app.services.background_jobs import (
     enqueue_structured_content_job,
     request_cancellation,
 )
+from app.services.collection_plan_serialization import lock_site_for_collection_plan_change
 from app.services.job_types import ACTIVE_JOB_STATUSES, TERMINAL_JOB_STATUSES
 from app.services.performance_collection import create_performance_run
 from app.services.performance_providers import (
@@ -95,7 +96,7 @@ def accessibility_compatibility_filters(
     )
 
 
-COLLECTION_PLANNER_VERSION = "collection-planner-v1"
+COLLECTION_PLANNER_VERSION = "collection-planner-v2"
 STRUCTURED_CONTENT_BATCH_SIZE = 250
 RENDER_BATCH_SIZE = 1_000
 ACTIVE_RUN_STATUSES = {"queued", "running"}
@@ -107,6 +108,7 @@ class Candidate:
     url: str
     source_snapshot_id: int | None = None
     content_blob_id: int | None = None
+    latest_compatible_observed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -120,7 +122,10 @@ class Selection:
     eligible: tuple[Candidate, ...]
     covered_ids: frozenset[int]
     in_flight_ids: frozenset[int]
+    active_collection_ids: frozenset[int]
+    missing_ids: frozenset[int]
     targets: tuple[Candidate, ...]
+    target_reasons: dict[int, str]
     universe_sha256: str
     target_sha256: str
     batch_size: int
@@ -228,11 +233,14 @@ def _canonical_context(
 
 def _performance_state(
     db: Session, site_id: int, context: dict[str, Any]
-) -> tuple[set[int], set[int]]:
-    covered = {
-        int(value)
-        for value in db.scalars(
-            select(PerformanceObservation.web_resource_id)
+) -> tuple[dict[int, datetime], set[int]]:
+    latest = {
+        int(resource_id): observed_at
+        for resource_id, observed_at in db.execute(
+            select(
+                PerformanceObservation.web_resource_id,
+                func.max(PerformanceObservation.observed_at),
+            )
             .where(
                 PerformanceObservation.website_property_id == site_id,
                 PerformanceObservation.web_resource_id.is_not(None),
@@ -244,9 +252,9 @@ def _performance_state(
                 PerformanceObservation.normalization_version == context["normalization_version"],
                 PerformanceObservation.outcome.in_(("ready", "unavailable", "failed")),
             )
-            .distinct()
+            .group_by(PerformanceObservation.web_resource_id)
         )
-        if value is not None
+        if resource_id is not None
     }
     in_flight: set[int] = set()
     runs = db.scalars(
@@ -269,24 +277,28 @@ def _performance_state(
             and context["dimension"] in dimensions
         ):
             in_flight.update(int(value) for value in config.get("resource_ids", []))
-    return covered, in_flight
+    return latest, in_flight
 
 
 def _accessibility_state(
     db: Session, site_id: int, context: dict[str, Any]
-) -> tuple[set[int], set[int]]:
-    covered = set(
-        db.scalars(
-            select(AccessibilityObservation.web_resource_id)
+) -> tuple[dict[int, datetime], set[int]]:
+    latest = {
+        int(resource_id): observed_at
+        for resource_id, observed_at in db.execute(
+            select(
+                AccessibilityObservation.web_resource_id,
+                func.max(AccessibilityObservation.observed_at),
+            )
             .where(
                 AccessibilityObservation.website_property_id == site_id,
                 AccessibilityObservation.profile == context["profile"],
                 *accessibility_compatibility_filters(AccessibilityObservation, context),
                 AccessibilityObservation.outcome.in_(("ready", "failed")),
             )
-            .distinct()
+            .group_by(AccessibilityObservation.web_resource_id)
         )
-    )
+    }
     in_flight: set[int] = set()
     runs = db.scalars(
         select(AccessibilityRun)
@@ -308,10 +320,12 @@ def _accessibility_state(
             and run.ruleset_sha256 == context["ruleset_sha256"]
         ):
             in_flight.update(int(value) for value in config.get("resource_ids", []))
-    return covered, in_flight
+    return latest, in_flight
 
 
-def _render_state(db: Session, site_id: int, context_identity: str) -> tuple[set[int], set[int]]:
+def _render_state(
+    db: Session, site_id: int, context_identity: str
+) -> tuple[dict[int, datetime], set[int]]:
     run_rows = db.execute(
         select(RenderRun.id, RenderRun.configuration_json).where(
             RenderRun.website_property_id == site_id
@@ -323,11 +337,18 @@ def _render_state(db: Session, site_id: int, context_identity: str) -> tuple[set
         if render_collection_profile_identity(configuration) == context_identity
     ]
     current_profile = render_collection_profile({})
-    covered = (
+    latest = (
         {
-            int(value)
-            for value in db.scalars(
-                select(RenderedObservation.web_resource_id)
+            int(resource_id): observed_at
+            for resource_id, observed_at in db.execute(
+                select(
+                    RenderedObservation.web_resource_id,
+                    func.max(
+                        func.coalesce(
+                            RenderedObservation.finished_at, RenderedObservation.created_at
+                        )
+                    ),
+                )
                 .where(
                     RenderedObservation.render_run_id.in_(compatible_run_ids),
                     RenderedObservation.web_resource_id.is_not(None),
@@ -344,12 +365,12 @@ def _render_state(db: Session, site_id: int, context_identity: str) -> tuple[set
                     RenderedObservation.capture_schema_version
                     == current_profile["capture_schema_version"],
                 )
-                .distinct()
+                .group_by(RenderedObservation.web_resource_id)
             )
-            if value is not None
+            if resource_id is not None
         }
         if compatible_run_ids
-        else set()
+        else {}
     )
     in_flight: set[int] = set()
     runs = db.scalars(
@@ -364,7 +385,7 @@ def _render_state(db: Session, site_id: int, context_identity: str) -> tuple[set
     for run in runs:
         if render_collection_profile_identity(run.configuration_json) == context_identity:
             in_flight.update(target.web_resource_id for target in run.targets)
-    return covered, in_flight
+    return latest, in_flight
 
 
 def _structured_state(
@@ -437,9 +458,15 @@ def build_selection(
     if site is None:
         raise ValueError("Site not found.")
     context, context_identity, collectable, reason = _canonical_context(db, site, request)
+    if request.evidence_domain == "structured_content" and request.target_mode == "refresh_current":
+        raise ValueError(
+            "refresh_current is not applicable to deterministic Structured Content. "
+            "Collect new static evidence or use missing_current after the source HTML changes."
+        )
     active = active_page_candidates(db, site_id) if active_override is None else active_override
     eligible = active
     if not active:
+        latest_compatible: dict[int, datetime] = {}
         covered: set[int] = set()
         in_flight: set[int] = set()
         if request.evidence_domain == "performance":
@@ -461,7 +488,7 @@ def build_selection(
         else:
             batch_size = STRUCTURED_CONTENT_BATCH_SIZE
     elif request.evidence_domain == "performance":
-        covered, in_flight = _performance_state(db, site_id, context)
+        latest_compatible, in_flight = _performance_state(db, site_id, context)
         settings = get_settings()
         batch_size = min(
             PERFORMANCE_REQUEST_PAGE_LIMIT,
@@ -469,7 +496,7 @@ def build_selection(
             settings.performance_max_provider_requests,
         )
     elif request.evidence_domain == "accessibility":
-        covered, in_flight = _accessibility_state(db, site_id, context)
+        latest_compatible, in_flight = _accessibility_state(db, site_id, context)
         settings = get_settings()
         batch_size = min(
             ACCESSIBILITY_REQUEST_PAGE_LIMIT,
@@ -477,22 +504,54 @@ def build_selection(
             settings.accessibility_max_audit_count,
         )
     elif request.evidence_domain == "render":
-        covered, in_flight = _render_state(db, site_id, context_identity)
+        latest_compatible, in_flight = _render_state(db, site_id, context_identity)
         batch_size = RENDER_BATCH_SIZE
     else:
         eligible, covered, in_flight = _structured_state(db, site_id, active)
+        latest_compatible = {}
         batch_size = STRUCTURED_CONTENT_BATCH_SIZE
     eligible_ids = {item.resource_id for item in eligible}
-    covered &= eligible_ids
-    in_flight = (in_flight & eligible_ids) - covered
-    targets = tuple(
-        item
-        for item in eligible
-        if item.resource_id not in covered and item.resource_id not in in_flight
+    if request.evidence_domain != "structured_content":
+        covered = set(latest_compatible) & eligible_ids
+    else:
+        covered &= eligible_ids
+    active_collection = in_flight & eligible_ids
+    missing = eligible_ids - covered
+    missing_in_flight = active_collection & missing
+    target_ids = (
+        missing - active_collection
+        if request.target_mode == "missing_current"
+        else eligible_ids - active_collection
     )
+    targets = tuple(
+        Candidate(
+            resource_id=item.resource_id,
+            url=item.url,
+            source_snapshot_id=item.source_snapshot_id,
+            content_blob_id=item.content_blob_id,
+            latest_compatible_observed_at=latest_compatible.get(item.resource_id),
+        )
+        for item in eligible
+        if item.resource_id in target_ids
+    )
+    target_reasons = {
+        item.resource_id: ("refresh_current" if item.resource_id in covered else "missing_current")
+        for item in targets
+    }
     universe = [[item.resource_id, item.url] for item in active]
     target_identity = [
-        [item.resource_id, item.url, item.source_snapshot_id, item.content_blob_id]
+        [
+            item.resource_id,
+            item.url,
+            item.source_snapshot_id,
+            item.content_blob_id,
+            target_reasons[item.resource_id],
+            (
+                item.latest_compatible_observed_at.isoformat()
+                if item.latest_compatible_observed_at is not None
+                else None
+            ),
+        ]
         for item in targets
     ]
     universe_sha256 = _sha(universe)
@@ -516,8 +575,11 @@ def build_selection(
         active=active,
         eligible=eligible,
         covered_ids=frozenset(covered),
-        in_flight_ids=frozenset(in_flight),
+        in_flight_ids=frozenset(missing_in_flight),
+        active_collection_ids=frozenset(active_collection),
+        missing_ids=frozenset(missing),
         targets=targets,
+        target_reasons=target_reasons,
         universe_sha256=universe_sha256,
         target_sha256=target_sha256,
         batch_size=batch_size,
@@ -563,6 +625,8 @@ def batch_target_counts(target_count: int, batch_size: int) -> list[int]:
 def create_collection_plan(
     db: Session, site_id: int, request: CollectionPlanRequest
 ) -> CollectionPlan:
+    if lock_site_for_collection_plan_change(db, site_id) is None:
+        raise ValueError("Site not found.")
     selection = build_selection(db, site_id, request)
     if not selection.collectable:
         raise ValueError(selection.non_collectable_reason or "Context is not collectable.")
@@ -570,6 +634,8 @@ def create_collection_plan(
     if active is not None:
         raise ValueError(f"Equivalent Collection Plan {active.id} is already active.")
     if not selection.targets:
+        if selection.target_mode == "refresh_current":
+            raise ValueError("No refreshable targets remain for this context.")
         raise ValueError("No missing current evidence remains for this context.")
     batch_counts = batch_target_counts(len(selection.targets), selection.batch_size)
     batches = []
@@ -589,6 +655,12 @@ def create_collection_plan(
         eligible_count=len(selection.eligible),
         covered_count_at_creation=len(selection.covered_ids),
         in_flight_count_at_creation=len(selection.in_flight_ids),
+        active_collection_count_at_creation=len(selection.active_collection_ids),
+        missing_count_at_creation=len(selection.missing_ids),
+        selection_reason_counts_json={
+            reason: sum(value == reason for value in selection.target_reasons.values())
+            for reason in ("missing_current", "refresh_current")
+        },
         ineligible_count_at_creation=selection.ineligible_count,
         target_count=len(selection.targets),
         batch_size=selection.batch_size,
@@ -604,7 +676,8 @@ def create_collection_plan(
                 position=position,
                 web_resource_id=target.resource_id,
                 requested_url=target.url,
-                selection_reason="missing_current",
+                selection_reason=selection.target_reasons[target.resource_id],
+                latest_compatible_observed_at=target.latest_compatible_observed_at,
                 target_context_json=selection.context,
                 source_snapshot_id=target.source_snapshot_id,
                 content_blob_id=target.content_blob_id,

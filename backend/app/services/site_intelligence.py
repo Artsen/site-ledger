@@ -104,7 +104,7 @@ def get_site_intelligence(db: Session, site_id: int) -> SiteIntelligenceRead | N
 
 
 def _selection_coverage(selection: Selection) -> CollectionCoverageRead:
-    missing = len(selection.targets)
+    target_total = len(selection.targets)
     return CollectionCoverageRead(
         evidence_domain=selection.domain,
         target_mode=selection.target_mode,
@@ -115,10 +115,11 @@ def _selection_coverage(selection: Selection) -> CollectionCoverageRead:
         eligible=len(selection.eligible),
         covered=len(selection.covered_ids),
         in_flight=len(selection.in_flight_ids),
-        missing=missing,
+        active_collection=len(selection.active_collection_ids),
+        missing=len(selection.missing_ids),
         ineligible=selection.ineligible_count,
         batch_size=selection.batch_size,
-        estimated_batch_count=(missing + selection.batch_size - 1) // selection.batch_size,
+        estimated_batch_count=(target_total + selection.batch_size - 1) // selection.batch_size,
         collectable=selection.collectable,
         non_collectable_reason=selection.non_collectable_reason,
     )

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from time import perf_counter
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 from sqlalchemy.orm import sessionmaker
 
+from app.accessibility.audit import AccessibilityAuditResult
 from app.accessibility.engine import (
     ACCESSIBILITY_INTEGRATION_VERSION,
     ACCESSIBILITY_NORMALIZATION_VERSION,
@@ -14,6 +16,7 @@ from app.accessibility.engine import (
     RULESET_PROFILE,
     RULESET_SHA256,
 )
+from app.browser.capture import CaptureResult
 from app.crawler.canonical_document import (
     STRUCTURED_CONTENT_CONFIG_VERSION,
     STRUCTURED_CONTENT_EXTRACTOR_VERSION,
@@ -42,6 +45,7 @@ from app.models import (
     WebsiteProperty,
 )
 from app.schemas.collection_plans import CollectionPlanRequest
+from app.services.accessibility_collection import execute_accessibility_run
 from app.services.background_jobs import enqueue_accessibility_run_job
 from app.services.collection_plans import (
     _processed,
@@ -54,14 +58,17 @@ from app.services.collection_plans import (
 )
 from app.services.job_handlers import AccessibilityRunJobHandler
 from app.services.job_types import ExecutionOwnershipLost
+from app.services.performance_collection import execute_performance_run
 from app.services.performance_providers import (
     PAGESPEED_ADAPTER_VERSION,
     PERFORMANCE_NORMALIZATION_VERSION,
+    ProviderResult,
 )
 from app.services.render_collection_profile import (
     render_collection_profile,
     render_collection_profile_identity,
 )
+from app.services.render_runs import execute_render_run
 from app.services.structured_content import build_missing_structured_content
 from app.storage.content_store import LocalContentStore
 
@@ -96,6 +103,529 @@ def _site_with_pages(db_session, count: int) -> WebsiteProperty:
     )
     db_session.commit()
     return site
+
+
+def _site_resources(db_session, site_id: int) -> list[WebResource]:
+    return list(
+        db_session.scalars(
+            select(WebResource)
+            .join(SitePage, SitePage.resource_id == WebResource.id)
+            .where(SitePage.website_property_id == site_id)
+            .order_by(WebResource.id)
+        )
+    )
+
+
+def _add_accessibility_evidence(
+    db_session,
+    site: WebsiteProperty,
+    resources: list[WebResource],
+    *,
+    observed_at: datetime,
+    ruleset_sha256: str = RULESET_SHA256,
+) -> AccessibilityRun:
+    run = AccessibilityRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={
+            "resource_ids": [resource.id for resource in resources],
+            "profiles": ["desktop"],
+        },
+        target_count=len(resources),
+        observation_count=len(resources),
+        axe_core_version=AXE_CORE_VERSION,
+        detector_bundle_sha256=AXE_BUNDLE_SHA256,
+        integration_version=ACCESSIBILITY_INTEGRATION_VERSION,
+        normalization_version=ACCESSIBILITY_NORMALIZATION_VERSION,
+        ruleset_profile=RULESET_PROFILE,
+        ruleset_rule_count=0,
+        ruleset_sha256=ruleset_sha256,
+    )
+    db_session.add(run)
+    db_session.flush()
+    db_session.add_all(
+        [
+            AccessibilityObservation(
+                accessibility_run_id=run.id,
+                website_property_id=site.id,
+                web_resource_id=resource.id,
+                requested_url=resource.normalized_url,
+                profile="desktop",
+                outcome="ready",
+                observed_at=observed_at,
+                axe_core_version=AXE_CORE_VERSION,
+                detector_bundle_sha256=AXE_BUNDLE_SHA256,
+                integration_version=ACCESSIBILITY_INTEGRATION_VERSION,
+                normalization_version=ACCESSIBILITY_NORMALIZATION_VERSION,
+                ruleset_profile=RULESET_PROFILE,
+                ruleset_sha256=ruleset_sha256,
+                profile_json={},
+            )
+            for resource in resources
+        ]
+    )
+    db_session.commit()
+    return run
+
+
+def _add_active_accessibility_run(
+    db_session, site: WebsiteProperty, resources: list[WebResource]
+) -> AccessibilityRun:
+    run = AccessibilityRun(
+        website_property_id=site.id,
+        status="queued",
+        trigger="site_workspace",
+        configuration_json={
+            "resource_ids": [resource.id for resource in resources],
+            "profiles": ["desktop"],
+        },
+        target_count=len(resources),
+        observation_count=0,
+        axe_core_version=AXE_CORE_VERSION,
+        detector_bundle_sha256=AXE_BUNDLE_SHA256,
+        integration_version=ACCESSIBILITY_INTEGRATION_VERSION,
+        normalization_version=ACCESSIBILITY_NORMALIZATION_VERSION,
+        ruleset_profile=RULESET_PROFILE,
+        ruleset_rule_count=0,
+        ruleset_sha256=RULESET_SHA256,
+    )
+    db_session.add(run)
+    db_session.flush()
+    enqueue_accessibility_run_job(db_session, run.id, site.id)
+    db_session.commit()
+    return run
+
+
+def test_refresh_current_selects_covered_pages_and_freezes_prior_timestamp(db_session) -> None:
+    site = _site_with_pages(db_session, 10)
+    resources = _site_resources(db_session, site.id)
+    observed_at = datetime(2026, 9, 1, 15, 24, tzinfo=UTC)
+    _add_accessibility_evidence(db_session, site, resources, observed_at=observed_at)
+
+    missing = build_selection(
+        db_session,
+        site.id,
+        CollectionPlanRequest(evidence_domain="accessibility", context={"profile": "desktop"}),
+    )
+    refresh = build_selection(
+        db_session,
+        site.id,
+        CollectionPlanRequest(
+            evidence_domain="accessibility",
+            target_mode="refresh_current",
+            context={"profile": "desktop"},
+        ),
+    )
+
+    assert missing.targets == ()
+    assert missing.target_sha256 != refresh.target_sha256
+    assert len(refresh.covered_ids) == 10
+    assert refresh.missing_ids == set()
+    assert len(refresh.targets) == 10
+    assert set(refresh.target_reasons.values()) == {"refresh_current"}
+    assert {target.latest_compatible_observed_at for target in refresh.targets} == {observed_at}
+    plan = create_collection_plan(
+        db_session,
+        site.id,
+        CollectionPlanRequest(
+            evidence_domain="accessibility",
+            target_mode="refresh_current",
+            context={"profile": "desktop"},
+        ),
+    )
+    assert plan.planner_version == "collection-planner-v2"
+    assert plan.missing_count_at_creation == 0
+    assert plan.selection_reason_counts_json == {
+        "missing_current": 0,
+        "refresh_current": 10,
+    }
+    assert all(target.latest_compatible_observed_at == observed_at for target in plan.targets)
+    with pytest.raises(ValueError, match="already active"):
+        create_collection_plan(
+            db_session,
+            site.id,
+            CollectionPlanRequest(
+                evidence_domain="accessibility",
+                target_mode="refresh_current",
+                context={"profile": "desktop"},
+            ),
+        )
+
+
+def test_refresh_current_keeps_coverage_and_active_collection_independent(db_session) -> None:
+    site = _site_with_pages(db_session, 10)
+    resources = _site_resources(db_session, site.id)
+    _add_accessibility_evidence(
+        db_session,
+        site,
+        resources[:6],
+        observed_at=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    _add_active_accessibility_run(db_session, site, [resources[0], resources[6]])
+
+    refresh = build_selection(
+        db_session,
+        site.id,
+        CollectionPlanRequest(
+            evidence_domain="accessibility",
+            target_mode="refresh_current",
+            context={"profile": "desktop"},
+        ),
+    )
+
+    assert len(refresh.covered_ids) == 6
+    assert refresh.active_collection_ids == {resources[0].id, resources[6].id}
+    assert refresh.in_flight_ids == {resources[6].id}
+    assert len(refresh.missing_ids) == 4
+    assert len(refresh.targets) == 8
+    assert list(refresh.target_reasons.values()).count("refresh_current") == 5
+    assert list(refresh.target_reasons.values()).count("missing_current") == 3
+    assert resources[0].id not in {target.resource_id for target in refresh.targets}
+    assert resources[6].id not in {target.resource_id for target in refresh.targets}
+
+
+def test_active_collection_is_site_and_accessibility_profile_scoped(db_session) -> None:
+    first_site = _site_with_pages(db_session, 1)
+    first_resource = _site_resources(db_session, first_site.id)[0]
+    _add_active_accessibility_run(db_session, first_site, [first_resource])
+    second_site = WebsiteProperty(
+        name="Second Collection Plan fixture",
+        base_url="https://second.example.test/",
+        normalized_base_url="https://second.example.test/",
+        group_key="Other",
+        platform_key="Other",
+        ownership_key="Unknown",
+        scope_config={},
+    )
+    second_resource = WebResource(
+        resource_type="page",
+        normalized_url="https://second.example.test/page",
+        scheme="https",
+        host="second.example.test",
+        path="/page",
+        query="",
+    )
+    db_session.add_all([second_site, second_resource])
+    db_session.flush()
+    db_session.add(SitePage(website_property_id=second_site.id, resource_id=second_resource.id))
+    db_session.commit()
+
+    other_site = build_selection(
+        db_session,
+        second_site.id,
+        CollectionPlanRequest(
+            evidence_domain="accessibility",
+            target_mode="refresh_current",
+            context={"profile": "desktop"},
+        ),
+    )
+    other_profile = build_selection(
+        db_session,
+        first_site.id,
+        CollectionPlanRequest(
+            evidence_domain="accessibility",
+            target_mode="refresh_current",
+            context={"profile": "mobile"},
+        ),
+    )
+
+    assert other_site.active_collection_ids == set()
+    assert [target.resource_id for target in other_site.targets] == [second_resource.id]
+    assert other_profile.active_collection_ids == set()
+    assert [target.resource_id for target in other_profile.targets] == [first_resource.id]
+
+
+def test_active_performance_context_does_not_suppress_another_dimension(
+    db_session, monkeypatch
+) -> None:
+    from app.config import Settings
+
+    settings = Settings().model_copy(update={"google_api_key": "test-key"})
+    monkeypatch.setattr("app.services.collection_plans.get_settings", lambda: settings)
+    monkeypatch.setattr("app.services.performance_collection.get_settings", lambda: settings)
+    site = _site_with_pages(db_session, 1)
+    resource = _site_resources(db_session, site.id)[0]
+    create_collection_plan(
+        db_session,
+        site.id,
+        CollectionPlanRequest(
+            evidence_domain="performance",
+            context={"provider": "pagespeed", "dimension": "mobile"},
+        ),
+    )
+
+    desktop = build_selection(
+        db_session,
+        site.id,
+        CollectionPlanRequest(
+            evidence_domain="performance",
+            target_mode="refresh_current",
+            context={"provider": "pagespeed", "dimension": "desktop"},
+        ),
+    )
+
+    assert desktop.active_collection_ids == set()
+    assert [target.resource_id for target in desktop.targets] == [resource.id]
+
+
+def test_refresh_freshness_uses_latest_compatible_observation(db_session) -> None:
+    site = _site_with_pages(db_session, 1)
+    resource = _site_resources(db_session, site.id)[0]
+    compatible_at = datetime(2026, 9, 1, tzinfo=UTC)
+    _add_accessibility_evidence(db_session, site, [resource], observed_at=compatible_at)
+    _add_accessibility_evidence(
+        db_session,
+        site,
+        [resource],
+        observed_at=datetime(2026, 9, 4, tzinfo=UTC),
+        ruleset_sha256="incompatible-newer-ruleset",
+    )
+
+    selection = build_selection(
+        db_session,
+        site.id,
+        CollectionPlanRequest(
+            evidence_domain="accessibility",
+            target_mode="refresh_current",
+            context={"profile": "desktop"},
+        ),
+    )
+
+    assert selection.targets[0].latest_compatible_observed_at == compatible_at
+
+
+def test_structured_content_rejects_refresh_current(db_session) -> None:
+    site = _site_with_pages(db_session, 1)
+    request = CollectionPlanRequest(
+        evidence_domain="structured_content", target_mode="refresh_current"
+    )
+
+    with pytest.raises(ValueError, match="not applicable to deterministic Structured Content"):
+        build_selection(db_session, site.id, request)
+
+
+class _ReadyPerformanceClient:
+    def pagespeed(self, target: str, _dimension: str) -> ProviderResult:
+        return ProviderResult(
+            outcome="ready",
+            payload=None,
+            metrics={"lcp": {"value": 1_000, "unit": "ms"}},
+            provider_target=target,
+        )
+
+    def close(self) -> None:
+        return None
+
+
+def test_performance_refresh_executes_new_native_observation_and_retains_old(
+    db_session, monkeypatch
+) -> None:
+    from app.config import Settings
+
+    settings = Settings().model_copy(update={"google_api_key": "test-key"})
+    monkeypatch.setattr("app.services.collection_plans.get_settings", lambda: settings)
+    monkeypatch.setattr("app.services.performance_collection.get_settings", lambda: settings)
+    site = _site_with_pages(db_session, 1)
+    resource = _site_resources(db_session, site.id)[0]
+    old_run = PerformanceRun(
+        website_property_id=site.id,
+        status="completed",
+        trigger="site_workspace",
+        configuration_json={},
+        target_count=1,
+        request_count=1,
+    )
+    db_session.add(old_run)
+    db_session.flush()
+    old = PerformanceObservation(
+        performance_run_id=old_run.id,
+        website_property_id=site.id,
+        web_resource_id=resource.id,
+        provider="pagespeed",
+        provider_adapter_version=PAGESPEED_ADAPTER_VERSION,
+        normalization_version=PERFORMANCE_NORMALIZATION_VERSION,
+        target_kind="url",
+        target_key="old",
+        requested_target=resource.normalized_url,
+        dimension="mobile",
+        outcome="ready",
+        request_descriptor_json={},
+        observed_at=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    db_session.add(old)
+    db_session.commit()
+    old_id = old.id
+    plan = create_collection_plan(
+        db_session,
+        site.id,
+        CollectionPlanRequest(
+            evidence_domain="performance",
+            target_mode="refresh_current",
+            context={"provider": "pagespeed", "dimension": "mobile"},
+        ),
+    )
+    refresh_run_id = plan.batches[0].performance_run_id
+    assert refresh_run_id is not None and refresh_run_id != old_run.id
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+
+    execute_performance_run(
+        factory,
+        refresh_run_id,
+        should_cancel=lambda: False,
+        progress=lambda *_args: None,
+        client_factory=_ReadyPerformanceClient,
+    )
+
+    db_session.expire_all()
+    observations = list(
+        db_session.scalars(
+            select(PerformanceObservation).where(
+                PerformanceObservation.web_resource_id == resource.id
+            )
+        )
+    )
+    assert len(observations) == 2
+    assert db_session.get(PerformanceObservation, old_id) is not None
+
+
+class _AccessibilityRenderer:
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+async def _failed_accessibility_audit(
+    _renderer, url: str, _profile: str, *, max_payload_bytes: int
+) -> AccessibilityAuditResult:
+    assert max_payload_bytes > 0
+    return AccessibilityAuditResult(
+        outcome="failed",
+        final_url=url,
+        payload=None,
+        browser_version="fixture-chromium",
+        playwright_version="fixture-playwright",
+        error_type="fixture_failure",
+        error_message="Deterministic refresh fixture.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_accessibility_refresh_executes_new_native_observation_and_retains_old(
+    db_session, monkeypatch
+) -> None:
+    site = _site_with_pages(db_session, 1)
+    resource = _site_resources(db_session, site.id)[0]
+    _add_accessibility_evidence(
+        db_session,
+        site,
+        [resource],
+        observed_at=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    old_id = db_session.scalar(select(AccessibilityObservation.id))
+    monkeypatch.setattr(
+        "app.services.accessibility_collection.BrowserRenderer", _AccessibilityRenderer
+    )
+    monkeypatch.setattr(
+        "app.services.accessibility_collection.audit_page", _failed_accessibility_audit
+    )
+    plan = create_collection_plan(
+        db_session,
+        site.id,
+        CollectionPlanRequest(
+            evidence_domain="accessibility",
+            target_mode="refresh_current",
+            context={"profile": "desktop"},
+        ),
+    )
+    refresh_run_id = plan.batches[0].accessibility_run_id
+    assert refresh_run_id is not None
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+
+    await execute_accessibility_run(
+        factory,
+        refresh_run_id,
+        should_cancel=lambda: False,
+        progress=lambda *_args: None,
+    )
+
+    db_session.expire_all()
+    assert db_session.scalar(select(func.count()).select_from(AccessibilityObservation)) == 2
+    assert old_id is not None and db_session.get(AccessibilityObservation, old_id) is not None
+    plan.batches[0].background_job.status = "completed"
+    db_session.commit()
+    later = build_selection(
+        db_session,
+        site.id,
+        CollectionPlanRequest(
+            evidence_domain="accessibility",
+            target_mode="refresh_current",
+            context={"profile": "desktop"},
+        ),
+    )
+    assert later.targets[0].latest_compatible_observed_at != datetime(2026, 9, 1, tzinfo=UTC)
+
+
+class _SuccessfulRefreshRenderer:
+    browser_version = "fixture-chromium"
+    playwright_version = "fixture-playwright"
+
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def capture(self, url: str) -> CaptureResult:
+        return CaptureResult(state="completed", final_url=url, status=200)
+
+
+@pytest.mark.asyncio
+async def test_render_refresh_executes_new_native_observation_and_retains_old(db_session) -> None:
+    site = _site_with_pages(db_session, 1)
+    initial_plan = create_collection_plan(
+        db_session, site.id, CollectionPlanRequest(evidence_domain="render")
+    )
+    initial_run_id = initial_plan.batches[0].render_run_id
+    assert initial_run_id is not None
+    factory = sessionmaker(bind=db_session.bind, autoflush=False, expire_on_commit=False)
+    await execute_render_run(
+        factory,
+        initial_run_id,
+        should_cancel=lambda: False,
+        progress=lambda *_args: None,
+        renderer_factory=_SuccessfulRefreshRenderer,
+    )
+    initial_plan.batches[0].background_job.status = "completed"
+    db_session.commit()
+    old_id = db_session.scalar(select(RenderedObservation.id))
+    refresh_plan = create_collection_plan(
+        db_session,
+        site.id,
+        CollectionPlanRequest(evidence_domain="render", target_mode="refresh_current"),
+    )
+    refresh_run_id = refresh_plan.batches[0].render_run_id
+    assert refresh_run_id is not None and refresh_run_id != initial_run_id
+
+    await execute_render_run(
+        factory,
+        refresh_run_id,
+        should_cancel=lambda: False,
+        progress=lambda *_args: None,
+        renderer_factory=_SuccessfulRefreshRenderer,
+    )
+
+    db_session.expire_all()
+    assert db_session.scalar(select(func.count()).select_from(RenderedObservation)) == 2
+    assert old_id is not None and db_session.get(RenderedObservation, old_id) is not None
 
 
 def test_accessibility_plan_freezes_targets_and_creates_native_batches(db_session) -> None:
@@ -953,6 +1483,34 @@ def test_three_thousand_page_selection_is_deterministic_and_query_bounded(
             site.id,
             CollectionPlanRequest(evidence_domain="accessibility", context={"profile": "desktop"}),
         )
+        second_statements = statements
+        second_selects = selects
+        statements = 0
+        selects = 0
+        started = perf_counter()
+        refresh = build_selection(
+            db_session,
+            site.id,
+            CollectionPlanRequest(
+                evidence_domain="accessibility",
+                target_mode="refresh_current",
+                context={"profile": "desktop"},
+            ),
+        )
+        refresh_elapsed = perf_counter() - started
+        refresh_statements = statements
+        refresh_selects = selects
+        statements = 0
+        selects = 0
+        repeated_refresh = build_selection(
+            db_session,
+            site.id,
+            CollectionPlanRequest(
+                evidence_domain="accessibility",
+                target_mode="refresh_current",
+                context={"profile": "desktop"},
+            ),
+        )
     finally:
         event.remove(db_session.bind, "before_cursor_execute", count_statements)
 
@@ -963,8 +1521,23 @@ def test_three_thousand_page_selection_is_deterministic_and_query_bounded(
     assert first.target_sha256 == second.target_sha256
     assert first_statements <= 4
     assert first_selects <= 4
+    assert second_statements <= 4
+    assert second_selects <= 4
+    assert refresh_statements <= 4
+    assert refresh_selects <= 4
     assert statements <= 4
     assert selects <= 4
+    assert len(refresh.targets) == 2_500
+    assert len(refresh.active_collection_ids) == 500
+    assert len(refresh.missing_ids) == 2_000
+    assert list(refresh.target_reasons.values()).count("refresh_current") == 1_000
+    assert list(refresh.target_reasons.values()).count("missing_current") == 1_500
+    assert refresh.target_sha256 == repeated_refresh.target_sha256
+    print(
+        "collection-plan-v2 benchmark: "
+        f"pages=3000 statements={refresh_statements} selects={refresh_selects} "
+        f"elapsed={refresh_elapsed:.6f}s"
+    )
 
 
 def test_collection_plan_api_preview_create_read_targets_and_cancel(db_session) -> None:

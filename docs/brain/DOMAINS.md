@@ -370,7 +370,7 @@ Cross-domain overview summarizes coverage/currentness while preserving independe
 
 ## Collection Plans (`collection-plans`)
 
-Plans compute missing-current evidence across the active Page universe, freeze target selection/checksums, and batch existing native collectors.
+Plans freeze deterministic missing-current or explicit refresh-current selections and batch existing native collectors without becoming evidence or freshness policy.
 
 **Type:** `orchestration-domain`
 **State layer:** `operational`
@@ -388,6 +388,7 @@ Plans compute missing-current evidence across the active Page universe, freeze t
 **Relevant invariants:**
 - `collection-plans-use-native-collectors`
 - `frozen-universes-deterministic`
+- `compatibility-not-freshness`
 
 ## Page Categories & Rules (`categories`)
 
